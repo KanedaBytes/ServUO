@@ -37,6 +37,8 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `js/validate.js` | The shard's structural checks, replicated - shared by the browser, the bridge and the tests |
 | `js/tools.js` | The create tools and the modal that finishes each one |
 | `js/ids.js` | Auto-generated ids, mirroring `[NavMark` |
+| `js/build.js` | A finished tool to a shape - the seam between the browser and the writer |
+| `js/live.js` | The Live panel's line and snapshot age |
 | `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
 | `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
 | `js/`, `index.html`, `style.css` | The editor |
@@ -281,6 +283,15 @@ bridge refuses them by name.
 Drawn in a second pass over the shapes, not inline with them, because a label drawn during the
 first pass gets painted over by the next shape's fill.
 
+**Not every shape is on the map.** The daily-life records — the tavern settings, a shopkeeper, a
+watch post — are `kind: 'form'` with no points and no rect, because that file holds no coordinates:
+every location in it is a nav id. `hasGeometry` is the guard, and it is a guard rather than an
+assumption because the assumption cost a bug. `drawShape` fell through to its point branch, threw
+on `shape.points[0]`, and killed the draw loop mid-frame — so the label pass never ran, and the
+entity pass, which comes after it, never ran either. One missing check, two layers invisible, and
+an exception inside `requestAnimationFrame` that only the console ever saw. `hitTest` walked the
+same undefined array, so canvas clicks were throwing too.
+
 Placement is collision-avoided against a per-frame list of boxes. A label that collides tries
 below, then right, then left, and **if all four positions are taken it is skipped** — no dot, no
 ellipsis. An unreadable heap is the thing being fixed and half of one is still it.
@@ -297,6 +308,20 @@ hover or selection, which is what the original did for polylines and for the sam
 `Custom.NavHopMaxTiles`. That matters because the shard *accepts* an over-cap hop with a warning
 and the NPC then walks into scenery, so dragging a waypoint too far has to look wrong immediately
 rather than at the next reload.
+
+Both passes are tested against a stub canvas that records calls rather than pixels — enough for
+the two failures that actually happened: a pass that never ran, and a pass that ran and rejected
+every box.
+
+## The Live panel
+
+`live: 10 @ seq 147, 2s ago`, and the age is the point of it. A sequence number that has stopped
+moving looks exactly like a quiet town until you know when it last moved, so past six seconds —
+three missed writes at the two-second default — the line turns amber.
+
+It ticks on its own one-second timer rather than only on a successful poll, because when the shard
+stops answering `pollEntities` swallows the error and stops updating: an age computed only on
+success would freeze at the last good value, which is the one number that must not.
 
 ## The request channel
 

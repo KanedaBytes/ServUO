@@ -184,6 +184,273 @@ test('a hidden layer is not hit-tested, so an invisible edge cannot be picked', 
     assert.strictEqual(shapes.hitTest(view, [edge], new Set(['nav']), null, 20.5, 0.5), null);
 });
 
+// --- drawing --------------------------------------------------------------------------------------
+//
+// A canvas is the one thing node cannot give us, so these record the calls instead of the pixels.
+// That is enough for the two failures that actually happened: a pass that never ran, and a pass
+// that ran and rejected everything.
+
+function stubContext() {
+    const calls = [];
+    const record = (name) => (...args) => calls.push({ name, args });
+
+    return {
+        calls,
+        ctx: {
+            canvas: { clientWidth: 1200, clientHeight: 800 },
+            globalAlpha: 1, font: '', textAlign: 'left',
+            fillStyle: '', strokeStyle: '', lineWidth: 1,
+
+            // Six pixels a character is close enough to the 11px font to make the collision
+            // arithmetic meaningful, and it makes an expected box width something you can work out
+            // on paper when a test fails.
+            measureText: (text) => ({ width: text.length * 6 }),
+
+            fillText: record('fillText'),
+            fillRect: record('fillRect'),
+            strokeRect: record('strokeRect'),
+            arc: record('arc'),
+            beginPath: record('beginPath'),
+            moveTo: record('moveTo'),
+            lineTo: record('lineTo'),
+            closePath: record('closePath'),
+            stroke: record('stroke'),
+            fill: record('fill'),
+            save: record('save'),
+            restore: record('restore'),
+            setTransform: record('setTransform')
+        }
+    };
+}
+
+function stubView(scale) {
+    return {
+        scale,
+        facet: { name: 'Trammel' },
+        toScreen: (x, y) => [(x - 1475) * scale + 600, (y - 1645) * scale + 400]
+    };
+}
+
+/** Well apart, so nothing in these fixtures collides and a missing label means a missing label. */
+function labelFixture() {
+    return [
+        {
+            layer: 'nav', id: 'wp:a', kind: 'point', map: 'Trammel', label: 'brit-plaza-1',
+            points: [[1475, 1645, 20]], props: {}
+        },
+        {
+            layer: 'nav-destinations', id: 'dest:bank', kind: 'point', map: 'Trammel',
+            label: 'Britain Bank', points: [[1495, 1665, 0]], props: {}
+        },
+        {
+            layer: 'nav-zones', id: 'zone:town', kind: 'rect', map: 'Trammel', label: 'brit-town',
+            rect: [1420, 1600, 120, 100], props: {}
+        }
+    ];
+}
+
+function textsDrawn(calls) {
+    return calls.filter((call) => call.name === 'fillText').map((call) => call.args[0]);
+}
+
+test('every label above its layer threshold is drawn', () => {
+    // The reported bug was none at all, at any zoom. scale 4 clears every labelAt in the table.
+    const { ctx, calls } = stubContext();
+    const shapes_ = labelFixture();
+
+    shapes.draw(ctx, stubView(4), shapes_, new Set(shapes.LAYER_ORDER), null, null, null);
+
+    assert.deepStrictEqual(
+        textsDrawn(calls).sort(),
+        ['Britain Bank', 'brit-plaza-1', 'brit-town']);
+});
+
+test('a label below its layer threshold waits, unless it is selected or hovered', () => {
+    // One shape at a time, so this measures the threshold rule and nothing else. Two shapes at
+    // this zoom would also be testing collision, which is the next test's job.
+    const view = stubView(0.2);
+    const visible = new Set(shapes.LAYER_ORDER);
+    const [waypoint, , zone] = labelFixture();
+
+    const drawnWith = (world, selected, hovered) => {
+        const { ctx, calls } = stubContext();
+
+        shapes.draw(ctx, view, world, visible, selected, hovered, null);
+
+        return textsDrawn(calls);
+    };
+
+    // 0.2 is under nav's floor of 0.6 and over nav-zones' of 0.1.
+    assert.deepStrictEqual(drawnWith([waypoint], null, null), []);
+    assert.deepStrictEqual(drawnWith([zone], null, null), ['brit-town']);
+
+    // Selection and hover override the floor, which is what makes a zoomed-out click still tell
+    // you what you picked.
+    assert.deepStrictEqual(drawnWith([waypoint], waypoint, null), ['brit-plaza-1']);
+    assert.deepStrictEqual(drawnWith([waypoint], null, waypoint), ['brit-plaza-1']);
+});
+
+test('a label with nowhere to go is skipped, not stacked on top of the winner', () => {
+    // Zoomed out, a 120x100 zone is 24 by 20 screen pixels with a 60px label, sitting under the
+    // selected waypoint's. All four candidate positions collide, and the rule is that the loser
+    // draws nothing at all: half a pile is still a pile.
+    const { ctx, calls } = stubContext();
+    const [waypoint, , zone] = labelFixture();
+
+    shapes.draw(ctx, stubView(0.2), [waypoint, zone], new Set(shapes.LAYER_ORDER),
+        waypoint, null, null);
+
+    assert.deepStrictEqual(textsDrawn(calls), ['brit-plaza-1']);
+
+    // Zoom in and there is room for both, which is what makes skipping acceptable rather than a
+    // permanent loss.
+    const roomy = stubContext();
+
+    shapes.draw(roomy.ctx, stubView(4), [waypoint, zone], new Set(shapes.LAYER_ORDER),
+        waypoint, null, null);
+
+    assert.deepStrictEqual(textsDrawn(roomy.calls).sort(), ['brit-plaza-1', 'brit-town']);
+});
+
+test('two labels on the same tile do not overlap, and neither is silently lost', () => {
+    const { ctx, calls } = stubContext();
+    const stacked = [
+        {
+            layer: 'nav', id: 'wp:a', kind: 'point', map: 'Trammel', label: 'aaaa',
+            points: [[1475, 1645, 0]], props: {}
+        },
+        {
+            layer: 'nav', id: 'wp:b', kind: 'point', map: 'Trammel', label: 'bbbb',
+            points: [[1475, 1645, 0]], props: {}
+        }
+    ];
+
+    shapes.draw(ctx, stubView(4), stacked, new Set(['nav']), null, null, null);
+
+    const drawn = calls.filter((call) => call.name === 'fillText');
+
+    assert.strictEqual(drawn.length, 2, 'one of two exactly-stacked labels was dropped');
+    assert.notDeepStrictEqual(
+        [drawn[0].args[1], drawn[0].args[2]],
+        [drawn[1].args[1], drawn[1].args[2]],
+        'both labels were drawn in the same place');
+});
+
+test('the live layer draws one marker per entity', () => {
+    const { ctx, calls } = stubContext();
+    const entities = [
+        { serial: 1, kind: 'staff', name: 'Korlan', map: 'Trammel', x: 1475, y: 1645, z: 10 },
+        { serial: 2, kind: 'vendor', name: 'Casta', map: 'Trammel', x: 1476, y: 1646, z: 20 },
+        { serial: 3, kind: 'actor', name: 'Perrin', map: 'Trammel', x: 1477, y: 1647, z: 0 }
+    ];
+
+    shapes.drawEntities(ctx, stubView(4), entities);
+
+    assert.strictEqual(calls.filter((call) => call.name === 'arc').length, entities.length);
+});
+
+test('an entity on another facet or off screen is culled, and an unknown kind still draws', () => {
+    const { ctx, calls } = stubContext();
+
+    shapes.drawEntities(ctx, stubView(4), [
+        { serial: 1, kind: 'staff', map: 'Felucca', x: 1475, y: 1645, z: 0 },
+        { serial: 2, kind: 'staff', map: 'Trammel', x: 9000, y: 9000, z: 0 },
+        // A kind the editor has never heard of is still a live mobile; it draws in the fallback
+        // colour rather than vanishing.
+        { serial: 3, kind: 'something-new', map: 'Trammel', x: 1475, y: 1645, z: 0 }
+    ]);
+
+    assert.strictEqual(calls.filter((call) => call.name === 'arc').length, 1);
+});
+
+test('a shape with no geometry does not take the rest of the frame down with it', () => {
+    // The bug both of the above were reported as. A daily-life record is kind 'form' with neither
+    // points nor rect, drawShape fell through to its point branch and threw, and the draw loop died
+    // mid-frame - so the label pass never ran, and the entity pass, which comes after it, never ran
+    // either. One missing check, two layers invisible.
+    const { ctx, calls } = stubContext();
+    const view = stubView(4);
+    const shapes_ = [
+        ...labelFixture(),
+        {
+            layer: 'dailylife', id: 'dl:settings', kind: 'form', map: 'Trammel',
+            label: 'Daily life settings', props: {}, fields: []
+        },
+        {
+            layer: 'dailylife', id: 'shopkeeper:baker', kind: 'form', map: 'Trammel',
+            label: 'baker (GGBaker)', props: {}, fields: []
+        }
+    ];
+
+    assert.doesNotThrow(
+        () => shapes.draw(ctx, view, shapes_, new Set(shapes.LAYER_ORDER), null, null, null));
+
+    // The labelled shapes still get their labels, and the geometry-less records get none: they are
+    // edited in the side panel and are not on the map at all.
+    assert.deepStrictEqual(
+        textsDrawn(calls).sort(),
+        ['Britain Bank', 'brit-plaza-1', 'brit-town']);
+
+    assert.strictEqual(shapes.hasGeometry(shapes_[3]), false);
+    assert.strictEqual(shapes.hasGeometry(shapes_[0]), true);
+
+    // And a click cannot reach one either - hitTest walked the same undefined points array.
+    assert.doesNotThrow(
+        () => shapes.hitTest(view, shapes_, new Set(shapes.LAYER_ORDER), null, 1475.5, 1645.5));
+});
+
+test('the real projected shapes all draw without throwing', () => {
+    // The fixtures above are hand-written; this is the actual file, which is where the geometry-less
+    // records came from in the first place.
+    const { ctx } = stubContext();
+    const world = realShapes();
+
+    assert.ok(world.some((shape) => !shapes.hasGeometry(shape)),
+        'the real data no longer contains a geometry-less record - this test has stopped testing');
+
+    assert.doesNotThrow(
+        () => shapes.draw(ctx, stubView(4), world, new Set(shapes.LAYER_ORDER), null, null, null));
+});
+
+// --- the live panel -------------------------------------------------------------------------------
+
+test('the live line carries the snapshot age, and says when it has gone stale', async () => {
+    const { liveStatusText, snapshotAge, STALE_AFTER_SECONDS } = await import('./js/live.js');
+    const now = Date.parse('2026-09-05T22:00:30.000Z');
+    const at = (seconds) => new Date(now - seconds * 1000).toISOString();
+
+    assert.deepStrictEqual(
+        liveStatusText({ running: true, count: 10, sequence: 147, utc: at(2) }, 0, now),
+        { text: 'live: 10 @ seq 147, 2s ago', stale: false });
+
+    assert.strictEqual(
+        liveStatusText({ running: true, count: 10, sequence: 147, utc: at(90) }, 0, now).text,
+        'live: 10 @ seq 147, 1m ago');
+
+    assert.strictEqual(
+        liveStatusText({ running: true, count: 10, sequence: 147, utc: at(7200) }, 0, now).text,
+        'live: 10 @ seq 147, 2h ago');
+
+    // Off is off; there is no age to show and no reason to colour it.
+    assert.deepStrictEqual(liveStatusText(null, 0, now), { text: 'live: off', stale: false });
+    assert.deepStrictEqual(liveStatusText({ running: false }, 0, now),
+        { text: 'live: off', stale: false });
+
+    // A snapshot with no timestamp still shows its count and sequence rather than nothing.
+    assert.strictEqual(
+        liveStatusText({ running: true, count: 3, sequence: 9, utc: null }, 0, now).text,
+        'live: 3 @ seq 9');
+
+    // Stale on either side of the boundary, so the threshold is the documented one.
+    assert.strictEqual(liveStatusText({ running: true, sequence: 1, utc: at(STALE_AFTER_SECONDS) }, 0, now).stale, false);
+    assert.strictEqual(liveStatusText({ running: true, sequence: 1, utc: at(STALE_AFTER_SECONDS + 1) }, 0, now).stale, true);
+
+    // A shard clock a second ahead of this one reads "0s ago", not "-1s ago" - which would look
+    // like a bug here rather than a difference between two machines.
+    assert.strictEqual(snapshotAge(at(-1), now).text, '0s ago');
+    assert.strictEqual(snapshotAge('not a date', now), null);
+});
+
 // --- the seam between the tools and the writer --------------------------------------------------
 
 test('every tool produces a shape unproject can write, with the right fields in the right order', async () => {

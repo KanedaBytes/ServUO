@@ -67,11 +67,28 @@ export const LAYER_ORDER = Object.keys(LAYERS);
 const HANDLE = 5;
 const GRAB = 7;
 
+/**
+ * Whether a shape is on the map at all.
+ *
+ * Not every shape is. The daily-life records - the tavern settings, a shopkeeper, a watch post -
+ * are `kind: 'form'` with no points and no rect, because that file holds no coordinates: every
+ * location in it is a nav id. They exist to be edited in the side panel and found by the filter.
+ *
+ * This is a guard rather than an assumption because the assumption already cost a bug. drawShape
+ * fell through to its point branch and threw on `shape.points[0]`, which killed the draw loop
+ * mid-frame - so the label pass never ran and the entity pass, which comes after it, never ran
+ * either. One missing check, two invisible layers, and an exception inside requestAnimationFrame
+ * that only the console ever saw.
+ */
+export function hasGeometry(shape) {
+    return !!(shape.rect || (shape.points && shape.points.length > 0));
+}
+
 export function draw(ctx, view, shapes, visible, selected, hovered, matches) {
     const drawn = [];
 
     for (const shape of shapes) {
-        if (!visible.has(shape.layer) || shape.map !== view.facet.name) {
+        if (!visible.has(shape.layer) || shape.map !== view.facet.name || !hasGeometry(shape)) {
             continue;
         }
 
@@ -422,7 +439,7 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
     for (let i = shapes.length - 1; i >= 0; i--) {
         const shape = shapes[i];
 
-        if (!visible.has(shape.layer) || shape.map !== view.facet.name) {
+        if (!visible.has(shape.layer) || shape.map !== view.facet.name || !hasGeometry(shape)) {
             continue;
         }
 

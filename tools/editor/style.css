@@ -351,6 +351,10 @@ button:disabled { opacity: .45; cursor: default; }
 
 .muted { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
 
+/* A snapshot several polls old. Amber rather than red: it is usually the shard being stopped on
+   purpose, which is information, not a fault. */
+#live-status.stale { color: #ffd479; }
+
 #readout { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 14px; font-size: 12px;
            pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.9); }
 #readout #coords { font-variant-numeric: tabular-nums; opacity: .7; }

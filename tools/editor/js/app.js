@@ -24,7 +24,7 @@
 import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
-    LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft,
+    LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
 } from './shapes.js';
 import * as coverage from './coverage.js';
@@ -32,6 +32,7 @@ import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId } from './ids.js';
 import { buildShape } from './build.js';
+import { liveStatusText } from './live.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -122,6 +123,9 @@ async function boot() {
 
     pollEntities();
     pollHealth();
+
+    // The age has to keep counting up between polls, and especially when the polls stop.
+    setInterval(updateLiveStatus, 1000);
 
     wireInput();
 
@@ -330,12 +334,27 @@ function updateCounts() {
             state.shapes.filter((s) => s.layer === layer && s.map === state.facet.name).length);
     }
 
-    if (dom.liveStatus) {
-        dom.liveStatus.textContent = state.live && state.live.running
-            ? `live: ${state.live.count ?? state.entities.length} @ seq ${state.live.sequence}`
-            : 'live: off';
-    }
+    updateLiveStatus();
 }
+
+/**
+ * The live line, including how old the snapshot is.
+ *
+ * On its own timer as well as on every poll, because when the shard stops answering pollEntities
+ * swallows the error and stops updating - so an age computed only on a successful poll would
+ * freeze at the last good value, which is the one number that must not.
+ */
+function updateLiveStatus() {
+    if (!dom.liveStatus) {
+        return;
+    }
+
+    const { text, stale } = liveStatusText(state.live, state.entities.length);
+
+    dom.liveStatus.textContent = text;
+    dom.liveStatus.classList.toggle('stale', stale);
+}
+
 
 function renderHealth() {
     if (!dom.health || !state.health) {
@@ -1331,7 +1350,9 @@ function updateHover(event, worldX, worldY) {
 function nudgeSelected(dx, dy, step) {
     const shape = state.selected;
 
-    if (!shape || !isWritable(shape) || isDerivedGeometry(shape)) {
+    // A daily-life record has no geometry to nudge. hitTest cannot return one, but the filter's
+    // match list can select one, and an arrow key would then reach geometryOf with no points.
+    if (!shape || !isWritable(shape) || isDerivedGeometry(shape) || !hasGeometry(shape)) {
         return;
     }
 
