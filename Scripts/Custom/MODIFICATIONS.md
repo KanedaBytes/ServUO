@@ -212,6 +212,33 @@ state. `CustomPersistence` therefore **quarantines** an unreadable save to `Back
 Known limitation: the degraded flag itself does not survive a restart. The quarantined copy
 and the red console log are the durable evidence.
 
+### Regions
+
+- **`Region.Register()` / `Unregister()` re-resolve every mobile in the affected sectors**
+  (`Register()` -> `Sector.OnEnter` -> `UpdateMobileRegions()` -> `Mobile.UpdateRegion()` ->
+  `Region.OnRegionChange`). This is what makes a newly drawn or resized restricted zone catch
+  players already standing in it without a manual sweep. If upstream changes it, zone creation
+  silently stops applying to current occupants.
+- **`Region.OnEnter` / `OnExit` are dispatched per-region up the ancestor chain** by
+  `Region.OnRegionChange` (`Server/Region.cs:1129`) and must NOT chain to the parent themselves.
+  **`OnResurrect`, `OnDeath`, `OnBeforeDeath` and `OnLocationChanged` are the opposite** - they
+  fire only on the innermost region and manually bubble via `m_Parent`, so an override that does
+  not call `base` silently disables the parent region's rules.
+- **`BaseRegion.OnEnter` is not empty.** It sends a `YoungDungeonWarning` gump to Young players
+  when `!YoungProtected` (`Scripts/Regions/BaseRegion.cs:269`). Any `BaseRegion` subclass that is
+  not a dungeon should override `YoungProtected => true`.
+- **A null region name is required for dynamic regions.** `Map.RegisterRegion` skips nulls
+  silently, but a *duplicate* name warns and `UnregisterRegion` removes by name - so
+  unregistering the second of two same-named regions evicts the first one's entry.
+
+### Gumps
+
+- **`NetState.AddGump` disconnects the client at 512 gumps** (`Server/Network/NetState.cs:409`
+  calls `Dispose()`). Any gump re-sent on a timer MUST `CloseGump(typeof(X))` first. At 1 Hz the
+  cap is reached in under nine minutes.
+- Flags are `Closable` / `Disposable` / `Dragable` (one 'g') / `Resizable`, all defaulting true.
+  `Closable = false` blocks right-click; **`Disposable = false` is what blocks Escape.**
+
 ### Fatal event handlers
 
 Exceptions escaping these handlers **terminate the shard**, so custom handlers must swallow

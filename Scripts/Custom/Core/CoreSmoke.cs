@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 using Server.Commands;
 
@@ -444,6 +445,37 @@ namespace Server.Custom
                     foreach (string error in errors)
                     {
                         report.Add("  FAIL: " + error);
+                    }
+
+                    ok = false;
+                }
+
+                // The compact layout is what keeps an editor save to a minimal diff: a container
+                // of scalars stays on one line, so an array of flat objects renders one object
+                // per line. Assert it, because every JSON config the editor round-trips depends
+                // on it and a regression here would be invisible until a diff exploded.
+                var nested = JToken.Parse(
+                    "{\"zones\":[{\"name\":\"a\",\"x\":1},{\"name\":\"b\",\"x\":2}],\"flat\":{\"k\":1}}");
+
+                string compact = JsonConfig.SerializeCompact(nested);
+                string[] lines = compact.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+                bool layoutOk = lines.Length == 7
+                    && lines[2].Trim() == "{\"name\":\"a\",\"x\":1},"
+                    && lines[3].Trim() == "{\"name\":\"b\",\"x\":2}"
+                    && lines[5].Trim() == "\"flat\": {\"k\":1}";
+
+                if (layoutOk)
+                {
+                    report.Add("  ok: compact writer emits one object per line (" + lines.Length + " lines).");
+                }
+                else
+                {
+                    report.Add("  FAIL: compact layout changed - the shard editor would produce huge diffs.");
+
+                    for (int i = 0; i < lines.Length; i++)
+                    {
+                        report.Add("    [" + i + "] " + lines[i]);
                     }
 
                     ok = false;

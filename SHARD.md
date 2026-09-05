@@ -68,13 +68,23 @@ Ported from the ModernUO shard, in this order:
 | # | System | Status |
 | --- | --- | --- |
 | 0 | `Scripts/Custom/Core/` — loop queue, JSON config, logger, persistence base, health checks | **done** |
-| 1 | Restricted zones + countdown gump → auto-jail | pending |
+| 1 | Restricted zones + countdown gump → auto-jail | **done** (jail handoff stubbed until step 2) |
 | 2 | Jail administration (on ServUO's existing jail region) | pending |
 | 3 | Old Marta + auto-collect + `[ResetQuest` | pending |
 | 4 | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | pending |
 | 5 | Admin API + MapExport + shard editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
+
+## Staff commands
+
+| Command | Access | Effect |
+| --- | --- | --- |
+| `[CoreSmoke` | Administrator | Exercises the `Custom/Core` foundations and reports every health check |
+| `[RestrictZone <name>` | GameMaster | Target two corners to create a restricted zone |
+| `[UnrestrictZone <name>` | GameMaster | Remove a restricted zone |
+| `[ListRestrictedZones` | GameMaster | List every restricted zone |
+| `[RestrictedZonesReload` | GameMaster | Re-read `restricted-zones.json` and rebuild the regions |
 
 ## Health checks
 

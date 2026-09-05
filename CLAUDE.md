@@ -481,6 +481,10 @@ release timer, no persistence, no escalation. That is what `Scripts/Custom/Jail/
 | `Core.Now` | **Does not exist** in this build — use `DateTime.UtcNow` |
 | `Core.TickCount` | Exists, but is `long` **milliseconds** (`Stopwatch`-based, monotonic) |
 | `Map.TryParse` | **Only `Map.Parse`, and it *throws*** on an unknown name — use `JsonConfig.TryParseMap` |
+| `Region.GetRegion<T>()` | **Absent** — only `GetRegion(Type)` and `IsPartOf<T>()` |
+| `Gump.Movable` | It is spelled **`Dragable`** (one 'g'); `Disposable=false` is what blocks Escape |
+| `Dictionary.Remove(key, out value)` | **Absent on net48** (netstandard2.1 only) — `TryGetValue` then `Remove` |
+| `BoundingBoxPicker.Begin(from, lambda)` | `Begin(Mobile, BoundingBoxCallback, object state)` — no lambda overload |
 | `BaseCreature.HomeMap` | **None** — `Home` is a `Point3D` only |
 | `map.GetMobilesInRange<T>()` | Non-generic `IPooledEnumerable` — type-test it, and dispose it |
 | `string.InsensitiveEquals` / `InsensitiveContains` | `Insensitive.Equals` / `Insensitive.Contains` |
