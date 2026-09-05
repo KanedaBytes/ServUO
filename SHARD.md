@@ -6,6 +6,29 @@ Previously built on ModernUO at `E:\dev\UO\ModernUO`; those systems are being po
 See `Scripts/Custom/MODIFICATIONS.md` for the upstream-edit log and `CLAUDE.md` for the
 engine-level conventions.
 
+## Running it
+
+```
+.\tools\dev.ps1
+```
+
+Renders the map tiles the first time, starts the shard and the editor bridge in their own windows,
+waits for the bridge, and opens the editor.
+
+| | |
+| --- | --- |
+| **Connect a client to** | `127.0.0.1:2594` |
+| **Editor** | http://127.0.0.1:8081/ |
+| **Live entities on the map** | the editor's **Live on** button, or `[LiveMap on` in game |
+
+Two windows rather than background jobs, deliberately: the shard's console is where its log goes,
+and the whole reason this shard has build scripts at all is that a failed build must be visible
+rather than swallowed. Each window stays open on exit, so a crash leaves its own evidence.
+
+Useful switches: `-NoShard` when a shard is already running, `-NoBrowser`, `-Tiles` to re-render,
+`-Debug` for the Debug configuration. Nothing about it is required — it starts `build.ps1` and
+`node tools\editor\bridge.js` exactly as you would by hand, and both still work on their own.
+
 ## Shard facts
 
 | | |
@@ -190,6 +213,9 @@ arrivals and zones; link and unlink edges; author routes by clicking waypoints i
 daily-life config as a form. A save writes the file, asks the shard to reload it, and says what the
 shard said - including when the write succeeded and the reload did not, which is a state the editor
 has to show rather than hide.
+
+`.\tools\dev.ps1` starts it along with the shard (see **Running it** above). By hand it is two
+commands, and the script does nothing more than run them:
 
 ```
 .\tools\editor\export-tiles.ps1     # render the map tiles, once
