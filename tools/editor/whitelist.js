@@ -10,7 +10,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
+// Normally the repo this file lives in. GG_EDITOR_ROOT redirects every path below at once, which
+// is how the tests run against a temp copy: Data/Custom is not gitignored, so a test that wrote to
+// the real tree would be one crash away from a truncated navigation.json.
+const REPO_ROOT = process.env.GG_EDITOR_ROOT
+    ? path.resolve(process.env.GG_EDITOR_ROOT)
+    : path.resolve(__dirname, '..', '..');
 
 // Roots the bridge may read from. Anything resolving outside all of these is refused.
 const READ_ROOTS = [
@@ -20,7 +25,11 @@ const READ_ROOTS = [
     path.join(__dirname)
 ];
 
-// The only directory the bridge writes to, and only ever request tokens.
+// Where request tokens are dropped for the shard's poller to find.
+//
+// Until 5b this was the only directory the bridge wrote to at all. It now also writes the three
+// data files below - but only those three, only by the fixed names in WRITABLE, and never by a
+// name the caller supplies.
 const REQUEST_DIR = path.join(REPO_ROOT, 'Data', 'Live', 'requests');
 
 const READ_EXTENSIONS = new Set(['.json', '.xml', '.html', '.css', '.js', '.png', '.ico', '.svg']);
@@ -97,4 +106,36 @@ function resolveAck(name) {
     return isAllowed(target) ? target : null;
 }
 
-module.exports = { REPO_ROOT, REQUEST_DIR, FILES, isAllowed, resolveStatic, resolveToken, resolveAck };
+/**
+ * The files the editor may save, and the request that reloads each one.
+ *
+ * entities.json and health.json are deliberately absent: the shard writes those, and an editor
+ * that could overwrite a snapshot would be able to lie to itself about the live world.
+ */
+const WRITABLE = {
+    navigation: 'nav-reload',
+    dailyLife: 'dailylife-reload',
+    restrictedZones: 'zones-reload'
+};
+
+/**
+ * Resolves a writable file by its LOGICAL name, which is the whole sandbox.
+ *
+ * There is no path here to traverse, encode or escape: a name that is not one of the three keys
+ * above resolves to nothing at all. Same reasoning as the read endpoints, which take no path from
+ * the caller either.
+ */
+function resolveSave(name) {
+    return Object.prototype.hasOwnProperty.call(WRITABLE, name) ? FILES[name] : null;
+}
+
+/** The .bak kept beside a file, matching what NavigationSystem.Save has always written. */
+function resolveBackup(name) {
+    const target = resolveSave(name);
+    return target ? target + '.bak' : null;
+}
+
+module.exports = {
+    REPO_ROOT, REQUEST_DIR, FILES, WRITABLE,
+    isAllowed, resolveStatic, resolveToken, resolveAck, resolveSave, resolveBackup
+};

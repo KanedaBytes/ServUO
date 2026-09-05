@@ -132,7 +132,14 @@ namespace Server.Custom
         /// </summary>
         public static bool TryReload(out string error)
         {
-            if (!DailyLifeSystem.TryReload(out error))
+            IList<string> ignored;
+            return TryReload(out error, out ignored);
+        }
+
+        /// <summary>As TryReload, keeping the validator's errors as a list.</summary>
+        public static bool TryReload(out string error, out IList<string> errors)
+        {
+            if (!DailyLifeSystem.TryReload(out error, out errors))
             {
                 return false;
             }

@@ -270,4 +270,172 @@ function setScalar(node, value) {
     return node;
 }
 
-module.exports = { parse, stringify, isFlat, get, plain, setScalar, OBJECT, ARRAY, SCALAR };
+// ---- construction, used by unproject to create and delete records ----
+//
+// Nothing here knows what a waypoint is. Field order and defaults are the caller's business -
+// project.js holds a template per record type, transcribed from the [JsonProperty] declaration
+// order in the C# models, because that order is what Newtonsoft emits and therefore what the file
+// looks like the next time the shard rewrites it. Putting that knowledge here would make this
+// module a second, competing description of the schema.
+//
+// A created record needs no special layout handling: every template field is a scalar, so isFlat
+// already puts it on one line. Adding the first record to restricted-zones.json's empty
+// "zones": [] correctly flips that array from inline to expanded, which is what SerializeCompact
+// does too.
+
+/**
+ * A scalar node from a JavaScript value.
+ *
+ * `float` forces 4 to be written as "4.0". A brand-new key has no source text to infer that from,
+ * unlike setScalar, so the caller has to say. Only costTags.multiplier needs it today.
+ */
+function scalar(value, options) {
+    if (value === undefined) {
+        throw new Error('Cannot write undefined; omit the key instead');
+    }
+
+    const float = options && options.float;
+    const raw = typeof value === 'number' && float && Number.isInteger(value)
+        ? value.toFixed(1)
+        : JSON.stringify(value);
+
+    return { kind: SCALAR, raw, value };
+}
+
+/** Wraps a plain value, or passes an already-built node through. */
+function asNode(value) {
+    return value !== null && typeof value === 'object' && 'kind' in value ? value : fromPlain(value);
+}
+
+/** An object node from [key, value] pairs, in the order given. */
+function object(pairs) {
+    return {
+        kind: OBJECT,
+        entries: pairs.map(([key, value]) => ({
+            rawKey: JSON.stringify(key),
+            key,
+            value: asNode(value)
+        }))
+    };
+}
+
+function array(items) {
+    return { kind: ARRAY, items: items.map(asNode) };
+}
+
+/** Recursively converts a plain JavaScript value. Object key order is Object.keys order. */
+function fromPlain(value) {
+    if (Array.isArray(value)) {
+        return { kind: ARRAY, items: value.map(fromPlain) };
+    }
+
+    if (value !== null && typeof value === 'object') {
+        return object(Object.entries(value));
+    }
+
+    return scalar(value);
+}
+
+/**
+ * Sets a key, updating in place when it is already there and inserting when it is not.
+ *
+ * The update path goes through setScalar rather than replacing the node, which is what keeps a
+ * field that was 3.0 a float. `before` and `after` name an existing key to position a new entry
+ * against; without either it is appended, which is only right for a key the template puts last.
+ */
+function set(node, key, value, options) {
+    if (node.kind !== OBJECT) {
+        throw new Error('Not an object');
+    }
+
+    const existing = node.entries.find((entry) => entry.key === key);
+
+    if (existing) {
+        if (existing.value.kind !== SCALAR) {
+            throw new Error(`'${key}' is not a scalar`);
+        }
+
+        setScalar(existing.value, value);
+        return node;
+    }
+
+    const entry = { rawKey: JSON.stringify(key), key, value: scalar(value, options) };
+    const anchor = options && (options.before || options.after);
+    const at = anchor ? node.entries.findIndex((e) => e.key === anchor) : -1;
+
+    if (at === -1) {
+        node.entries.push(entry);
+    } else {
+        node.entries.splice(options.before ? at : at + 1, 0, entry);
+    }
+
+    return node;
+}
+
+function remove(node, key) {
+    if (node.kind !== OBJECT) {
+        return false;
+    }
+
+    const at = node.entries.findIndex((entry) => entry.key === key);
+
+    if (at === -1) {
+        return false;
+    }
+
+    node.entries.splice(at, 1);
+    return true;
+}
+
+function has(node, key) {
+    return node.kind === OBJECT && node.entries.some((entry) => entry.key === key);
+}
+
+/** The object's keys in file order. */
+function keys(node) {
+    return node.kind === OBJECT ? node.entries.map((entry) => entry.key) : [];
+}
+
+function push(node, item) {
+    if (node.kind !== ARRAY) {
+        throw new Error('Not an array');
+    }
+
+    node.items.push(asNode(item));
+    return node;
+}
+
+function insert(node, index, item) {
+    if (node.kind !== ARRAY) {
+        throw new Error('Not an array');
+    }
+
+    node.items.splice(index, 0, asNode(item));
+    return node;
+}
+
+function removeAt(node, index) {
+    if (node.kind !== ARRAY) {
+        throw new Error('Not an array');
+    }
+
+    return node.items.splice(index, 1)[0];
+}
+
+/**
+ * The index of a child by identity, not by value.
+ *
+ * unproject resolves every id to a node reference before it mutates anything, so that a delete
+ * earlier in a batch cannot renumber a move later in it. Deleting by identity is what makes that
+ * work; deleting by index would reintroduce exactly the problem.
+ */
+function indexOfNode(node, child) {
+    return node.kind === ARRAY ? node.items.indexOf(child) : -1;
+}
+
+module.exports = {
+    parse, stringify, isFlat, get, plain, setScalar,
+    scalar, object, array, fromPlain, set, remove, has, keys,
+    push, insert, removeAt, indexOfNode,
+    OBJECT, ARRAY, SCALAR
+};

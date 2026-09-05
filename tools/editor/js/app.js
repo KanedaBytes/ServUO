@@ -17,13 +17,10 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import { LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities } from './shapes.js';
 import * as coverage from './coverage.js';
+import { HOP_CAP } from './validate.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
-
-// Must match Custom.NavHopMaxTiles. The coverage bands and the edge colouring are both meaningless
-// if this disagrees with the shard.
-const HOP_CAP = 12;
 
 const state = {
     shapes: [],
@@ -345,9 +342,11 @@ function wireRequest(buttonId, requestName, body, successText) {
         setStatus(`Asking the shard: ${requestName}...`, 'ok');
 
         try {
-            await api.request(requestName, body);
+            const dropped = await api.request(requestName, body);
 
-            const ack = await api.awaitAck(requestName);
+            // The nonce is what tells this run's ack from the last one's; the shard overwrites the
+            // ack file in place rather than deleting it.
+            const ack = await api.awaitAck(requestName, { nonce: dropped.nonce });
 
             if (ack.ok) {
                 setStatus(`${successText}: ${ack.message}`, 'ok');

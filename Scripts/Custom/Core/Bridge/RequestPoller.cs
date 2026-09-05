@@ -32,6 +32,11 @@ namespace Server.Custom
         /// </summary>
         private const int MaxTokenBytes = 4096;
 
+        // The same cap LogWarnings uses for the console, so the ack and the log agree.
+        private const int MaxDetails = 40;
+
+        private static readonly IList<string> NoDetails = new string[0];
+
         private static long _handled;
         private static long _failed;
         private static string _lastRequest;
@@ -85,6 +90,8 @@ namespace Server.Custom
             string body = null;
             bool ok;
             string message;
+            IList<string> errors = NoDetails;
+            IList<string> warnings = NoDetails;
 
             try
             {
@@ -98,7 +105,7 @@ namespace Server.Custom
                 else
                 {
                     body = File.ReadAllText(path).Trim();
-                    ok = Dispatch(name, body, out message);
+                    ok = Dispatch(name, body, out message, out errors, out warnings);
                 }
             }
             catch (Exception ex)
@@ -119,7 +126,7 @@ namespace Server.Custom
                 Log.Error(ex, "Could not delete the request token {0}.", name);
             }
 
-            WriteAck(name, body, ok, message);
+            WriteAck(name, body, ok, message, errors, warnings);
 
             _handled++;
             _lastRequest = name;
@@ -144,18 +151,25 @@ namespace Server.Custom
         /// without trace is indistinguishable from a bridge that never wrote one, and that is
         /// exactly the bug that costs an afternoon.
         /// </summary>
-        private static bool Dispatch(string name, string body, out string message)
+        private static bool Dispatch(
+            string name, string body, out string message,
+            out IList<string> errors, out IList<string> warnings)
         {
             string error;
+
+            errors = NoDetails;
+            warnings = NoDetails;
 
             switch (name.ToLowerInvariant())
             {
                 case "nav-reload":
-                    if (!NavigationSystem.TryReload(out error))
+                    if (!NavigationSystem.TryReload(out error, out errors))
                     {
                         message = error;
                         return false;
                     }
+
+                    warnings = NavigationSystem.DataWarnings;
 
                     message = String.Format("{0} waypoint(s), {1} destination(s), {2} warning(s)",
                         NavigationSystem.Graph.NodeCount,
@@ -164,13 +178,26 @@ namespace Server.Custom
                     return true;
 
                 case "dailylife-reload":
-                    if (!DailyLifeCommands.TryReload(out error))
+                    if (!DailyLifeCommands.TryReload(out error, out errors))
                     {
                         message = error;
                         return false;
                     }
 
+                    warnings = DailyLifeSystem.ConfigWarnings;
+
                     message = String.Format("{0} config warning(s)", DailyLifeSystem.ConfigWarnings.Count);
+                    return true;
+
+                // Restricted zones have no warning tier at all: they load, or they do not.
+                case "zones-reload":
+                    if (!RestrictedZoneSystem.TryReload(out error, out errors))
+                    {
+                        message = error;
+                        return false;
+                    }
+
+                    message = String.Format("{0} restricted zone(s)", RestrictedZoneSystem.Zones.Count);
                     return true;
 
                 case "gg-reimport":
@@ -272,7 +299,21 @@ namespace Server.Custom
             return true;
         }
 
-        private static void WriteAck(string name, string token, bool ok, string message)
+        /// <summary>
+        /// Writes the ack the bridge reads back.
+        ///
+        /// `errors` and `warnings` carry the shard's own validator strings UNEDITED, so the banner
+        /// in the editor and the line in the console say the same thing. Before this, a reload that
+        /// succeeded with problems acked "3 warning(s)" and there was no way to find out which
+        /// three without reading a console the person driving the editor is not looking at.
+        ///
+        /// Both arrays are always written, empty when there is nothing to say: an absent key and an
+        /// empty list only read alike in JavaScript if every reader remembers to guard, and one of
+        /// them will not.
+        /// </summary>
+        private static void WriteAck(
+            string name, string token, bool ok, string message,
+            IList<string> errors, IList<string> warnings)
         {
             var builder = new StringBuilder(256);
 
@@ -281,6 +322,8 @@ namespace Server.Custom
             builder.Append("  \"token\": ").Append(Json.Quote(token)).Append(",\n");
             builder.Append("  \"ok\": ").Append(ok ? "true" : "false").Append(",\n");
             builder.Append("  \"message\": ").Append(Json.Quote(message)).Append(",\n");
+            AppendDetails(builder, "errors", errors);
+            AppendDetails(builder, "warnings", warnings);
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append("\n");
             builder.Append("}\n");
 
@@ -290,6 +333,49 @@ namespace Server.Custom
             {
                 Log.Error("Could not write the ack for '{0}': {1}", name, error);
             }
+        }
+
+        /// <summary>
+        /// Writes one detail array, capped the same way LogWarnings caps the console.
+        ///
+        /// The same cap in both places on purpose: an ack that listed forty and a log that listed
+        /// twenty would send someone hunting for a difference that is not there.
+        /// </summary>
+        private static void AppendDetails(StringBuilder builder, string key, IList<string> items)
+        {
+            builder.Append("  \"").Append(key).Append("\": [");
+
+            if (items == null || items.Count == 0)
+            {
+                builder.Append("],\n");
+                return;
+            }
+
+            int shown = Math.Min(items.Count, MaxDetails);
+
+            builder.Append('\n');
+
+            for (int i = 0; i < shown; i++)
+            {
+                builder.Append("    ").Append(Json.Quote(items[i]));
+
+                if (i < shown - 1 || items.Count > shown)
+                {
+                    builder.Append(',');
+                }
+
+                builder.Append('\n');
+            }
+
+            if (items.Count > shown)
+            {
+                builder
+                    .Append("    ")
+                    .Append(Json.Quote(String.Format("... and {0} more.", items.Count - shown)))
+                    .Append('\n');
+            }
+
+            builder.Append("  ],\n");
         }
 
         private static HealthResult BuildHealthResult()

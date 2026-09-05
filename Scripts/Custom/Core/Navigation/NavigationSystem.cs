@@ -210,8 +210,21 @@ namespace Server.Custom
         /// </summary>
         public static bool TryLoad(out string error)
         {
+            IList<string> ignored;
+            return TryLoad(out error, out ignored);
+        }
+
+        /// <summary>
+        /// As TryLoad, but also hands back the validator's errors ONE PER ITEM.
+        ///
+        /// JsonConfig collects them as a list and every caller used to flatten it immediately with
+        /// "; ". That is fine for a console line and wrong for anything that wants to show them:
+        /// re-splitting on "; " in the reader is unsafe, because a Newtonsoft parse message can
+        /// contain anything. The bridge shows these in a banner, so the list survives the trip.
+        /// </summary>
+        public static bool TryLoad(out string error, out IList<string> errors)
+        {
             NavigationStore store;
-            IList<string> errors;
 
             if (!JsonConfig.TryLoad(ConfigPath, out store, out errors))
             {
@@ -235,7 +248,14 @@ namespace Server.Custom
         /// <summary>Single entry point for the staff command and, later, the admin API.</summary>
         public static bool TryReload(out string error)
         {
-            if (!TryLoad(out error))
+            IList<string> ignored;
+            return TryReload(out error, out ignored);
+        }
+
+        /// <summary>As TryReload, keeping the validator's errors as a list. See TryLoad.</summary>
+        public static bool TryReload(out string error, out IList<string> errors)
+        {
+            if (!TryLoad(out error, out errors))
             {
                 NotifyStaff(String.Format("Navigation NOT reloaded: {0}", error));
                 Log.Error("Navigation NOT reloaded: {0}", error);

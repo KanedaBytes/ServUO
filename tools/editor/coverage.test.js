@@ -77,10 +77,12 @@ test('the hop cap in the editor matches the shard config', () => {
 
     assert.ok(match, 'NavHopMaxTiles is not in Config/Custom.cfg');
 
-    const app = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
-    const editor = app.match(/HOP_CAP\s*=\s*(\d+)/);
+    // HOP_CAP lives in validate.js now: the validator, the coverage bands and the edge colouring
+    // all key off it, so it gets one home rather than three.
+    const source = fs.readFileSync(path.join(__dirname, 'js', 'validate.js'), 'utf8');
+    const editor = source.match(/HOP_CAP\s*=\s*(\d+)/);
 
-    assert.ok(editor, 'HOP_CAP is not in app.js');
+    assert.ok(editor, 'HOP_CAP is not in validate.js');
     assert.strictEqual(
         editor[1],
         match[1],

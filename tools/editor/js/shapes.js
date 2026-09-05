@@ -13,7 +13,7 @@ export const LAYERS = {
     'nav-zones': { label: 'Nav zones', color: '#5b8db8', reload: 'nav-reload' },
     'nav-routes': { label: 'Authored routes', color: '#ff9d5c', reload: 'nav-reload' },
     dailylife: { label: 'Daily life', color: '#6fb3ff', reload: 'dailylife-reload' },
-    restricted: { label: 'Restricted zones', color: '#ff7a6b', reload: 'nav-reload' },
+    restricted: { label: 'Restricted zones', color: '#ff7a6b', reload: 'zones-reload' },
     entities: { label: 'Live entities', color: '#ffffff', reload: null }
 };
 

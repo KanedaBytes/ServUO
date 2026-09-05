@@ -29,6 +29,9 @@ async function request(method, path, body) {
     if (!response.ok) {
         const error = new Error((payload && payload.error) || `HTTP ${response.status}`);
         error.status = response.status;
+        // A 409 carries the hash the file is actually at, which is what the reload-and-reapply
+        // offer needs. Throwing the message alone would drop it.
+        error.payload = payload;
         throw error;
     }
 
@@ -61,14 +64,24 @@ export const api = {
 
     ack: (name) => request('GET', `/api/ack/${name}`),
 
-    /** Polls for a request's ack, giving up rather than hanging if the shard is down. */
-    async awaitAck(name, timeoutMs = 8000) {
+    /**
+     * Polls for a request's ack, giving up rather than hanging if the shard is down.
+     *
+     * `nonce` comes back from request(). Without it this reads whichever ack happens to be on
+     * disk, and the shard overwrites that file in place rather than deleting it - so from the
+     * second request of a session onwards, the previous run's answer would be returned instantly
+     * and believed. The bridge clears the ack before dropping the token as well; this is the half
+     * that survives two editor tabs asking at once.
+     */
+    async awaitAck(name, { nonce = null, timeoutMs = 8000 } = {}) {
         const deadline = Date.now() + timeoutMs;
 
         for (;;) {
             const ack = await this.ack(name);
+            const mine = ack && !ack.pending && ack.utc
+                && (!nonce || String(ack.token || '').endsWith(`#${nonce}`));
 
-            if (ack && !ack.pending && ack.utc) {
+            if (mine) {
                 return ack;
             }
 
@@ -78,5 +91,43 @@ export const api = {
 
             await new Promise((resolve) => setTimeout(resolve, 400));
         }
-    }
+    },
+
+    /**
+     * Saves one file and asks the shard to reload it.
+     *
+     * `edits` is {baseHash, updates, creates, deletes}. The answer is
+     * {written, reloaded, message, errors, warnings, hash} - and note that a write whose reload
+     * was refused resolves rather than throwing, because the file IS on disk and the caller has
+     * to be told that rather than sent down the "nothing happened" path.
+     */
+    save: (file, edits) => request('POST', `/api/save/${file}`, edits),
+
+    /**
+     * The same, but stopping before anything is written, to preview what the shard would say.
+     *
+     * A dry run that found something fatal answers 422, which is not an error to this caller: the
+     * findings ARE the answer. Only a real failure - a stale hash, a malformed edit - throws.
+     */
+    async dryRun(file, edits) {
+        const response = await fetch(`/api/save/${file}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...edits, dryRun: true })
+        });
+
+        const payload = await response.json().catch(() => null);
+
+        if (response.ok || response.status === 422) {
+            return payload;
+        }
+
+        const error = new Error((payload && payload.error) || `HTTP ${response.status}`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+    },
+
+    /** Puts a file back to the .bak the last save left, which is what discard needs. */
+    restore: (file) => request('POST', `/api/restore/${file}`)
 };

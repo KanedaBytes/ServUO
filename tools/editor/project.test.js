@@ -1,6 +1,6 @@
 'use strict';
 
-// node --test tools/editor
+// node --test tools/editor/*.test.js
 //
 // The point of this file is the golden round trip. SerializeCompact's layout rule now exists
 // twice - once in C# in JsonConfig, once in JS in compact.js - and nothing but this test stops
@@ -47,7 +47,7 @@ for (const [name, goldenPath] of goldens) {
     test(`${name}: unproject with no edits is the identity`, () => {
         const golden = fs.readFileSync(goldenPath, 'utf8');
 
-        assert.strictEqual(unproject([], golden), golden);
+        assert.strictEqual(unproject(name === 'navigation' ? 'navigation' : 'dailyLife', golden, {}), golden);
     });
 
     test(`${name}: the shipped file is canonical`, () => {
@@ -131,7 +131,7 @@ test('every waypoint, destination and zone is projected', () => {
 test('unknown fields survive a round trip', () => {
     const source = '{\n  "waypoints": [\n    {"id":"a","map":"Trammel","x":1,"y":2,"z":3,"somethingNew":"keep me"}\n  ]\n}\n';
 
-    assert.strictEqual(unproject([], source), source);
+    assert.strictEqual(unproject('navigation', source, {}), source);
 
     const shapes = require('./project.js').projectNavigation(JSON.parse(source));
 
@@ -142,12 +142,259 @@ test('unknown fields survive a round trip', () => {
 test('unproject moves a point and rejects an id that no longer exists', () => {
     const source = '{\n  "waypoints": [\n    {"id":"a","map":"Trammel","x":1,"y":2,"z":3}\n  ]\n}\n';
 
-    const moved = unproject([{ id: 'wp:a', kind: 'point', points: [[10, 20, 3]] }], source);
+    const moved = unproject('navigation', source,
+        { updates: [{ id: 'wp:a', kind: 'point', points: [[10, 20, 3]] }] });
 
     assert.match(moved, /"x":10,"y":20,"z":3/);
 
     assert.throws(
-        () => unproject([{ id: 'wp:ghost', kind: 'point', points: [[1, 1, 1]] }], source),
+        () => unproject('navigation', source,
+            { updates: [{ id: 'wp:ghost', kind: 'point', points: [[1, 1, 1]] }] }),
         /No record for shape id/
     );
+});
+
+// ---- the write side -------------------------------------------------------------------------
+
+const { TEMPLATES, fileForShape } = require('./project.js');
+
+function navGolden() {
+    return fs.readFileSync(path.join(GOLDEN, 'navigation.golden.json'), 'utf8');
+}
+
+/** Which whole lines a write added and removed. A save should touch as few as it possibly can. */
+function lineDiff(before, after) {
+    const was = before.split('\n');
+    const now = after.split('\n');
+    const counts = new Map();
+
+    for (const line of was) counts.set(line, (counts.get(line) || 0) + 1);
+    for (const line of now) counts.set(line, (counts.get(line) || 0) - 1);
+
+    const removed = [];
+    const added = [];
+
+    for (const [line, n] of counts) {
+        for (let i = 0; i < n; i++) removed.push(line);
+        for (let i = 0; i < -n; i++) added.push(line);
+    }
+
+    return { added, removed };
+}
+
+test('every template matches the field order the C# writer actually produced', () => {
+    // The anti-drift guard for record CREATION, the counterpart to the golden round trip for
+    // record editing. A subsequence rather than an exact match, because an optional field like
+    // `note` is legitimately absent from most records.
+    const root = compact.parse(navGolden());
+    const sections = {
+        waypoints: 'waypoint', edges: 'edge', destinations: 'destination',
+        arrivals: 'arrival', zones: 'zone', routes: 'route', costTags: 'costTag'
+    };
+
+    for (const [section, templateName] of Object.entries(sections)) {
+        const keys = TEMPLATES[templateName].keys;
+
+        for (const record of compact.get(root, section).items) {
+            let at = -1;
+
+            for (const key of compact.keys(record)) {
+                const next = keys.indexOf(key, at + 1);
+
+                assert.notStrictEqual(next, -1,
+                    `${section} record has '${key}' out of template order, or not in the template`);
+
+                at = next;
+            }
+        }
+    }
+});
+
+test('creating a record adds exactly one line and changes no other byte', () => {
+    const before = navGolden();
+    const after = unproject('navigation', before, {
+        creates: [{
+            id: 'wp:test-new', kind: 'point', map: 'Trammel', points: [[100, 200, 5]],
+            props: { id: 'test-new', tags: 'town road' }
+        }]
+    });
+
+    const { added, removed } = lineDiff(before, after);
+    const created =
+        '    {"id":"test-new","map":"Trammel","x":100,"y":200,"z":5,"arrivalRange":0,"tags":"town road"}';
+
+    // Two lines change, and the second one has to: appending to a JSON array puts a comma on the
+    // record that used to be last. Nothing else in the file moves.
+    assert.strictEqual(removed.length, 1);
+    assert.deepStrictEqual(added.sort(), [created, removed[0] + ','].sort());
+});
+
+test('deleting a record removes exactly one line and changes no other byte', () => {
+    const before = navGolden();
+    const after = unproject('navigation', before, { deletes: ['wp:brit-plaza-1'] });
+    const { added, removed } = lineDiff(before, after);
+
+    assert.deepStrictEqual(added, []);
+    assert.strictEqual(removed.length, 1);
+    assert.match(removed[0], /"id":"brit-plaza-1"/);
+});
+
+test('a batch applies the same however the editor happened to order it', () => {
+    const edits = {
+        deletes: ['wp:brit-plaza-4'],
+        updates: [{ id: 'wp:brit-plaza-5', kind: 'point', map: 'Trammel', points: [[1, 2, 3]] }],
+        creates: [{
+            id: 'wp:test-a', kind: 'point', map: 'Trammel', points: [[7, 8, 9]],
+            props: { id: 'test-a' }
+        }]
+    };
+
+    const forwards = unproject('navigation', navGolden(), edits);
+    const backwards = unproject('navigation', navGolden(), {
+        deletes: [...edits.deletes].reverse(),
+        updates: [...edits.updates].reverse(),
+        creates: [...edits.creates].reverse()
+    });
+
+    assert.strictEqual(forwards, backwards);
+});
+
+test('an arrival is the nth of its destination, not the nth in the file', () => {
+    const before = navGolden();
+    const nav = JSON.parse(before);
+    const mine = nav.arrivals.filter((a) => a.destination === 'brit-square');
+
+    assert.ok(mine.length >= 2, 'the fixture needs a destination with two arrivals');
+
+    const after = unproject('navigation', before, {
+        updates: [{ id: 'arr:brit-square#1', kind: 'point', points: [[500, 600, 7]] }]
+    });
+
+    const moved = JSON.parse(after).arrivals.filter((a) => a.destination === 'brit-square');
+
+    assert.deepStrictEqual(
+        [moved[1].x, moved[1].y, moved[1].z], [500, 600, 7]);
+    assert.deepStrictEqual(
+        [moved[0].x, moved[0].y, moved[0].z], [mine[0].x, mine[0].y, mine[0].z]);
+});
+
+test('deleting one arrival and moving a later one in the same batch moves the right one', () => {
+    // By index this is the bug: removing #0 renumbers #1 to #0 before the move is applied.
+    const before = navGolden();
+    const was = JSON.parse(before).arrivals.filter((a) => a.destination === 'brit-square');
+
+    const after = unproject('navigation', before, {
+        deletes: ['arr:brit-square#0'],
+        updates: [{ id: 'arr:brit-square#1', kind: 'point', points: [[500, 600, 7]] }]
+    });
+
+    const now = JSON.parse(after).arrivals.filter((a) => a.destination === 'brit-square');
+
+    assert.strictEqual(now.length, was.length - 1);
+    assert.deepStrictEqual([now[0].x, now[0].y, now[0].z], [500, 600, 7]);
+});
+
+test('a shape saved into the wrong file is refused, section name collision and all', () => {
+    // zone: and restricted: both name a section called "zones", in two different files.
+    assert.strictEqual(fileForShape({ id: 'zone:brit-town' }), 'navigation');
+    assert.strictEqual(fileForShape({ id: 'restricted:x' }), 'restrictedZones');
+
+    assert.throws(
+        () => unproject('restrictedZones', '{"zones":[]}\n',
+            { updates: [{ id: 'zone:brit-town', kind: 'rect', rect: [1, 2, 3, 4] }] }),
+        /belongs to navigation, not restrictedZones/);
+});
+
+test('a derived marker is refused by name rather than written somewhere plausible', () => {
+    assert.strictEqual(fileForShape({ id: 'marker:shop:baker' }), null);
+
+    assert.throws(
+        () => unproject('dailyLife', '{"anchor":"a"}\n',
+            { updates: [{ id: 'marker:shop:baker', kind: 'point', points: [[1, 2, 3]] }] }),
+        /is derived from the navigation data/);
+});
+
+test('a polyline drag writes nothing, because its line is derived from its ids', () => {
+    const before = navGolden();
+
+    for (const shape of [
+        { id: 'route:brit-watch-north', kind: 'polyline', map: 'Trammel', points: [[1, 1, 1], [2, 2, 2]] },
+        { id: 'edge:brit-plaza-1>brit-plaza-2', kind: 'polyline', map: 'Trammel', points: [[1, 1, 1], [2, 2, 2]] }
+    ]) {
+        assert.strictEqual(unproject('navigation', before, { updates: [shape] }), before,
+            `${shape.id} wrote geometry it does not own`);
+    }
+});
+
+test('a prop the shard has never heard of is refused here rather than by Newtonsoft', () => {
+    assert.throws(
+        () => unproject('navigation', navGolden(), {
+            updates: [{ id: 'wp:brit-plaza-1', kind: 'point', props: { closesAt: 9 } }]
+        }),
+        /waypoints has no field 'closesAt'/);
+});
+
+test('a watch post switches from a route to destinations, keeping one line', () => {
+    // route and destinations are both NullValueHandling.Ignore, so this is a key removal plus a
+    // key insertion - not something unproject could do before.
+    const before = fs.readFileSync(path.join(GOLDEN, 'britain-daily-life.golden.json'), 'utf8');
+    const after = unproject('dailyLife', before, {
+        updates: [{
+            id: 'watchpost:north', kind: 'form',
+            props: { id: 'north', route: '', destinations: 'brit-guard-west' }
+        }]
+    });
+
+    const { added, removed } = lineDiff(before, after);
+
+    assert.strictEqual(removed.length, 1);
+    assert.deepStrictEqual(added, ['    {"id":"north","destinations":"brit-guard-west"},']);
+    assert.strictEqual(JSON.parse(after).watch[0].route, undefined);
+});
+
+test('the daily life singleton writes the anchor and both tavern values', () => {
+    const before = fs.readFileSync(path.join(GOLDEN, 'britain-daily-life.golden.json'), 'utf8');
+    const after = unproject('dailyLife', before, {
+        updates: [{
+            id: 'dl:settings', kind: 'form',
+            props: { anchor: 'brit-bank', 'tavern.patronCount': 9 }
+        }]
+    });
+
+    const daily = JSON.parse(after);
+
+    assert.strictEqual(daily.anchor, 'brit-bank');
+    assert.strictEqual(daily.tavern.patronCount, 9);
+    assert.strictEqual(daily.tavern.destination, JSON.parse(before).tavern.destination);
+
+    assert.throws(
+        () => unproject('dailyLife', before, {
+            updates: [{ id: 'dl:settings', kind: 'form', props: { nope: 1 } }]
+        }),
+        /dl:settings has no field 'nope'/);
+});
+
+test('creating a record that is already there is refused', () => {
+    assert.throws(
+        () => unproject('navigation', navGolden(), {
+            creates: [{
+                id: 'wp:brit-plaza-1', kind: 'point', map: 'Trammel', points: [[1, 2, 3]],
+                props: { id: 'brit-plaza-1' }
+            }]
+        }),
+        /wp:brit-plaza-1 already exists/);
+});
+
+test('the first restricted zone flips its empty array to the expanded form', () => {
+    const before = '{\n  "zones": []\n}\n';
+    const after = unproject('restrictedZones', before, {
+        creates: [{
+            id: 'restricted:no-mining', kind: 'rect', map: 'Trammel', rect: [10, 20, 30, 40],
+            props: { name: 'no-mining' }
+        }]
+    });
+
+    assert.strictEqual(
+        after,
+        '{\n  "zones": [\n    {"name":"no-mining","map":"Trammel","x":10,"y":20,"width":30,"height":40}\n  ]\n}\n');
 });

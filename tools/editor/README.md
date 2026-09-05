@@ -1,8 +1,12 @@
 # tools/editor — the shard editor and its bridge
 
 A browser map editor for this shard's data, ported from the ModernUO shard's `ShardEditor`.
-**Read-only** as of step 5a: every layer is visible and live entities are overlaid, but nothing
-can be edited yet. Editing is 5b; spawners are 5c.
+
+**The save path is finished and the editing UI is not.** Step 5a made every layer visible and
+overlaid live entities. Step 5b's first half — this — is the whole disk-and-shard contract:
+`POST /api/save/<file>` unprojects, backs up, writes atomically, asks the shard to reload and
+reports what it said. All of it is covered by node tests, and none of it has a button yet. The
+tools, the properties panel and the edit cycle are the second half; spawners are 5c.
 
 ```
 tools\editor\export-tiles.ps1      # render the map, once
@@ -30,7 +34,9 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `whitelist.js` | The path sandbox |
 | `compact.js` | Raw-preserving JSON parser and the writer that matches `JsonConfig.SerializeCompact` |
 | `project.js` | `project()` our schema into editor shapes, `unproject()` back |
-| `*.test.js` | `node --test tools/editor/project.test.js` |
+| `js/validate.js` | The shard's structural checks, replicated - shared by the browser, the bridge and the tests |
+| `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
+| `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
 | `js/`, `index.html`, `style.css` | The editor |
 | `tiles/` | Rendered map, gitignored |
 | `../MapExport/` | The tile renderer |
@@ -40,14 +46,16 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 The bridge binds `127.0.0.1` and nothing else, so nothing off this machine can reach it. That
 alone is not sufficient — a page you visit in another tab can still POST to localhost — so every
 mutating request is checked for a same-origin `Sec-Fetch-Site`, falling back to `Origin`. Reads
-are unchecked because they are harmless; the only writes are request tokens.
+are unchecked because they are harmless. The check sits before the POST dispatch rather than inside
+each handler, so a new endpoint cannot forget it.
 
 The data endpoints take **no path from the caller at all**. Every file they read is a constant in
 `whitelist.js`. That is the real sandbox: there is nothing to traverse because there is nothing to
-steer. `whitelist.js` exists for the one endpoint that does take a name — the token drop — and so
-that the boundary is testable rather than merely asserted. Token names are matched against a
-pattern rather than sanitised; a name that has to be cleaned up before it is safe is a name worth
-refusing.
+steer. `whitelist.js` exists for the endpoints that do take a name — the token drop, and now the
+save — and so that the boundary is testable rather than merely asserted. Token names are matched
+against a pattern rather than sanitised; a name that has to be cleaned up before it is safe is a
+name worth refusing. A save name is not even a pattern: it is a key in a three-entry table, so
+`../` and `%2e%2e%2f` are both simply not files.
 
 ## The two writers, and the golden fixture
 
@@ -59,8 +67,8 @@ reformatted or corrupted data file.
 So the C# writer is the authority and its output is committed:
 
 ```
-[NavExportGolden                              # in-game, writes Data/Custom/golden/
-node --test tools\editor\project.test.js      # asserts unproject(project(golden)) === golden
+[NavExportGolden                          # in-game, writes Data/Custom/golden/
+node --test tools\editor\*.test.js       # asserts unproject with no edits is the identity
 ```
 
 This caught a real difference on the first run. Newtonsoft writes the JSON number `3.0` as `3.0`;
@@ -70,7 +78,21 @@ does not round-trip through JavaScript values at all — scalars keep the exact 
 were parsed from, and only edited values are re-formatted.
 
 The shipped `navigation.json` and `britain-daily-life.json` are byte-identical to their goldens,
-so the first save in 5b will not produce a whole-file reformat diff.
+so the first save does not produce a whole-file reformat diff — verified by making one: a no-op
+save of all three files through the real bridge to the real shard came back byte-identical.
+
+**Creating a record needs the same discipline for a different reason.** An edit changes a value in
+place, so the layout takes care of itself; a new record has to choose its own field order, and
+Newtonsoft emits the `[JsonProperty]` declaration order. So `project.js` holds a `TEMPLATES` table
+transcribed from `NavRecords.cs` and `DailyLifeConfig.cs`, and a test walks every record in the
+golden asserting its keys are a subsequence of the template — a subsequence, because an optional
+field like `note` is legitimately absent. `omitWhenBlank` mirrors `NullValueHandling.Ignore`, and
+**a created record never contains `null`**: an optional field is either written with a real value
+or its key is not there.
+
+A template rather than copying the shape of a sibling record, because `restricted-zones.json` ships
+as `{"zones": []}` and has no sibling to copy — and a donor that happened to carry a `note` would
+give every new record a `"note": ""`.
 
 ## Tiles
 
@@ -112,6 +134,68 @@ uo-offline generates exactly that (`walk_atlas.pgm.gz`, 620 KB gzipped, from the
 `Walkable.TryFindSeedZ`) and then never uses it. That is the natural follow-up, and it would also
 let the editor flood-fill from the graph instead of measuring straight lines.
 
+## Saving
+
+`POST /api/save/<file>`, where `<file>` is one of `navigation`, `dailyLife`, `restrictedZones` —
+a **logical name, never a path**. That is the same sandbox the read endpoints use: there is nothing
+to traverse because there is nothing to steer. `entities` and `health` are deliberately not
+writable; the shard writes those, and an editor able to overwrite a snapshot could lie to itself
+about the live world.
+
+The body is `{baseHash, updates, creates, deletes}` — the shapes that changed, not the document.
+In order:
+
+1. **The hash is checked.** `/api/shapes` hands out a hash of each file's raw bytes, and a save
+   sends back the one it started from. `[NavMark` and `[NavRecord` write these same files from
+   inside the shard, so a stale editor must not be able to flatten a walk somebody just recorded.
+   Mismatch is a **409** carrying the hash the file is actually at, and nothing is written.
+2. **`unproject` runs.** A shape that names no record, belongs to another file, or is derived is a
+   **400**, and still nothing is written.
+3. `<file>.bak`, then a temp file, then a rename — mirroring `AtomicFile.Write` and the `.bak`
+   convention `NavigationSystem.Save` has always used.
+4. A reload token is dropped and its ack awaited, bounded at five seconds.
+
+**A write whose reload was refused answers 200, not an error.** The file *is* on disk and the shard
+*is* still running the previous config; both halves have to reach the editor. Answering 4xx would
+send it down the "nothing happened" path while the file on disk said otherwise — which is the exact
+failure the persistent banner exists for. So the response is
+`{written, reloaded, message, errors, warnings, hash, backup}`, and `written: true, reloaded: false`
+is a normal outcome with the shard's own reason attached.
+
+`POST /api/restore/<file>` copies the `.bak` back and reloads. That is what makes discard mean
+discard: a save whose reload was refused has already written, so dropping the editor's local edits
+alone would leave a bad file to fail at the next restart. The `.bak` is the pre-save bytes exactly,
+which no reconstruction from shapes can promise.
+
+## Two tiers of wrong, and which is which
+
+`js/validate.js` reproduces the shard's structural checks so the editor can preview a save. It is
+shared: the browser imports it, the bridge dynamic-imports it for `dryRun`, and the node tests
+import it too — one copy of the rules, so a preview line and a banner line are the same sentence.
+
+**The tiers are not what they look like.** On this shard a dangling edge id is a *warning*: the edge
+is dropped and the reload succeeds. So are an over-cap hop and a destination with no arrivals. What
+actually refuses a reload is a duplicate or malformed id, an unknown facet, a bad `kind` or `mode`,
+a self-edge, a route with fewer than two waypoints — and **any unknown JSON key**, because
+`JsonConfig` sets `MissingMemberHandling.Error`. Calling a warning fatal would block a legal edit;
+calling a fatal a warning would report "saved" over data that had just been broken.
+
+So **validate never gates a real save**. It runs live in the panel and for an explicit dry run, and
+that is all. It is a replica, and a false positive in a replica must not be able to stop someone
+writing a file the shard would have accepted. The shard says no itself, and says why.
+
+Three checks are deliberately absent, and the module says so rather than implying completeness:
+vendor type names (the shard resolves those against its own type table), selfTest pathability, and
+`[NavAudit`'s blocked-edge check — the last two need real map data.
+
+What the replica *can* do that the shard cannot is name the shape. The shard reports
+`waypoints[37]`, an array index that shifts under a delete; a finding here carries `shapeId` too,
+so the editor can select the record being complained about.
+
+The replica is checked against the real thing rather than assumed: running the shard against a
+deliberately over-long hop produced four warnings where this file produced three, because a `cycle`
+route also walks the closing leg from its last waypoint back to its first. That is now a test.
+
 ## What was rewritten, and what to port back in 5b
 
 `view.js`, `shapes.js`, `overlays.js` and `tools.js` came over close to unchanged. Two files did
@@ -134,6 +218,19 @@ Also worth keeping from the original: identity is `(file, pointer)` there, but o
 `<kind>:<our id>` — never an array index, because an index breaks the moment a record is reordered
 or deleted, and our records already have stable ids.
 
+**And the save is a different shape, so `save` and `discard` are rewrites rather than ports.** The
+original PATCHed one record at a time by `(file, JSON pointer)` against an API inside the shard.
+Ours sends the shapes that changed for one file and lets the bridge rewrite it, because there is no
+API — which is also why the stale-hash check exists and the original needed no such thing.
+
+The one place an index survives is `arr:<destId>#<n>`, an arrival's position among *its
+destination's* arrivals. Arrivals have no id in the schema, and the hash makes the file immutable
+between the editor reading it and saving it, so the array the browser counted is the array the
+bridge parses. What the hash does not cover is one batch deleting an earlier arrival and moving a
+later one — so `unproject` resolves every id to a node reference over the untouched tree *before*
+it mutates anything, and deletes by node identity. A test runs a mixed batch forwards and backwards
+and demands identical output.
+
 ## The request channel
 
 The bridge drops `Data/Live/requests/<name>.token`; the shard's `RequestPoller` picks it up within
@@ -143,10 +240,17 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | --- | --- |
 | `nav-reload` | `NavigationSystem.TryReload` |
 | `dailylife-reload` | `DailyLifeCommands.TryReload` |
+| `zones-reload` | `RestrictedZoneSystem.TryReload` |
 | `gg-reimport` | `GGSpawnCommands.TryReimport` |
 | `livemap-on` / `livemap-off` | The entity snapshot; the body carries `<seconds> [custom|all] [zoneId]` |
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
+
+**`zones-reload` is new in 5b, and its absence was a live bug rather than a gap.** The bridge served
+`restricted-zones.json` and `shapes.js` mapped that layer to `nav-reload`, so an edit there would
+have reloaded the wrong system and reported success. `bridge.test.js` now reads both files and
+asserts that every reload the editor can ask for has a `case` in `Dispatch` — the cheapest possible
+guard against the two languages drifting apart again.
 
 **An unknown or malformed token is deleted and acked with an error, never ignored.** A token that
 sits on disk forever looks exactly like a bridge that never wrote one, and a token that survives
@@ -154,3 +258,28 @@ its own failure is retried on every tick.
 
 `livemap-on` with `all` and no zone is refused, at both the command and the token — 20,000 mobiles
 every two seconds is not something to do by accident.
+
+### The ack, and how it stopped answering the wrong question
+
+`WriteAck` produces `{request, token, ok, message, errors, warnings, utc}`. `errors` and `warnings`
+are new, and they carry **the shard's own validator strings unedited** — so the banner and the
+console say the same thing. Before, a reload that succeeded with problems acked `"3 warning(s)"`
+and there was no way to find out which three without reading a console the person driving the
+editor is not looking at. Both arrays are always present, empty when there is nothing: an absent
+key and an empty list only read alike in JavaScript if every reader remembers to guard, and one of
+them will not.
+
+`JsonConfig.TryLoad` already collected errors as a list and all three systems flattened it with
+`"; "` at the door. They now keep the list — `TryReload(out error, out IList<string> errors)` — and
+flatten only for their own console line. Re-splitting on `"; "` in JavaScript would have been
+unsafe: a Newtonsoft parse message can contain anything.
+
+**A stale ack used to be read as the current answer.** The shard overwrites `<name>.ack.json` in
+place and never deletes it, and `/api/ack/` reports `pending` only when the file is *absent* — so
+from the second request of a session onwards, a waiter got the previous run's answer instantly and
+believed it. Save-then-reload is unusable like that. Two fixes, because they close different holes:
+the bridge **deletes the ack before dropping the token**, which needs no shard change at all; and
+the token body carries a **nonce** that `WriteAck` echoes back in `token`, which survives two
+editor tabs and a bridge that dies mid-sequence. The nonce is generated in the bridge, not the
+browser, and only for the four requests whose dispatch ignores its body — `livemap-on` parses
+its body and is excluded.

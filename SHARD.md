@@ -74,7 +74,7 @@ Ported from the ModernUO shard, in this order:
 | 4a | `Scripts/Custom/Core/Navigation/` — waypoint graph, destinations, arrivals, zones, routes | **done** |
 | 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | **done** |
 | 5a | Map export + editor bridge, read-only layers | **done** |
-| 5b | Editing through the bridge | pending |
+| 5b | Editing through the bridge | save path **done**, editing UI pending |
 | 5c | Spawners in the editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
@@ -183,8 +183,12 @@ live shard.
 ## Shard editor
 
 A browser map editor for the shard's own data - the nav graph, destinations, arrival points,
-zones, routes, restricted zones, daily-life actors - with live entities drawn on top. **Read-only
-as of step 5a**; editing is 5b and spawners are 5c.
+zones, routes, restricted zones, daily-life actors - with live entities drawn on top.
+
+**The save path is finished; the editing UI is not.** `POST /api/save/<file>` unprojects the shapes
+that changed, backs the file up, writes it atomically, asks the shard to reload and reports what it
+said - all covered by node tests, none of it wired to a button yet. The tools and the edit cycle
+are the rest of 5b; spawners are 5c.
 
 ```
 .\tools\editor\export-tiles.ps1     # render the map tiles, once
@@ -198,18 +202,26 @@ Neither side holds a socket to the other, so either can restart without the othe
 shard has no HTTP surface to secure, and the whole channel can be inspected with `type` and `del`.
 
 The bridge binds `127.0.0.1` only and refuses cross-site writes, so there is no token to paste.
+The three data files it may write are named by a key in a fixed table, never by a path from the
+caller, and a save carries a hash of the bytes it started from - so a stale editor cannot flatten a
+walk `[NavRecord` just wrote.
 
 | Command | Access | Effect |
 | --- | --- | --- |
 | `[LiveMap on\|off [seconds] [custom\|all] [zoneId]` | Administrator | Write the live entity snapshot. Defaults to custom actors and players every 2s; `all` needs a nav zone to bound it |
 | `[NavExportGolden` | Administrator | Write the golden JSON fixtures the bridge's writer is tested against |
+| `[RestrictedZonesReload` | GameMaster | Now also reachable from the bridge as the `zones-reload` token |
 
 Map tiles are derived data, gitignored, and safe to render while the shard is up - MapExport
 builds its `Server.csproj` reference into its own folder rather than the repo root. A second facet
 is another run: `export-tiles.ps1 -Facet Felucca`.
 
-See `tools/editor/README.md`, which also records why `app.js` was rewritten rather than ported and
-what to bring back from the ModernUO original when editing returns.
+A reload ack now carries the shard's validator strings themselves (`errors` and `warnings`), not
+just a count of them, so the editor can say which problem to fix rather than that there are three.
+
+See `tools/editor/README.md` for the save contract, the two tiers of validation failure - a dangling
+edge id is a warning here, not a rejection - and what is still to bring back from the ModernUO
+original when the editing UI lands.
 
 ## Tech debt
 

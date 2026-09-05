@@ -89,8 +89,14 @@ namespace Server.Custom
         /// </summary>
         public static bool TryLoad(out string error)
         {
+            IList<string> ignored;
+            return TryLoad(out error, out ignored);
+        }
+
+        /// <summary>As TryLoad, keeping the validator's errors as a list.</summary>
+        public static bool TryLoad(out string error, out IList<string> errors)
+        {
             RestrictedZoneStore store;
-            IList<string> errors;
 
             if (!JsonConfig.TryLoad(ConfigPath, out store, out errors))
             {
@@ -120,7 +126,14 @@ namespace Server.Custom
         /// <summary>Single entry point for the staff command and, later, the admin API.</summary>
         public static bool TryReload(out string error)
         {
-            if (!TryLoad(out error))
+            IList<string> ignored;
+            return TryReload(out error, out ignored);
+        }
+
+        /// <summary>As TryReload, keeping the validator's errors as a list.</summary>
+        public static bool TryReload(out string error, out IList<string> errors)
+        {
+            if (!TryLoad(out error, out errors))
             {
                 NotifyStaff(String.Format("Restricted zones NOT reloaded: {0}", error));
                 Log.Error("Restricted zones NOT reloaded: {0}", error);
