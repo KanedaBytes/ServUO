@@ -1,0 +1,760 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+
+namespace Server.Custom
+{
+    /// <summary>
+    /// Loads Data/Custom/navigation.json and owns the live navigation data.
+    ///
+    /// GAME THREAD ONLY - see NavGraph. Background callers marshal through LoopQueue.
+    ///
+    /// Failure contract, matching RestrictedZoneSystem: on ANY load failure the live data is
+    /// kept, because a bad edit must never leave the shard with no navigation. Structural
+    /// problems fail the load; referential ones (an edge naming a waypoint that does not exist)
+    /// drop the offending record and are reported by the Nav.Data health check instead, so one
+    /// typo cannot take navigation offline.
+    /// </summary>
+    public static class NavigationSystem
+    {
+        private static readonly CustomLogger Log = CustomLogger.For("Nav");
+
+        public const string ConfigPath = "Data/Custom/navigation.json";
+
+        /// <summary>Bumped when the JSON shape changes incompatibly.</summary>
+        public const int SchemaVersion = 1;
+
+        private static NavigationStore _store = new NavigationStore();
+        private static NavGraph _graph = new NavGraph();
+
+        private static readonly Dictionary<string, NavDestination> _destinations =
+            new Dictionary<string, NavDestination>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<string, NavZone> _zones =
+            new Dictionary<string, NavZone>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<string, NavRouteDef> _routes =
+            new Dictionary<string, NavRouteDef>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<Map, List<NavDestination>> _destinationsByMap =
+            new Dictionary<Map, List<NavDestination>>();
+
+        private static readonly Dictionary<Map, List<NavZone>> _zonesByMap =
+            new Dictionary<Map, List<NavZone>>();
+
+        private static readonly Dictionary<string, double> _costTags =
+            new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly List<string> _dataWarnings = new List<string>();
+
+        private static string _lastError;
+        private static DateTime? _lastLoadUtc;
+        private static bool _navLive;
+
+        // ---- config ----
+
+        /// <summary>
+        /// Maximum authored edge length, in tiles (Chebyshev).
+        ///
+        /// ServUO's FastAStarAlgorithm searches a 38x38 box CENTRED ON THE MIDPOINT of start
+        /// and goal (Scripts/Services/Pathing/FastAStarAlgorithm.cs:27), so a hop whose real
+        /// detour leaves that box is unfindable at any budget - the mobile then walks into
+        /// scenery rather than failing loudly. The ModernUO shard independently settled on 15
+        /// for route legs for exactly this reason; 12 keeps margin for a detour.
+        /// </summary>
+        public static int HopMaxTiles
+        {
+            get { return Config.Get("Custom.NavHopMaxTiles", 12); }
+        }
+
+        public static int RecordIntervalTiles
+        {
+            get { return Config.Get("Custom.NavRecordIntervalTiles", 8); }
+        }
+
+        public static int DebugRadius
+        {
+            get { return Config.Get("Custom.NavDebugRadius", 32); }
+        }
+
+        public static int DebugMarkerMinutes
+        {
+            get { return Config.Get("Custom.NavDebugMarkerMinutes", 5); }
+        }
+
+        public static int ArrivalScatter
+        {
+            get { return Config.Get("Custom.NavArrivalScatter", 2); }
+        }
+
+        public static int RouteCacheMax
+        {
+            get { return Config.Get("Custom.NavRouteCacheMax", 512); }
+        }
+
+        // ---- state ----
+
+        public static NavGraph Graph
+        {
+            get { return _graph; }
+        }
+
+        public static NavigationStore Store
+        {
+            get { return _store; }
+        }
+
+        public static string LastError
+        {
+            get { return _lastError; }
+        }
+
+        public static DateTime? LastLoadUtc
+        {
+            get { return _lastLoadUtc; }
+        }
+
+        public static IList<NavDestination> Destinations
+        {
+            get { return _store.Destinations.AsReadOnly(); }
+        }
+
+        public static IList<NavZone> Zones
+        {
+            get { return _store.Zones.AsReadOnly(); }
+        }
+
+        public static IList<NavRouteDef> Routes
+        {
+            get { return _store.Routes.AsReadOnly(); }
+        }
+
+        /// <summary>
+        /// Everything wrong with the data that did not stop it loading: dropped references,
+        /// over-cap edges, destinations with no arrival points, disconnected components.
+        /// </summary>
+        public static IList<string> DataWarnings
+        {
+            get { return _dataWarnings.AsReadOnly(); }
+        }
+
+        // ---- boot ----
+
+        /// <summary>
+        /// CallPriority 100 puts this above MapDefinitions.Configure() (untagged, so 0),
+        /// because validating a record resolves its facet name and the facets must exist.
+        /// No world state is touched here - only the JSON and the graph.
+        /// </summary>
+        [CallPriority(100)]
+        public static void Configure()
+        {
+            string error;
+
+            if (!TryLoad(out error))
+            {
+                Log.Error("Navigation is EMPTY - {0} was not loaded: {1}", ConfigPath, error);
+                return;
+            }
+
+            LogWarnings();
+        }
+
+        /// <summary>
+        /// Writes every data warning to the console.
+        ///
+        /// The health check can only carry the first one, and ServUO's console cannot invoke
+        /// [NavReload to see the rest - so without this, verifying nav data over SSH would mean
+        /// fixing one warning per restart.
+        /// </summary>
+        private static void LogWarnings()
+        {
+            if (_dataWarnings.Count == 0)
+            {
+                return;
+            }
+
+            Log.Warn("{0} navigation data warning(s):", _dataWarnings.Count);
+
+            for (int i = 0; i < _dataWarnings.Count && i < 40; i++)
+            {
+                Log.Warn("  " + _dataWarnings[i]);
+            }
+
+            if (_dataWarnings.Count > 40)
+            {
+                Log.Warn("  ... and {0} more.", _dataWarnings.Count - 40);
+            }
+        }
+
+        public static void Initialize()
+        {
+            _navLive = true;
+
+            HealthCheck.Register("Nav.Data", BuildHealthResult);
+
+            if (Config.Get("Custom.NavAuditOnStart", false))
+            {
+                // Deferred to ServerStarted because the audit paths against real map data.
+                EventSink.ServerStarted += () => NavAudit.Run(null);
+            }
+        }
+
+        // ---- loading ----
+
+        /// <summary>
+        /// Reads and validates the file, then rebuilds every index and the graph.
+        ///
+        /// On ANY failure the live data is kept: every error path returns before the existing
+        /// store is replaced. Silent by design so Configure() and TryReload() can each phrase
+        /// their own message.
+        /// </summary>
+        public static bool TryLoad(out string error)
+        {
+            NavigationStore store;
+            IList<string> errors;
+
+            if (!JsonConfig.TryLoad(ConfigPath, out store, out errors))
+            {
+                error = String.Join("; ", ToArray(errors));
+                _lastError = error;
+                return false;
+            }
+
+            // Only now is it safe to swap.
+            _store = store;
+
+            Rebuild();
+
+            error = null;
+            _lastError = null;
+            _lastLoadUtc = DateTime.UtcNow;
+
+            return true;
+        }
+
+        /// <summary>Single entry point for the staff command and, later, the admin API.</summary>
+        public static bool TryReload(out string error)
+        {
+            if (!TryLoad(out error))
+            {
+                NotifyStaff(String.Format("Navigation NOT reloaded: {0}", error));
+                Log.Error("Navigation NOT reloaded: {0}", error);
+                return false;
+            }
+
+            Log.Info(
+                "Reloaded navigation: {0} waypoint(s), {1} destination(s), {2} warning(s).",
+                _graph.NodeCount,
+                _destinations.Count,
+                _dataWarnings.Count);
+
+            LogWarnings();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Rebinds every record, rebuilds the indexes and the graph, and recomputes the data
+        /// warnings. Called after a load and after every mutation.
+        /// </summary>
+        private static void Rebuild()
+        {
+            _destinations.Clear();
+            _zones.Clear();
+            _routes.Clear();
+            _destinationsByMap.Clear();
+            _zonesByMap.Clear();
+            _costTags.Clear();
+            _dataWarnings.Clear();
+
+            foreach (NavCostTag tag in _store.CostTags)
+            {
+                _costTags[tag.Tag] = tag.Multiplier;
+            }
+
+            foreach (NavWaypoint waypoint in _store.Waypoints)
+            {
+                waypoint.Bind();
+            }
+
+            foreach (NavEdge edge in _store.Edges)
+            {
+                edge.Bind();
+            }
+
+            foreach (NavDestination destination in _store.Destinations)
+            {
+                destination.Bind();
+                _destinations[destination.Id] = destination;
+
+                List<NavDestination> perMap;
+
+                if (!_destinationsByMap.TryGetValue(destination.Map, out perMap))
+                {
+                    perMap = new List<NavDestination>();
+                    _destinationsByMap[destination.Map] = perMap;
+                }
+
+                perMap.Add(destination);
+            }
+
+            foreach (NavZone zone in _store.Zones)
+            {
+                zone.Bind();
+                _zones[zone.Id] = zone;
+
+                List<NavZone> perMap;
+
+                if (!_zonesByMap.TryGetValue(zone.Map, out perMap))
+                {
+                    perMap = new List<NavZone>();
+                    _zonesByMap[zone.Map] = perMap;
+                }
+
+                perMap.Add(zone);
+            }
+
+            foreach (NavArrival arrival in _store.Arrivals)
+            {
+                arrival.Bind();
+            }
+
+            foreach (NavRouteDef route in _store.Routes)
+            {
+                route.Bind();
+            }
+
+            _graph.Build(_store, _costTags, HopMaxTiles);
+
+            foreach (string warning in _graph.Warnings)
+            {
+                _dataWarnings.Add(warning);
+            }
+
+            AttachArrivals();
+            CheckReferences();
+            CheckQuality();
+            RunSelfTests();
+        }
+
+        /// <summary>Hangs each arrival off its destination, dropping orphans with a warning.</summary>
+        private static void AttachArrivals()
+        {
+            foreach (NavArrival arrival in _store.Arrivals)
+            {
+                NavDestination destination;
+
+                if (!_destinations.TryGetValue(arrival.DestinationId, out destination))
+                {
+                    _dataWarnings.Add(String.Format(
+                        "arrival at {0},{1} dropped: no destination '{2}'",
+                        arrival.X,
+                        arrival.Y,
+                        arrival.DestinationId));
+                    continue;
+                }
+
+                destination.ArrivalList.Add(arrival);
+            }
+        }
+
+        private static void CheckReferences()
+        {
+            foreach (NavDestination destination in _store.Destinations)
+            {
+                WarnUnknownWaypoints(
+                    destination.WaypointList,
+                    String.Format("destination '{0}'", destination.Id));
+            }
+
+            foreach (NavArrival arrival in _store.Arrivals)
+            {
+                WarnUnknownWaypoints(
+                    arrival.WaypointList,
+                    String.Format("arrival for '{0}'", arrival.DestinationId));
+            }
+
+            foreach (NavRouteDef route in _store.Routes)
+            {
+                bool usable = true;
+
+                for (int i = 0; i < route.WaypointList.Length; i++)
+                {
+                    if (!_graph.Contains(route.WaypointList[i]))
+                    {
+                        _dataWarnings.Add(String.Format(
+                            "route '{0}' is unusable: no waypoint '{1}'",
+                            route.Id,
+                            route.WaypointList[i]));
+                        usable = false;
+                    }
+                }
+
+                // A route with a dangling id is withheld from the index rather than handed to
+                // a consumer that would walk into the gap.
+                if (usable)
+                {
+                    _routes[route.Id] = route;
+                }
+            }
+        }
+
+        private static void WarnUnknownWaypoints(string[] ids, string owner)
+        {
+            if (ids == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < ids.Length; i++)
+            {
+                if (!_graph.Contains(ids[i]))
+                {
+                    _dataWarnings.Add(String.Format("{0} names unknown waypoint '{1}'", owner, ids[i]));
+                }
+            }
+        }
+
+        private static void CheckQuality()
+        {
+            int cap = HopMaxTiles;
+
+            foreach (NavDestination destination in _store.Destinations)
+            {
+                if (destination.ArrivalList.Count == 0)
+                {
+                    _dataWarnings.Add(String.Format(
+                        "destination '{0}' has no arrival points", destination.Id));
+                    continue;
+                }
+
+                int exclusive = 0;
+                int shared = 0;
+                bool reachable = false;
+
+                foreach (NavArrival arrival in destination.ArrivalList)
+                {
+                    if (arrival.Exclusive)
+                    {
+                        exclusive++;
+                    }
+                    else
+                    {
+                        shared++;
+                    }
+
+                    if (_graph.Nearest(arrival.Location, destination.Map, cap) != null)
+                    {
+                        reachable = true;
+                    }
+                }
+
+                if (!reachable)
+                {
+                    _dataWarnings.Add(String.Format(
+                        "destination '{0}' has no arrival point within {1} tiles of a waypoint",
+                        destination.Id,
+                        cap));
+                }
+
+                // A guard post with nowhere for a second guard to stand is a data bug, not a
+                // runtime one: the picker would fall back to scattering round the centre.
+                if (exclusive > 0 && shared < 2)
+                {
+                    _dataWarnings.Add(String.Format(
+                        "destination '{0}' has {1} exclusive arrival point(s) but only {2} shared one(s)",
+                        destination.Id,
+                        exclusive,
+                        shared));
+                }
+            }
+
+            foreach (NavWaypoint waypoint in _store.Waypoints)
+            {
+                if (_graph.EdgeCountOf(waypoint.Id) == 0)
+                {
+                    _dataWarnings.Add(String.Format("waypoint '{0}' has no edges", waypoint.Id));
+                }
+            }
+
+            CheckRoutes(cap);
+            CheckComponents();
+        }
+
+        /// <summary>
+        /// An authored route is walked hop by hop, so a leg longer than the cap is as broken
+        /// here as it is on an edge - and less obvious, because the two ends may each be
+        /// perfectly good waypoints.
+        /// </summary>
+        private static void CheckRoutes(int cap)
+        {
+            foreach (NavRouteDef route in _routes.Values)
+            {
+                string[] ids = route.WaypointList;
+
+                // Only a cycle has a closing leg from the last waypoint back to the first. A
+                // ping-pong retraces the legs it already walked, so its legs are the forward
+                // ones and nothing more.
+                int legs = route.Mode == NavRouteMode.Cycle ? ids.Length : ids.Length - 1;
+
+                for (int i = 0; i < legs; i++)
+                {
+                    NavWaypoint a = _graph.Node(ids[i]);
+                    NavWaypoint b = _graph.Node(ids[(i + 1) % ids.Length]);
+
+                    if (a == null || b == null)
+                    {
+                        continue;
+                    }
+
+                    int distance = NavGraph.Chebyshev(a.Location, b.Location);
+
+                    if (distance > cap)
+                    {
+                        _dataWarnings.Add(String.Format(
+                            "route '{0}' leg '{1}' -> '{2}' is {3} tiles, over the {4}-tile hop cap",
+                            route.Id,
+                            a.Id,
+                            b.Id,
+                            distance,
+                            cap));
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Warns when one facet's destinations sit in more than one walk-connected component -
+        /// the shape of "these two places look connected on the map but nothing can walk
+        /// between them", which is the single most common authoring mistake.
+        /// </summary>
+        private static void CheckComponents()
+        {
+            foreach (KeyValuePair<Map, List<NavDestination>> pair in _destinationsByMap)
+            {
+                var components = new HashSet<int>();
+
+                foreach (NavDestination destination in pair.Value)
+                {
+                    NavWaypoint nearest = _graph.Nearest(destination.Location, pair.Key, 0);
+
+                    if (nearest == null)
+                    {
+                        continue;
+                    }
+
+                    int component = _graph.ComponentOf(nearest.Id);
+
+                    if (component >= 0)
+                    {
+                        components.Add(component);
+                    }
+                }
+
+                if (components.Count > 1)
+                {
+                    _dataWarnings.Add(String.Format(
+                        "{0} destinations span {1} disconnected walk components - some places cannot be reached on foot",
+                        pair.Key,
+                        components.Count));
+                }
+            }
+        }
+
+        private static void RunSelfTests()
+        {
+            foreach (NavSelfTest test in _store.SelfTests)
+            {
+                NavRoute route;
+                string error;
+
+                if (!Nav.TryRoute(test.From, test.To, out route, out error))
+                {
+                    _dataWarnings.Add(String.Format("selfTest {0}: {1}", test, error));
+                }
+            }
+        }
+
+        // ---- lookup, used by Nav ----
+
+        public static NavDestination Destination(string id)
+        {
+            NavDestination result;
+            return id != null && _destinations.TryGetValue(id, out result) ? result : null;
+        }
+
+        public static NavZone Zone(string id)
+        {
+            NavZone result;
+            return id != null && _zones.TryGetValue(id, out result) ? result : null;
+        }
+
+        public static NavRouteDef Route(string id)
+        {
+            NavRouteDef result;
+            return id != null && _routes.TryGetValue(id, out result) ? result : null;
+        }
+
+        public static IList<NavDestination> DestinationsOn(Map map)
+        {
+            List<NavDestination> result;
+
+            if (map != null && _destinationsByMap.TryGetValue(map, out result))
+            {
+                return result;
+            }
+
+            return new List<NavDestination>();
+        }
+
+        public static IList<NavZone> ZonesOn(Map map)
+        {
+            List<NavZone> result;
+
+            if (map != null && _zonesByMap.TryGetValue(map, out result))
+            {
+                return result;
+            }
+
+            return new List<NavZone>();
+        }
+
+        // ---- saving and mutation ----
+
+        /// <summary>
+        /// Writes the live store back, keeping a .bak of what was there.
+        ///
+        /// AutoSave rotation does not cover Data/, so the .bak is the only copy of a file a
+        /// mistyped command has just rewritten.
+        /// </summary>
+        public static bool Save(out string error)
+        {
+            error = null;
+
+            string fullPath = JsonConfig.Resolve(ConfigPath);
+
+            try
+            {
+                if (File.Exists(fullPath))
+                {
+                    File.Copy(fullPath, fullPath + ".bak", true);
+                }
+            }
+            catch (Exception ex)
+            {
+                error = "Could not write the .bak: " + ex.Message;
+                return false;
+            }
+
+            return JsonConfig.TrySave(ConfigPath, _store, out error);
+        }
+
+        /// <summary>
+        /// Applies a mutation to the live data, rebuilds, and saves - ROLLING THE MUTATION BACK
+        /// if the save fails, so what is in memory and what is on disk can never diverge.
+        ///
+        /// This is why the mutating commands do not write-then-reload: a reload would rebuild
+        /// the whole graph on every one of the many writes [NavRecord produces, and a failed
+        /// write would leave the shard running data that is not in the file.
+        /// </summary>
+        public static bool ApplyAndSave(Action apply, Action undo, out string error)
+        {
+            apply();
+            Rebuild();
+
+            if (Save(out error))
+            {
+                return true;
+            }
+
+            undo();
+            Rebuild();
+
+            Log.Error("Navigation change rolled back - {0} could not be written: {1}", ConfigPath, error);
+            return false;
+        }
+
+        // ---- health ----
+
+        public static HealthResult BuildHealthResult()
+        {
+            string loaded = _lastLoadUtc.HasValue
+                ? _lastLoadUtc.Value.ToString("HH:mm:ss") + "Z"
+                : "never";
+
+            if (_lastError != null)
+            {
+                return HealthResult.Fail(String.Format(
+                    "{0} did not load: {1}. Running on {2} previously loaded waypoint(s), last good load {3}.",
+                    ConfigPath,
+                    _lastError,
+                    _graph.NodeCount,
+                    loaded));
+            }
+
+            if (_graph.NodeCount == 0)
+            {
+                return HealthResult.Warn("No waypoints configured. Last load " + loaded + ".");
+            }
+
+            string counts = String.Format(
+                "{0} waypoint(s), {1} walk + {2} gate edge(s), {3} destination(s), {4} arrival(s), {5} zone(s), {6} route(s), last load {7}",
+                _graph.NodeCount,
+                _graph.WalkEdgeCount,
+                _graph.GateEdgeCount,
+                _destinations.Count,
+                _store.Arrivals.Count,
+                _zones.Count,
+                _routes.Count,
+                loaded);
+
+            if (_dataWarnings.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} data warning(s) - first: {1}. {2}",
+                    _dataWarnings.Count,
+                    _dataWarnings[0],
+                    counts));
+            }
+
+            return HealthResult.Ok(counts);
+        }
+
+        // ---- helpers ----
+
+        public static void NotifyStaff(string message)
+        {
+            foreach (Server.Network.NetState ns in Server.Network.NetState.Instances)
+            {
+                Mobile staff = ns.Mobile;
+
+                if (staff != null && staff.AccessLevel >= AccessLevel.Counselor)
+                {
+                    staff.SendMessage(0x35, message);
+                }
+            }
+        }
+
+        private static string[] ToArray(IList<string> source)
+        {
+            if (source == null)
+            {
+                return new string[0];
+            }
+
+            var result = new string[source.Count];
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                result[i] = source[i];
+            }
+
+            return result;
+        }
+
+        public static bool IsLive
+        {
+            get { return _navLive; }
+        }
+    }
+}

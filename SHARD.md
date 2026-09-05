@@ -71,7 +71,8 @@ Ported from the ModernUO shard, in this order:
 | 1 | Restricted zones + countdown gump → auto-jail | **done** |
 | 2 | Jail administration (on ServUO's existing jail region) | **done** |
 | 3 | Old Marta + auto-collect + `[ResetQuest` | **done** |
-| 4 | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | pending |
+| 4a | `Scripts/Custom/Core/Navigation/` — waypoint graph, destinations, arrivals, zones, routes | **done** |
+| 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | pending |
 | 5 | Admin API + MapExport + shard editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
@@ -92,6 +93,16 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[ResetQuest <QuestTypeName>` | GameMaster | Target a player; cancel that quest and clear its completion record |
 | `[ResetAllQuests` | GameMaster | Target a player; erase every quest and record, after confirmation |
 | `[GG_Reimport` | Administrator | Delete every `GG_` spawner and re-import `Spawns/Custom` |
+| `[NavReload` | GameMaster | Re-read `navigation.json` and rebuild the travel graph (alias `[ReloadNav`) |
+| `[NavDebug [radius]` | GameMaster | Toggle markers on nearby waypoints, arrivals, destinations and zone corners |
+| `[NavMark [id] [nolink]` | GameMaster | Add a waypoint where you stand, chained to your previous mark |
+| `[NavRecord on\|off [tiles]` | GameMaster | Drop a chained waypoint every N tiles as you walk |
+| `[NavLink <a> <b> [gate]` | GameMaster | Add one explicit edge |
+| `[NavUnlink <a> <b>` | GameMaster | Remove every edge between two waypoints |
+| `[NavDelete <id>` | GameMaster | Remove a waypoint and every edge touching it |
+| `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
+| `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
+| `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
 
 ## Custom spawns
 
@@ -109,6 +120,22 @@ and `[XmlUnLoad` take an optional `SpawnerPrefixFilter` second argument matched 
 
 `[GG_Reimport` is preferred because `[XmlLoad` alone is an upsert — a spawn point deleted from the
 XML would keep its spawner in the world forever. See `Spawns/Custom/README.md`.
+
+## Navigation
+
+`Data/Custom/navigation.json` is the shard's single source of truth for where things are and how
+to get there — waypoints joined by explicit edges, destinations with standable arrival points,
+tagged zones, and authored patrol routes. Britain daily life uses it; the PlayerBots system will
+use the same data.
+
+Hops are capped at 12 tiles (`Custom.NavHopMaxTiles`) because ServUO's `FastAStarAlgorithm`
+searches a 38x38 box centred on the midpoint of start and goal, and a longer hop whose detour
+leaves that box fails **silently** — the NPC walks into scenery. `[NavAudit` pathfinds every edge
+against real map data and is the check that keeps the file honest; set
+`Custom.NavAuditOnStart=True` to run it headlessly.
+
+See `Scripts/Custom/Core/Navigation/README.md`, and `Scripts/Custom/Core/Navigation/nav-format-comparison.md`
+for how the schema maps onto the `uo-offline-server` bot navigation format.
 
 ## Health checks
 
