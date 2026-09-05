@@ -6,12 +6,14 @@
 <title>Goblin Gang - shard editor</title>
 <link rel="stylesheet" href="style.css">
 <!--
-  Read-only. Step 5a shows the data; 5b adds editing.
-
   There is no token box, unlike the ModernUO original. That editor talked to an HTTP API inside
   the shard and needed a bearer token pasted from a config file. This one talks to a local bridge
   that binds 127.0.0.1 and refuses cross-site writes, so there is nothing to paste and nothing for
   a page in another tab to reach.
+
+  Everything hideable below uses the `hidden` attribute and has no display rule of its own. See
+  the comment on [hidden] in style.css: an author display rule silently defeats the UA's hidden
+  rule, and that once left a modal on screen with its hidden attribute correctly set.
 -->
 </head>
 <body>
@@ -24,11 +26,22 @@
             <h2>View</h2>
             <button id="go-britain" type="button">Britain</button>
             <input id="filter" type="search" placeholder="Filter by name or id">
+            <ul id="matches"></ul>
+        </section>
+
+        <section>
+            <h2>Create</h2>
+            <div id="create-buttons"></div>
         </section>
 
         <section>
             <h2>Layers</h2>
             <ul id="layers"></ul>
+        </section>
+
+        <section>
+            <h2>Selection</h2>
+            <div id="properties"><p class="muted">Nothing selected.</p></div>
         </section>
 
         <section>
@@ -48,16 +61,81 @@
             <h2>Health</h2>
             <ul id="health"></ul>
         </section>
+
+        <section>
+            <h2>Keys</h2>
+            <dl class="keys">
+                <dt>Click</dt><dd>select</dd>
+                <dt>Right-click</dt><dd>menu</dd>
+                <dt>Drag</dt><dd>pan; moves the selected shape only</dd>
+                <dt>Space / middle</dt><dd>always pans</dd>
+                <dt>Arrows</dt><dd>nudge 1 tile (Shift = 10)</dd>
+                <dt>Ctrl+S</dt><dd>save</dd>
+                <dt>Ctrl+Z</dt><dd>undo</dd>
+                <dt>Ctrl+Shift+Z</dt><dd>redo</dd>
+                <dt>Delete</dt><dd>delete</dd>
+                <dt>F</dt><dd>focus the filter</dd>
+                <dt>Enter</dt><dd>finish a route</dd>
+                <dt>Esc</dt><dd>deselect, or cancel</dd>
+            </dl>
+        </section>
     </aside>
 
     <main id="stage">
         <canvas id="map"></canvas>
+
+        <div id="toolbar">
+            <button data-act="zoom-out" title="Zoom out">&minus;</button>
+            <button data-act="zoom-in" title="Zoom in">+</button>
+            <button data-act="whole-map" title="Fit the whole facet">Whole map</button>
+            <button data-act="goto" title="Go to a coordinate">Go to&hellip;</button>
+            <span class="sep"></span>
+            <button data-act="delete" title="Delete the selection (Del)" disabled>Delete</button>
+            <span class="sep"></span>
+            <button id="save" data-act="save" title="Save (Ctrl+S)" disabled>Save</button>
+            <button id="discard" data-act="discard" title="Discard unsaved edits" disabled>Discard</button>
+        </div>
+
+        <!-- Stays until dismissed. A save that fails must never scroll past in a toast: the whole
+             reason edits used to vanish was a failure nobody saw. -->
+        <div id="banner" hidden>
+            <div id="banner-text"></div>
+            <div id="banner-actions">
+                <button id="banner-reapply" type="button" hidden>Reload and reapply</button>
+                <button id="banner-discard" type="button">Discard my edits</button>
+                <button id="banner-dismiss" type="button">Dismiss</button>
+            </div>
+        </div>
+
+        <ul id="context-menu" hidden></ul>
+
         <div id="readout">
             <span id="coords">-</span>
+            <span id="hint"></span>
             <span id="status"></span>
         </div>
     </main>
 </div>
+
+<div id="modal" hidden>
+    <form id="modal-form">
+        <h2 id="modal-title"></h2>
+        <div id="modal-fields"></div>
+        <p id="modal-error" class="error"></p>
+        <div class="modal-actions">
+            <button type="button" id="modal-cancel">Cancel</button>
+            <button type="submit" id="modal-ok">Create</button>
+        </div>
+    </form>
+</div>
+
+<!-- A datalist rather than a select: these run to hundreds of entries, and typing a few letters
+     beats scrolling. They also degrade to free text, which is what lets an id be typed before the
+     record it names exists. -->
+<datalist id="waypoint-list"></datalist>
+<datalist id="destination-list"></datalist>
+<datalist id="route-list"></datalist>
+<datalist id="navid-list"></datalist>
 
 <script type="module" src="js/app.js"></script>
 </body>

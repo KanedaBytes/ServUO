@@ -2,11 +2,11 @@
 
 A browser map editor for this shard's data, ported from the ModernUO shard's `ShardEditor`.
 
-**The save path is finished and the editing UI is not.** Step 5a made every layer visible and
-overlaid live entities. Step 5b's first half — this — is the whole disk-and-shard contract:
-`POST /api/save/<file>` unprojects, backs up, writes atomically, asks the shard to reload and
-reports what it said. All of it is covered by node tests, and none of it has a button yet. The
-tools, the properties panel and the edit cycle are the second half; spawners are 5c.
+Step 5a made every layer visible and overlaid live entities; 5b makes it editable. Spawners are 5c.
+
+You can add, move and delete waypoints, destinations, arrivals and zones; link and unlink edges;
+author routes by clicking waypoints in order; and edit the daily-life config as a form. A save
+writes the file, asks the shard to reload it, and tells you what the shard said.
 
 ```
 tools\editor\export-tiles.ps1      # render the map, once
@@ -35,6 +35,8 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `compact.js` | Raw-preserving JSON parser and the writer that matches `JsonConfig.SerializeCompact` |
 | `project.js` | `project()` our schema into editor shapes, `unproject()` back |
 | `js/validate.js` | The shard's structural checks, replicated - shared by the browser, the bridge and the tests |
+| `js/tools.js` | The create tools and the modal that finishes each one |
+| `js/ids.js` | Auto-generated ids, mirroring `[NavMark` |
 | `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
 | `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
 | `js/`, `index.html`, `style.css` | The editor |
@@ -196,27 +198,32 @@ The replica is checked against the real thing rather than assumed: running the s
 deliberately over-long hop produced four warnings where this file produced three, because a `cycle`
 route also walks the closing leg from its last waypoint back to its first. That is now a test.
 
-## What was rewritten, and what to port back in 5b
+## What came from the ModernUO editor, and what did not
 
-`view.js`, `shapes.js`, `overlays.js` and `tools.js` came over close to unchanged. Two files did
-not:
+`view.js` came over unchanged. `shapes.js` and `tools.js` came over and were changed. `api.js` and
+`app.js` were rewritten, and `overlays.js` is still dead code waiting on a bridge route.
 
-- **`api.js`** — the original spoke to the in-shard API with a bearer token. Rewritten for the
-  bridge; there is no token.
-- **`app.js`** — the original's spine is the edit cycle: dirty tracking, per-shape baselines, an
-  undo stack, a save that patches then reloads, and a persistent banner for the case where the
-  write succeeded but the reload was rejected. None of that has anything to hold onto in a
-  read-only step, and carrying it in would have meant several hundred lines calling bridge methods
-  that do not exist — dead code that looks live.
+**Ported close to verbatim**, because they were right and the reasons are still the reasons: the
+demand-driven render with its `pending` flag, `ResizeObserver` and device-pixel-ratio watcher; the
+drag machine; the context menu and its edge-clamping; the filter and its clickable match list; the
+persistent banner. The original's `style.css` records why the banner exists at all — a save once
+failed, reverted the view, and said so only in a status line that cleared itself after six seconds
+— and `refreshShapes` still refuses to run over unsaved edits for the same reason.
 
-**When editing returns in 5b, port that machinery back deliberately rather than reinventing it.**
-The original's `style.css` records why the banner exists: a save once failed, reverted the view,
-and said so only in a status line that cleared itself after six seconds. `app.js:216` refuses to
-clobber dirty state on refresh for the same kind of reason.
+**Ported with changes.** The undo step widened from the original's geometry-only
+`{shape, geometry}` to `{op, shapeId, before, after}`, so creates and deletes are undoable too, and
+redo is new — the original had none. Every edit map is keyed by shape id rather than by the shape
+object, because `refreshShapes` replaces every object it holds and an object key would silently
+drop the lot on the first refresh. The drag machine refuses derived geometry: a route is edited by
+its waypoint list and an edge by its two ends, so dragging their lines would write nothing.
 
-Also worth keeping from the original: identity is `(file, pointer)` there, but ours is
-`<kind>:<our id>` — never an array index, because an index breaks the moment a record is reordered
-or deleted, and our records already have stable ids.
+**Not ported.** Ctrl+D duplicate, which needs a collision dance for id-bearing records. The
+original's two free-polyline tool kinds, which had nothing in this schema to write to. And the
+original's `save`/`discard`, for the reason below.
+
+Identity is `(file, pointer)` in the original and `<kind>:<our id>` here — never an array index,
+because an index breaks the moment a record is reordered or deleted, and our records already have
+stable ids.
 
 **And the save is a different shape, so `save` and `discard` are rewrites rather than ports.** The
 original PATCHed one record at a time by `(file, JSON pointer)` against an API inside the shard.
@@ -230,6 +237,66 @@ bridge parses. What the hash does not cover is one batch deleting an earlier arr
 later one — so `unproject` resolves every id to a node reference over the untouched tree *before*
 it mutates anything, and deletes by node identity. A test runs a mixed batch forwards and backwards
 and demands identical output.
+
+## The tools
+
+A tool is a data record in `tools.js`, not an object with methods: it names the geometry to collect
+and the fields to ask for afterwards, and the state machine for all of them lives in `app.js`.
+Adding a tool is a table entry; adding a KIND is a change in three places, which is about the right
+friction for the difference.
+
+| kind | what it collects | tools |
+| --- | --- | --- |
+| `point` | one click | waypoint, destination |
+| `rect` | a drag | nav zone, restricted zone |
+| `pair` | two existing shapes, no form | edge |
+| `chain` | existing shapes in order, Enter finishes | route |
+| `owner-then-point` | a shape, then a tile | arrival |
+
+`pair`, `chain` and `owner-then-point` collect **existing shapes** rather than bare points, because
+everything they build is made of ids: an edge is two waypoint ids, a route is a list of them, an
+arrival belongs to a destination. That is also why the ModernUO original's free-polyline kinds are
+gone rather than ported — there is nothing in this schema to write a free polyline to.
+
+A click that hits nothing collectable says so in the readout rather than doing nothing. Silence is
+how click-to-collect feels broken.
+
+**Ids are auto-generated the way `[NavMark` does it** (`js/ids.js`, mirroring
+`NavigationCommands.NextId`): the smallest zone containing the point, its first tag as the prefix,
+then the first free number. Two deliberate differences, both stricter than the shard. It counts
+every id in the file rather than only the waypoints that survived binding, so it cannot hand back
+an id that collides with a record that was dropped with a warning; and it counts across kinds,
+because `Nav.TryRoute` accepts an id naming a waypoint *or* a destination and a collision between
+those two is genuinely ambiguous. The id is editable in the create form before the first save: an
+auto id is a starting point, not a decision.
+
+**Daily life has no create tools at all.** Its records are edited as a form in the side panel -
+shopkeeper shop and home, watch post route or destinations, the tavern's patron count - and adding
+a shopkeeper stays a JSON edit. The map markers for those records (`marker:shop:baker` and friends)
+are *derived*: their coordinates live in `navigation.json`, so they are not draggable and the
+bridge refuses them by name.
+
+## Labels
+
+Drawn in a second pass over the shapes, not inline with them, because a label drawn during the
+first pass gets painted over by the next shape's fill.
+
+Placement is collision-avoided against a per-frame list of boxes. A label that collides tries
+below, then right, then left, and **if all four positions are taken it is skipped** — no dot, no
+ellipsis. An unreadable heap is the thing being fixed and half of one is still it.
+
+Priority decides who gets the space: selected, then hovered, then the sole filter match, then the
+layer's `labelPriority`, then smaller shapes. Selected and hovered reserve their boxes first, which
+is exactly why hovering something in a crowd works — everything else has to fit around it.
+
+Each layer also carries a `labelAt` zoom floor. Arrivals sit at 1.2 because they cluster four and
+five deep around one destination; routes and edges are `Infinity`, so their labels appear only on
+hover or selection, which is what the original did for polylines and for the same reason.
+
+**An over-cap edge is drawn red**, using the coverage overlay's `edgeColor` against
+`Custom.NavHopMaxTiles`. That matters because the shard *accepts* an over-cap hop with a warning
+and the NPC then walks into scenery, so dragging a waypoint too far has to look wrong immediately
+rather than at the next reload.
 
 ## The request channel
 

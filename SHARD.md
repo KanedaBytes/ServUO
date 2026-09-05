@@ -74,7 +74,7 @@ Ported from the ModernUO shard, in this order:
 | 4a | `Scripts/Custom/Core/Navigation/` — waypoint graph, destinations, arrivals, zones, routes | **done** |
 | 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | **done** |
 | 5a | Map export + editor bridge, read-only layers | **done** |
-| 5b | Editing through the bridge | save path **done**, editing UI pending |
+| 5b | Editing through the bridge | **done** |
 | 5c | Spawners in the editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
@@ -185,10 +185,11 @@ live shard.
 A browser map editor for the shard's own data - the nav graph, destinations, arrival points,
 zones, routes, restricted zones, daily-life actors - with live entities drawn on top.
 
-**The save path is finished; the editing UI is not.** `POST /api/save/<file>` unprojects the shapes
-that changed, backs the file up, writes it atomically, asks the shard to reload and reports what it
-said - all covered by node tests, none of it wired to a button yet. The tools and the edit cycle
-are the rest of 5b; spawners are 5c.
+**Editing works as of step 5b**; spawners are 5c. Add, move and delete waypoints, destinations,
+arrivals and zones; link and unlink edges; author routes by clicking waypoints in order; edit the
+daily-life config as a form. A save writes the file, asks the shard to reload it, and says what the
+shard said - including when the write succeeded and the reload did not, which is a state the editor
+has to show rather than hide.
 
 ```
 .\tools\editor\export-tiles.ps1     # render the map tiles, once

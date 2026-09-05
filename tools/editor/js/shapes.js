@@ -1,20 +1,63 @@
 // Drawing, hit-testing and editing the three shape kinds.
 //
+// The one import worth explaining is edgeColor, from the coverage overlay: the question it answers
+// is the same one - is this hop inside what the pathfinder can actually walk? An edge a drag has
+// just stretched past the cap has to LOOK wrong immediately, because the shard accepts it with a
+// warning and the NPC then walks into scenery.
+//
 // Every layer arrives in the same vocabulary - rect, polyline, point - because the API projects
 // the underlying config files into it. Nothing here knows that a tavern rectangle is stored with a
 // Z and a shop district is not, or that one route is a dictionary entry and another is an inline
 // array. That is the whole reason the projection exists.
 
+/**
+ * The layer table: what it is called, what colour it is, which file it is saved to, which request
+ * reloads that file, and when its labels are worth drawing.
+ *
+ * `labelAt` is a `view.scale` floor - screen pixels per game tile - and `labelPriority` decides who
+ * wins the space when two labels overlap, higher first. Both live here rather than in the drawing
+ * code because they are per-layer editorial decisions, not geometry.
+ */
+import { edgeColor } from './coverage.js';
+import { HOP_CAP } from './validate.js';
+
 export const LAYERS = {
-    'nav-edges': { label: 'Nav edges', color: '#4a7f5a', reload: 'nav-reload' },
-    nav: { label: 'Nav waypoints', color: '#7bd88f', reload: 'nav-reload' },
-    'nav-destinations': { label: 'Destinations', color: '#ffd479', reload: 'nav-reload' },
-    'nav-arrivals': { label: 'Arrival points', color: '#c792ea', reload: 'nav-reload' },
-    'nav-zones': { label: 'Nav zones', color: '#5b8db8', reload: 'nav-reload' },
-    'nav-routes': { label: 'Authored routes', color: '#ff9d5c', reload: 'nav-reload' },
-    dailylife: { label: 'Daily life', color: '#6fb3ff', reload: 'dailylife-reload' },
-    restricted: { label: 'Restricted zones', color: '#ff7a6b', reload: 'zones-reload' },
-    entities: { label: 'Live entities', color: '#ffffff', reload: null }
+    'nav-edges': {
+        label: 'Nav edges', color: '#4a7f5a', file: 'navigation', reload: 'nav-reload',
+        labelAt: Infinity, labelPriority: 0
+    },
+    nav: {
+        label: 'Nav waypoints', color: '#7bd88f', file: 'navigation', reload: 'nav-reload',
+        labelAt: 0.6, labelPriority: 3
+    },
+    'nav-destinations': {
+        label: 'Destinations', color: '#ffd479', file: 'navigation', reload: 'nav-reload',
+        labelAt: 0.35, labelPriority: 5
+    },
+    'nav-arrivals': {
+        // Arrivals cluster four and five deep around one destination, so their labels are hover-only
+        // until you are zoomed far enough in for them to be individually meaningful.
+        label: 'Arrival points', color: '#c792ea', file: 'navigation', reload: 'nav-reload',
+        labelAt: 1.2, labelPriority: 1
+    },
+    'nav-zones': {
+        label: 'Nav zones', color: '#5b8db8', file: 'navigation', reload: 'nav-reload',
+        labelAt: 0.1, labelPriority: 4
+    },
+    'nav-routes': {
+        // A polyline is identifiable from its shape; ten of them labelled at once buries the town.
+        label: 'Authored routes', color: '#ff9d5c', file: 'navigation', reload: 'nav-reload',
+        labelAt: Infinity, labelPriority: 2
+    },
+    dailylife: {
+        label: 'Daily life', color: '#6fb3ff', file: 'dailyLife', reload: 'dailylife-reload',
+        labelAt: 0.5, labelPriority: 3
+    },
+    restricted: {
+        label: 'Restricted zones', color: '#ff7a6b', file: 'restrictedZones', reload: 'zones-reload',
+        labelAt: 0.1, labelPriority: 4
+    },
+    entities: { label: 'Live entities', color: '#ffffff', file: null, reload: null }
 };
 
 // Edges are drawn first and everything else on top - there are more of them than anything else
@@ -25,6 +68,8 @@ const HANDLE = 5;
 const GRAB = 7;
 
 export function draw(ctx, view, shapes, visible, selected, hovered, matches) {
+    const drawn = [];
+
     for (const shape of shapes) {
         if (!visible.has(shape.layer) || shape.map !== view.facet.name) {
             continue;
@@ -37,7 +82,128 @@ export function draw(ctx, view, shapes, visible, selected, hovered, matches) {
         ctx.globalAlpha = dimmed ? 0.22 : 1;
         drawShape(ctx, view, shape, shape === selected, shape === hovered);
         ctx.globalAlpha = 1;
+
+        drawn.push({ shape, dimmed });
     }
+
+    drawLabels(ctx, view, drawn, selected, hovered, matches);
+}
+
+/**
+ * Labels, in a second pass and with collision avoidance.
+ *
+ * Two passes because a label drawn during the first one gets painted over by the next shape's
+ * fill, which is why zone labels used to disappear under other zones.
+ *
+ * Collision avoidance because the alternative on this data is a pile: the town square has four
+ * arrivals, a destination, a tavern marker and half a dozen waypoints inside twenty tiles. A label
+ * that collides tries below, right and left, and if all four positions are taken it is SKIPPED -
+ * no dot, no ellipsis. An unreadable heap is the thing being fixed, and half of one is still it.
+ */
+function drawLabels(ctx, view, drawn, selected, hovered, matches) {
+    const occupied = [];
+    const soleMatch = matches !== null && matches.size === 1 ? [...matches][0] : null;
+
+    // Selected and hovered reserve their space first, which is precisely why hovering something in
+    // a crowd works: everything else has to fit around it.
+    const rank = ({ shape }) => {
+        if (shape === selected) return 1000;
+        if (shape === hovered) return 900;
+        if (shape === soleMatch) return 800;
+
+        const layer = LAYERS[shape.layer];
+        const area = shape.rect ? shape.rect[2] * shape.rect[3] : 0;
+
+        return (layer ? layer.labelPriority || 0 : 0) * 10 - Math.min(area / 10000, 9);
+    };
+
+    for (const entry of [...drawn].sort((a, b) => rank(b) - rank(a))) {
+        const shape = entry.shape;
+        const layer = LAYERS[shape.layer] || {};
+        const always = shape === selected || shape === hovered || shape === soleMatch;
+        const threshold = layer.labelAt === undefined ? 0.35 : layer.labelAt;
+
+        if (!always && view.scale < threshold) {
+            continue;
+        }
+
+        ctx.globalAlpha = entry.dimmed ? 0.22 : 1;
+        placeLabel(ctx, view, shape, occupied);
+        ctx.globalAlpha = 1;
+    }
+}
+
+/**
+ * A walk edge's colour by how close it is to the hop cap, or null for everything else.
+ *
+ * Chebyshev, because that is what the shard measures with and what the pathfinder walks in. A gate
+ * is a teleport and has no length worth colouring.
+ */
+function hopColor(shape) {
+    if (shape.layer !== 'nav-edges' || shape.points.length !== 2) {
+        return null;
+    }
+
+    if (shape.props && shape.props.kind === 'gate') {
+        return null;
+    }
+
+    const [a, b] = shape.points;
+
+    return edgeColor(Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])), HOP_CAP);
+}
+
+function labelAnchor(shape) {
+    if (shape.rect) {
+        return [shape.rect[0] + shape.rect[2] / 2, shape.rect[1]];
+    }
+
+    // Tile centre, matching where the marker itself is drawn. The two used to disagree by half a
+    // tile, which is invisible until you are zoomed in far enough to see the marker as a circle.
+    return [shape.points[0][0] + 0.5, shape.points[0][1] + 0.5];
+}
+
+function placeLabel(ctx, view, shape, occupied) {
+    if (!shape.label) {
+        return;
+    }
+
+    const [worldX, worldY] = labelAnchor(shape);
+    const [sx, sy] = view.toScreen(worldX, worldY);
+
+    ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+
+    const width = ctx.measureText(shape.label).width;
+    const boxWidth = width + 6;
+
+    const candidates = [
+        [sx - boxWidth / 2, sy - 17],
+        [sx - boxWidth / 2, sy + 6],
+        [sx + 10, sy - 7],
+        [sx - boxWidth - 10, sy - 7]
+    ];
+
+    for (const [left, top] of candidates) {
+        const box = [left, top, left + boxWidth, top + 14];
+
+        if (occupied.some((other) => overlaps(box, other))) {
+            continue;
+        }
+
+        occupied.push(box);
+
+        ctx.fillStyle = 'rgba(0, 0, 0, .65)';
+        ctx.fillRect(left, top, boxWidth, 14);
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.fillText(shape.label, left + 3, top + 11);
+
+        return;
+    }
+}
+
+function overlaps(a, b) {
+    return a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
 }
 
 function drawShape(ctx, view, shape, isSelected, isHovered) {
@@ -48,7 +214,7 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     // Hover is deliberately quieter than selection: it answers "what would a click take?" without
     // competing with "what is currently taken".
     ctx.lineWidth = isSelected ? 2 : isHovered ? 2 : 1;
-    ctx.strokeStyle = isSelected ? '#ffffff' : isHovered ? '#cfe4ff' : color;
+    ctx.strokeStyle = isSelected ? '#ffffff' : isHovered ? '#cfe4ff' : hopColor(shape) || color;
     ctx.fillStyle = color;
 
     if (shape.kind === 'rect') {
@@ -72,7 +238,6 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
             }
         }
 
-        label(ctx, view, shape, x + w / 2, y);
         return;
     }
 
@@ -98,13 +263,6 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
             ctx.fillRect(sx - HANDLE / 2, sy - HANDLE / 2, HANDLE, HANDLE);
         }
 
-        // Only when selected. Ten routes and walk-home paths all labelled at once buries the town
-        // centre in overlapping text, and a polyline is identifiable from its shape anyway - unlike
-        // a point, where the label is the only thing telling two markers apart.
-        if (isSelected) {
-            label(ctx, view, shape, shape.points[0][0], shape.points[0][1]);
-        }
-
         return;
     }
 
@@ -115,8 +273,6 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     ctx.arc(sx, sy, isSelected || isHovered ? 6 : 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-
-    label(ctx, view, shape, x, y);
 }
 
 /** The shape a click would take right now - same rules as hitTest, ignoring handles. */
@@ -161,25 +317,6 @@ export function drawDraft(ctx, view, draft) {
     ctx.restore();
 }
 
-function label(ctx, view, shape, x, y) {
-    // Only once the map is legible enough for the name to mean something.
-    if (view.scale < 0.35 || !shape.label) {
-        return;
-    }
-
-    const [sx, sy] = view.toScreen(x, y);
-
-    ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(0, 0, 0, .65)';
-
-    const width = ctx.measureText(shape.label).width;
-    ctx.fillRect(sx - width / 2 - 3, sy - 17, width + 6, 14);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(shape.label, sx, sy - 6);
-    ctx.textAlign = 'left';
-}
 
 // Our kinds, not ModernUO's: the snapshot classifies by what the shard actually is - a managed
 // shopkeeper, a daily-life actor, a stock creature - because "npc" covers all three and tells you
@@ -309,11 +446,52 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
         }
     }
 
-    return best;
+    if (best) {
+        return best;
+    }
+
+    // Last: the LINE of a polyline, not just its nodes.
+    //
+    // An edge's nodes sit exactly on top of the waypoints they join, so the loop above always
+    // returns the waypoint and an edge could never be selected at all - which would leave no way
+    // to delete one. Tested last so it can never steal a waypoint click, only catch the clicks
+    // that hit nothing.
+    for (let i = shapes.length - 1; i >= 0; i--) {
+        const shape = shapes[i];
+
+        if (shape.kind !== 'polyline' || !visible.has(shape.layer) || shape.map !== view.facet.name) {
+            continue;
+        }
+
+        for (let n = 1; n < shape.points.length; n++) {
+            if (nearSegment(shape.points[n - 1], shape.points[n], worldX, worldY, slack)) {
+                return { shape, mode: 'body' };
+            }
+        }
+    }
+
+    return null;
 }
 
 function near([x, y], worldX, worldY, slack) {
     return Math.abs(x - worldX) <= slack && Math.abs(y - worldY) <= slack;
+}
+
+/** Perpendicular distance to a segment, clamped to its ends. Nodes are offset to tile centres. */
+function nearSegment(a, b, worldX, worldY, slack) {
+    const ax = a[0] + 0.5;
+    const ay = a[1] + 0.5;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSquared = dx * dx + dy * dy;
+
+    if (lengthSquared === 0) {
+        return near([ax, ay], worldX, worldY, slack);
+    }
+
+    const t = Math.max(0, Math.min(1, ((worldX - ax) * dx + (worldY - ay) * dy) / lengthSquared));
+
+    return Math.hypot(ax + t * dx - worldX, ay + t * dy - worldY) <= slack;
 }
 
 export function geometryOf(shape) {
