@@ -81,6 +81,12 @@ namespace Server.Custom
             from.SendMessage(summary);
             Log.Info(summary);
 
+            // The spawners are new, so their NPCs know nothing about the phase the town is
+            // currently in. Without this a reimport at night leaves six shopkeepers standing in
+            // their shops until dawn, because the only thing that ever moves them is a phase
+            // transition - and they were not there for the last one.
+            DailyLifeCommands.Reconcile();
+
             CommandLogging.WriteLine(
                 from,
                 String.Format(

@@ -46,6 +46,19 @@ namespace Server.Custom
 
             return !ShopScheduleSystem.ShopsAreClosed;
         }
+
+        /// <summary>
+        /// A managed shopkeeper has just been spawned, so the schedule has to catch it up.
+        ///
+        /// Deferred and debounced rather than reconciled here: XmlSpawner sets Mobile.Spawner
+        /// around the same time it calls this, and the vendor is found BY its spawner, so
+        /// reconciling on this tick can miss it. Waiting a second also turns a [GG_Reimport
+        /// that spawns six at once into one reconcile.
+        /// </summary>
+        public static void OnSpawned()
+        {
+            ShopScheduleSystem.ReconcileSoon();
+        }
     }
 
     public class GGBaker : Baker, IDailyLifeActor
@@ -67,6 +80,12 @@ namespace Server.Custom
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
+        }
+
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -103,6 +122,12 @@ namespace Server.Custom
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
         }
 
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
+        }
+
         public override void Serialize(GenericWriter writer)
         {
             base.Serialize(writer);
@@ -135,6 +160,12 @@ namespace Server.Custom
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
+        }
+
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -171,6 +202,12 @@ namespace Server.Custom
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
         }
 
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
+        }
+
         public override void Serialize(GenericWriter writer)
         {
             base.Serialize(writer);
@@ -205,6 +242,12 @@ namespace Server.Custom
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
         }
 
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
+        }
+
         public override void Serialize(GenericWriter writer)
         {
             base.Serialize(writer);
@@ -237,6 +280,12 @@ namespace Server.Custom
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
+        }
+
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            DailyLifeVendor.OnSpawned();
         }
 
         public override void Serialize(GenericWriter writer)

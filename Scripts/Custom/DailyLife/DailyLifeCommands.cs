@@ -162,6 +162,25 @@ namespace Server.Custom
             Log.Info("Daily life systems reloaded.");
         }
 
+        /// <summary>
+        /// Brings the whole town into line with the current phase without re-reading the config.
+        ///
+        /// Actors do not all exist when a phase changes: a shard can boot at night with no
+        /// shopkeepers, import them a minute later, and nothing would ever have sent them home
+        /// because the only thing that moved them was a transition they were not there for.
+        /// This is the catch-up, and it is called after a reload, after [GG_Reimport, and a
+        /// second after any managed vendor spawns.
+        /// </summary>
+        public static void Reconcile()
+        {
+            DayPhase phase = DayCycleSystem.Current;
+
+            TavernSystem.ApplyPhase(phase);
+            NightWatchSystem.ApplyPhase(phase);
+            TownsfolkSystem.EnsureSpawned();
+            ShopScheduleSystem.Reconcile();
+        }
+
         private static void ReportWarnings(Mobile from)
         {
             IList<string> warnings = DailyLifeSystem.ConfigWarnings;

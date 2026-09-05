@@ -22,6 +22,17 @@ namespace Server.Custom
         {
             Title = "the night watch";
 
+            // LeatherLegs is Layer.Pants, and so are the LongPants the base constructor gives a
+            // male townsperson - equipping both logs an offending-item conflict and drops one.
+            // (A female one wears a Skirt, which is Layer.OuterLegs, so only males collided; the
+            // layer is cleared either way rather than testing for sex.)
+            Item pants = FindItemOnLayer(Layer.Pants);
+
+            if (pants != null)
+            {
+                pants.Delete();
+            }
+
             // Movable false and on the two-handed layer: this is the light source, not a weapon.
             AddItem(new Lantern { Movable = false, Layer = Layer.TwoHanded });
             AddItem(new LeatherChest());

@@ -205,9 +205,16 @@ namespace Server.Custom
             passed &= RunJsonConfigCheck(report);
             passed &= RunPersistenceCheck(report, from);
 
-            RunHealthChecks(report);
+            int failing, warning;
+            RunHealthChecks(report, out failing, out warning);
 
-            report.Add(passed ? "===== RESULT: PASS =====" : "===== RESULT: FAIL =====");
+            // Spell out what the verdict does and does not cover. PASS means the four Custom/Core
+            // shims work; it says nothing about the systems built on them, and a report that read
+            // "worst status: Fail" two lines above "RESULT: PASS" invited exactly that confusion.
+            report.Add(String.Format(
+                "===== RESULT: {0} (foundations){1} =====",
+                passed ? "PASS" : "FAIL",
+                DescribeHealth(failing, warning)));
 
             // To the console, so the post-restart check can be done without logging in...
             foreach (string line in report)
@@ -598,8 +605,11 @@ namespace Server.Custom
             return true;
         }
 
-        private static void RunHealthChecks(List<string> report)
+        private static void RunHealthChecks(List<string> report, out int failing, out int warning)
         {
+            failing = 0;
+            warning = 0;
+
             report.Add("-- health checks --");
 
             List<HealthResult> results = HealthCheck.RunAll();
@@ -613,9 +623,49 @@ namespace Server.Custom
             foreach (HealthResult result in results)
             {
                 report.Add("  " + result);
+
+                if (result.Status == HealthStatus.Fail)
+                {
+                    failing++;
+                }
+                else if (result.Status == HealthStatus.Warn)
+                {
+                    warning++;
+                }
             }
 
             report.Add("  worst status: " + HealthCheck.Worst(results));
+        }
+
+        /// <summary>
+        /// The health-check tail of the result line.
+        ///
+        /// The verdict above it is about the FOUNDATIONS only - the logger, the loop queue, the
+        /// JSON layer and persistence. Every other system reports through HealthCheck, and one of
+        /// those failing does not make the foundations broken. Saying so on the same line is what
+        /// stops "worst status: Fail" and "RESULT: PASS" reading as a contradiction.
+        /// </summary>
+        private static string DescribeHealth(int failing, int warning)
+        {
+            if (failing == 0 && warning == 0)
+            {
+                return "; all health checks OK";
+            }
+
+            var parts = new List<string>(2);
+
+            if (failing > 0)
+            {
+                parts.Add(String.Format("{0} health check{1} failing", failing, failing == 1 ? "" : "s"));
+            }
+
+            if (warning > 0)
+            {
+                parts.Add(String.Format(
+                    "{0} warning", warning));
+            }
+
+            return "; " + String.Join(", ", parts.ToArray()) + " - see above";
         }
     }
 }

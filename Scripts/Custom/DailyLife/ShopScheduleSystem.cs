@@ -31,6 +31,11 @@ namespace Server.Custom
         /// <summary>Wander radius restored at the shop when the spawner cannot supply one.</summary>
         private const int DefaultShopRange = 5;
 
+        /// <summary>How near a destination counts as being there, for reconciliation.</summary>
+        private const int ArrivedRange = 10;
+
+        private static bool _reconcilePending;
+
         private sealed class ShopWalk
         {
             public ShopkeeperConfig Config;
@@ -154,6 +159,137 @@ namespace Server.Custom
                 goingHome ? "closing" : "opening",
                 _walks.Count,
                 managed);
+        }
+
+        /// <summary>
+        /// Puts any managed vendor that is in the wrong place for the current phase into the
+        /// right one, without disturbing the ones already walking there.
+        ///
+        /// This is what makes a shopkeeper who appears LATER - a spawner tick, a [GG_Reimport,
+        /// a respawn after a wipe - obey a phase that changed before it existed. Without it a
+        /// shard that booted at night and imported its vendors afterwards had six shopkeepers
+        /// standing in their shops until dawn, because the only thing that ever moved them was
+        /// a phase transition they missed.
+        /// </summary>
+        public static void Reconcile()
+        {
+            bool goingHome = DayCycleSystem.Current.IsAfterDark();
+
+            int managed = 0;
+            int moved = 0;
+
+            foreach (ShopkeeperConfig entry in DailyLifeSystem.Config.Shopkeepers)
+            {
+                BaseVendor vendor = FindVendor(entry);
+
+                if (vendor == null)
+                {
+                    continue;
+                }
+
+                managed++;
+
+                // Already on its way there under its own steam; leave it walking.
+                if (IsWalking(vendor))
+                {
+                    continue;
+                }
+
+                string destinationId = goingHome && entry.Closes ? entry.Home : entry.Shop;
+
+                if (IsAt(vendor, destinationId))
+                {
+                    continue;
+                }
+
+                Snap(entry, vendor, destinationId, goingHome && entry.Closes);
+                moved++;
+            }
+
+            ManagedVendorCount = managed;
+            LastGoingHome = goingHome;
+
+            if (moved > 0)
+            {
+                Log.Info("Reconciled {0} of {1} shopkeeper(s) to the {2} phase.",
+                    moved, managed, DayCycleSystem.Current.ToFriendlyString());
+            }
+        }
+
+        /// <summary>
+        /// Reconciles on the next second, coalescing a burst into one pass.
+        ///
+        /// [GG_Reimport spawns six vendors at once and each one calls this; debouncing turns
+        /// that into a single reconcile rather than six.
+        /// </summary>
+        public static void ReconcileSoon()
+        {
+            if (_reconcilePending)
+            {
+                return;
+            }
+
+            _reconcilePending = true;
+
+            Timer.DelayCall(TimeSpan.FromSeconds(1.0), () =>
+            {
+                _reconcilePending = false;
+                Reconcile();
+            });
+        }
+
+        /// <summary>Managed vendors standing in the wrong place, ignoring any still walking.</summary>
+        public static int CountMisplaced()
+        {
+            bool goingHome = DayCycleSystem.Current.IsAfterDark();
+            int misplaced = 0;
+
+            foreach (ShopkeeperConfig entry in DailyLifeSystem.Config.Shopkeepers)
+            {
+                BaseVendor vendor = FindVendor(entry);
+
+                if (vendor == null || IsWalking(vendor))
+                {
+                    continue;
+                }
+
+                if (!IsAt(vendor, goingHome && entry.Closes ? entry.Home : entry.Shop))
+                {
+                    misplaced++;
+                }
+            }
+
+            return misplaced;
+        }
+
+        private static bool IsWalking(BaseVendor vendor)
+        {
+            for (int i = 0; i < _walks.Count; i++)
+            {
+                if (_walks[i].Vendor == vendor)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Close enough to count as arrived. Generous on purpose: a vendor wandering its
+        /// shop-sized radius has not gone anywhere, and re-snapping it every reconcile would
+        /// yank it back to one tile.
+        /// </summary>
+        private static bool IsAt(BaseVendor vendor, string destinationId)
+        {
+            NavDestination destination = Nav.Destination(destinationId);
+
+            if (destination == null || vendor.Map != destination.Map)
+            {
+                return false;
+            }
+
+            return vendor.InRange(destination.Location, ArrivedRange);
         }
 
         private static void Snap(ShopkeeperConfig entry, BaseVendor vendor, string destinationId, bool atHome)

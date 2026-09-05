@@ -44,6 +44,26 @@ namespace Server.Custom
             Spawn();
         }
 
+        /// <summary>
+        /// Makes sure the configured walkers exist, without duplicating the ones that already
+        /// do. Called by the shared reconcile, so a walker deleted by hand comes back.
+        /// </summary>
+        public static void EnsureSpawned()
+        {
+            for (int i = _walkers.Count - 1; i >= 0; i--)
+            {
+                if (_walkers[i] == null || _walkers[i].Deleted)
+                {
+                    _walkers.RemoveAt(i);
+                }
+            }
+
+            if (_walkers.Count != DailyLifeSystem.Config.Townsfolk.Count)
+            {
+                Reload();
+            }
+        }
+
         private static void Spawn()
         {
             foreach (TownsfolkConfig entry in DailyLifeSystem.Config.Townsfolk)

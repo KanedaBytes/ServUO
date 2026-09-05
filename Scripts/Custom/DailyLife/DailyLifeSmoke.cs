@@ -59,6 +59,8 @@ namespace Server.Custom
 
             try
             {
+                CheckSettled(report);
+
                 CheckPhase(report, DayPhase.Dusk, true);
                 CheckPhase(report, DayPhase.Night, true);
                 CheckPhase(report, DayPhase.Dawn, false);
@@ -87,6 +89,36 @@ namespace Server.Custom
                 : String.Format("  FAILED - {0}", _firstFailure));
 
             Emit(from, report);
+        }
+
+        /// <summary>
+        /// The steady state, before any phase is forced: every shopkeeper should already be
+        /// where the current phase wants it.
+        ///
+        /// This is the one that catches the real bug - a shard that booted at night with no
+        /// shopkeepers and imported them afterwards. The per-phase check below is weaker,
+        /// because immediately after a transition the vendors are still walking and a walker is
+        /// deliberately left alone.
+        /// </summary>
+        private static void CheckSettled(List<string> report)
+        {
+            report.Add("  settled:");
+
+            ShopScheduleSystem.Reconcile();
+
+            if (ShopScheduleSystem.ManagedVendorCount == 0)
+            {
+                report.Add("    shops: no managed vendors in the world - run [GG_MigrateVendors then [GG_Reimport");
+                return;
+            }
+
+            int misplaced = ShopScheduleSystem.CountMisplaced();
+
+            Assert(report, misplaced == 0,
+                String.Format("all {0} shopkeeper(s) reconcile to the {1} phase, {2} left misplaced",
+                    ShopScheduleSystem.ManagedVendorCount,
+                    DayCycleSystem.Current.ToFriendlyString(),
+                    misplaced));
         }
 
         /// <summary>
@@ -172,7 +204,19 @@ namespace Server.Custom
                 // Not a failure: the shopkeepers only exist once the migration and import have
                 // been run, and the rest of the cycle is still worth checking without them.
                 report.Add("    shops: no managed vendors in the world - run [GG_MigrateVendors then [GG_Reimport");
+                return;
             }
+
+            // Anything not walking must already be where this phase wants it. Most will be
+            // walking right after a transition, which is why CheckSettled exists as well.
+            ShopScheduleSystem.Reconcile();
+
+            int misplaced = ShopScheduleSystem.CountMisplaced();
+            int walking = ShopScheduleSystem.WalkingCount;
+
+            Assert(report, misplaced == 0,
+                String.Format("no settled shopkeeper is in the wrong place ({0} walking, {1} misplaced)",
+                    walking, misplaced));
         }
 
         private static void Assert(List<string> report, bool condition, string description)

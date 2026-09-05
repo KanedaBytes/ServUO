@@ -104,6 +104,31 @@ Looping lives above `NavWalker`, which is one-shot by design: `Nav.TryBuildRoute
 that already contains its own return leg, and the actor re-follows it from the `Arrived` callback.
 A patrol therefore costs one route computation no matter how long it runs.
 
+## Reconciliation
+
+**A phase change only moves the actors that exist when it happens.** A shard that boots at night
+with no shopkeepers, then imports them a minute later, would leave six of them standing in their
+shops until dawn - nothing would ever have sent them home, because the only thing that moves them
+is a transition they were not there for.
+
+So the town is reconciled - read the current phase, put each actor where that phase says it
+belongs - at four points:
+
+- **on spawn**, via `OnAfterSpawn` on each GG vendor. Deferred a second and debounced, because
+  XmlSpawner sets `Mobile.Spawner` around the same time it calls that hook and the vendor is
+  found *by* its spawner; the delay also turns a six-vendor import into one reconcile.
+- **after `[GG_Reimport`**, which has just replaced every GG spawner in the world.
+- **after `[DailyLifeReload`**.
+- **at boot**, when the shop schedule applies the current phase as an end state.
+
+Reconciling never disturbs a vendor already walking somewhere, and treats "within ten tiles of
+the destination" as arrived - a shopkeeper wandering its shop-sized radius has not gone anywhere,
+and re-snapping it every pass would yank it onto one tile.
+
+`[DailyLifeSmoke` checks this before it forces anything, while the town is in its steady state.
+The per-phase check is weaker on purpose: right after a transition the vendors are all walking,
+and a walker is deliberately left alone.
+
 ## Watch posts
 
 Each post has **exactly one** of `route` or `destinations`:
