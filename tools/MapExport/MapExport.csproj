@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately NOT in ServUO.sln.
+
+    build.ps1 builds the solution before every launch, and this tool has nothing to do with
+    running the shard - rendering tiles is a thing you do once when the client files change.
+    Keeping it out means the normal build stays fast and this project can never break a launch.
+
+    Run it with tools/editor/export-tiles.ps1.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>MapExport</AssemblyName>
+    <RootNamespace>Server.Custom.MapExport</RootNamespace>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      OutDir is overridden on purpose.
+
+      Server.csproj sets OutputPath to the repo root, so ServUO.exe and Ultima.dll land beside
+      the shard's own files. Without this override, building the tool tries to rewrite those -
+      and fails outright while the shard is running, which is exactly when you want to be able
+      to re-render tiles. Sending the reference's output to our own deps folder keeps the two
+      builds from touching the same files.
+    -->
+    <ProjectReference Include="..\..\Server\Server.csproj">
+      <OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\deps\</OutDir>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>

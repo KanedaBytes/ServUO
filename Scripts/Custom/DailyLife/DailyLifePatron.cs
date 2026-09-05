@@ -53,6 +53,8 @@ namespace Server.Custom
             }
 
             ScheduleNextChatter();
+
+            LiveRegistry.Register(this);
         }
 
         public DailyLifePatron(Serial serial)
@@ -111,6 +113,13 @@ namespace Server.Custom
             {
                 Say(line);
             }
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)

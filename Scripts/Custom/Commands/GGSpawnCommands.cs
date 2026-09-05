@@ -43,12 +43,46 @@ namespace Server.Custom
         {
             Mobile from = e.Mobile;
 
+            string summary;
+            string error;
+
+            if (!TryReimport(from, out summary, out error))
+            {
+                from.SendMessage(0x35, error);
+                return;
+            }
+
+            from.SendMessage(summary);
+
+            CommandLogging.WriteLine(
+                from,
+                String.Format(
+                    "{0} {1} reimporting {2}",
+                    from.AccessLevel,
+                    CommandLogging.Format(from),
+                    SpawnRoot));
+        }
+
+        /// <summary>
+        /// The reimport itself, callable without a Mobile.
+        ///
+        /// The editor bridge drops a request token and nobody is holding the command, so this
+        /// has to work headless. XmlSpawner supports that - it has a Mobile-free overload and
+        /// guards every from.SendMessage with a null check - but the six-argument overload the
+        /// command used dereferences from.Location unconditionally, so the null path has to pick
+        /// the other one deliberately.
+        /// </summary>
+        public static bool TryReimport(Mobile from, out string summary, out string error)
+        {
+            summary = null;
+            error = null;
+
             string path = Path.Combine(Core.BaseDirectory, SpawnRoot);
 
             if (!Directory.Exists(path))
             {
-                from.SendMessage(0x35, String.Format("{0} does not exist. Nothing to import.", SpawnRoot));
-                return;
+                error = String.Format("{0} does not exist. Nothing to import.", SpawnRoot);
+                return false;
             }
 
             int deleted = DeleteExisting();
@@ -61,16 +95,23 @@ namespace Server.Custom
                 // The public loader, rather than re-entering the command parser. loadrelative
                 // false, maxrange 0, loadnew false - loadnew would mint fresh GUIDs and append a
                 // suffix to every name, duplicating rather than replacing.
-                XmlSpawner.XmlLoadFromFile(SpawnRoot, Prefix, from, false, 0, false, out maps, out spawners);
+                if (from != null)
+                {
+                    XmlSpawner.XmlLoadFromFile(SpawnRoot, Prefix, from, false, 0, false, out maps, out spawners);
+                }
+                else
+                {
+                    XmlSpawner.XmlLoadFromFile(SpawnRoot, Prefix, false, out maps, out spawners);
+                }
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "GG_Reimport failed while loading {0}.", SpawnRoot);
-                from.SendMessage(0x35, String.Format("Import failed: {0}", ex.Message));
-                return;
+                error = String.Format("Import failed: {0}", ex.Message);
+                return false;
             }
 
-            string summary = String.Format(
+            summary = String.Format(
                 "GG_Reimport: deleted {0} existing '{1}' spawner(s), imported {2} spawner(s) across {3} map(s) from {4}.",
                 deleted,
                 Prefix,
@@ -78,7 +119,6 @@ namespace Server.Custom
                 maps,
                 SpawnRoot);
 
-            from.SendMessage(summary);
             Log.Info(summary);
 
             // The spawners are new, so their NPCs know nothing about the phase the town is
@@ -87,13 +127,7 @@ namespace Server.Custom
             // transition - and they were not there for the last one.
             DailyLifeCommands.Reconcile();
 
-            CommandLogging.WriteLine(
-                from,
-                String.Format(
-                    "{0} {1} reimporting {2}",
-                    from.AccessLevel,
-                    CommandLogging.Format(from),
-                    SpawnRoot));
+            return true;
         }
 
         /// <summary>

@@ -73,7 +73,9 @@ Ported from the ModernUO shard, in this order:
 | 3 | Old Marta + auto-collect + `[ResetQuest` | **done** |
 | 4a | `Scripts/Custom/Core/Navigation/` — waypoint graph, destinations, arrivals, zones, routes | **done** |
 | 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | **done** |
-| 5 | Admin API + MapExport + shard editor | pending |
+| 5a | Map export + editor bridge, read-only layers | **done** |
+| 5b | Editing through the bridge | pending |
+| 5c | Spawners in the editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
 
@@ -178,18 +180,36 @@ ServUO's console cannot invoke staff commands, so to run it headlessly set
 `CoreSmokeOnStart=True` in `Config/Custom.cfg` and read the console. Leave it `False` on a
 live shard.
 
-## Shard editor (once ported)
+## Shard editor
 
-Enable in `Config/AdminApi.cfg`, then browse `http://127.0.0.1:8081`.
-The API binds **loopback only**; remote access is via SSH tunnel
-(`ssh -L 8081:127.0.0.1:8081 user@host`). The bearer token is generated on first run and kept
-in `Config/AdminApi.cfg`, which is gitignored.
-
-Map tiles are rendered separately and are safe to build while the shard is up:
+A browser map editor for the shard's own data - the nav graph, destinations, arrival points,
+zones, routes, restricted zones, daily-life actors - with live entities drawn on top. **Read-only
+as of step 5a**; editing is 5b and spawners are 5c.
 
 ```
-dotnet run --project MapExport -c Release -- --out web/tiles --client "C:\Games\Electronic Arts\Ultima Online Classic"
+.\tools\editor\export-tiles.ps1     # render the map tiles, once
+node tools\editor\bridge.js         # then browse http://127.0.0.1:8081/
 ```
+
+**It is a file bridge, not an API inside the shard.** The shard writes `Data/Live/entities.json`
+and `Data/Live/health.json`, and watches `Data/Live/requests/` for token files; a small Node
+process reads those files, projects them into the editor's shape vocabulary, and drops tokens.
+Neither side holds a socket to the other, so either can restart without the other noticing, the
+shard has no HTTP surface to secure, and the whole channel can be inspected with `type` and `del`.
+
+The bridge binds `127.0.0.1` only and refuses cross-site writes, so there is no token to paste.
+
+| Command | Access | Effect |
+| --- | --- | --- |
+| `[LiveMap on\|off [seconds] [custom\|all] [zoneId]` | Administrator | Write the live entity snapshot. Defaults to custom actors and players every 2s; `all` needs a nav zone to bound it |
+| `[NavExportGolden` | Administrator | Write the golden JSON fixtures the bridge's writer is tested against |
+
+Map tiles are derived data, gitignored, and safe to render while the shard is up - MapExport
+builds its `Server.csproj` reference into its own folder rather than the repo root. A second facet
+is another run: `export-tiles.ps1 -Facet Felucca`.
+
+See `tools/editor/README.md`, which also records why `app.js` was rewritten rather than ported and
+what to bring back from the ModernUO original when editing returns.
 
 ## Tech debt
 

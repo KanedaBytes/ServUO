@@ -389,6 +389,31 @@ namespace Server.Custom
             return String.Format("'{0}' -> '{1}'", from ?? "(point)", step.WaypointId ?? "(arrival)");
         }
 
+        /// <summary>
+        /// The walker currently steering a mobile, or null.
+        ///
+        /// The active list is short - one entry per actor actually on the move - so this is a
+        /// scan rather than a dictionary. It exists for the live-map snapshot, which wants to
+        /// draw where an NPC is going, not just where it is.
+        /// </summary>
+        public static NavWalker For(Mobile mobile)
+        {
+            if (mobile == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _active.Count; i++)
+            {
+                if (_active[i]._mobile == mobile)
+                {
+                    return _active[i];
+                }
+            }
+
+            return null;
+        }
+
         // ---- the shared drive timer ----
 
         private static void Register(NavWalker walker)

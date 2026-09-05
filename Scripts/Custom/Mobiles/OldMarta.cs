@@ -312,11 +312,27 @@ namespace Server.Custom
             writer.Write((int)0); // version
         }
 
+        public override void OnAfterSpawn()
+        {
+            base.OnAfterSpawn();
+            LiveRegistry.Register(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
+        }
+
         public override void Deserialize(GenericReader reader)
         {
             base.Deserialize(reader);
 
             int version = reader.ReadInt();
+
+            // Spawner-owned and persistent, so the load path has to register her too -
+            // OnAfterSpawn does not fire when the world is read back.
+            LiveRegistry.Register(this);
         }
     }
 }

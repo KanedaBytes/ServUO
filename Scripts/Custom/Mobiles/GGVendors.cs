@@ -55,8 +55,9 @@ namespace Server.Custom
         /// reconciling on this tick can miss it. Waiting a second also turns a [GG_Reimport
         /// that spawns six at once into one reconcile.
         /// </summary>
-        public static void OnSpawned()
+        public static void OnSpawned(Mobile vendor)
         {
+            LiveRegistry.Register(vendor);
             ShopScheduleSystem.ReconcileSoon();
         }
     }
@@ -85,7 +86,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -98,6 +105,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 
@@ -125,7 +136,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -138,6 +155,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 
@@ -165,7 +186,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -178,6 +205,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 
@@ -205,7 +236,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -218,6 +255,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 
@@ -245,7 +286,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -258,6 +305,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 
@@ -285,7 +336,13 @@ namespace Server.Custom
         public override void OnAfterSpawn()
         {
             base.OnAfterSpawn();
-            DailyLifeVendor.OnSpawned();
+            DailyLifeVendor.OnSpawned(this);
+        }
+
+        public override void OnDelete()
+        {
+            LiveRegistry.Unregister(this);
+            base.OnDelete();
         }
 
         public override void Serialize(GenericWriter writer)
@@ -298,6 +355,10 @@ namespace Server.Custom
         {
             base.Deserialize(reader);
             int version = reader.ReadInt();
+
+            // OnAfterSpawn does not fire on load, and these persist, so the live map would lose
+            // every shopkeeper across a restart without this.
+            LiveRegistry.Register(this);
         }
     }
 }

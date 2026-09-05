@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goblin Gang - shard editor</title>
+<link rel="stylesheet" href="style.css">
+<!--
+  Read-only. Step 5a shows the data; 5b adds editing.
+
+  There is no token box, unlike the ModernUO original. That editor talked to an HTTP API inside
+  the shard and needed a bearer token pasted from a config file. This one talks to a local bridge
+  that binds 127.0.0.1 and refuses cross-site writes, so there is nothing to paste and nothing for
+  a page in another tab to reach.
+-->
+</head>
+<body>
+
+<div id="shell">
+    <aside id="sidebar">
+        <h1>Goblin Gang</h1>
+
+        <section>
+            <h2>View</h2>
+            <button id="go-britain" type="button">Britain</button>
+            <input id="filter" type="search" placeholder="Filter by name or id">
+        </section>
+
+        <section>
+            <h2>Layers</h2>
+            <ul id="layers"></ul>
+        </section>
+
+        <section>
+            <h2>Shard</h2>
+            <div class="buttons">
+                <button id="reload-nav" type="button">Reload nav</button>
+                <button id="reload-dailylife" type="button">Reload daily life</button>
+            </div>
+            <div class="buttons">
+                <button id="live-on" type="button">Live on</button>
+                <button id="live-off" type="button">Live off</button>
+            </div>
+            <p id="live-status" class="muted">live: off</p>
+        </section>
+
+        <section>
+            <h2>Health</h2>
+            <ul id="health"></ul>
+        </section>
+    </aside>
+
+    <main id="stage">
+        <canvas id="map"></canvas>
+        <div id="readout">
+            <span id="coords">-</span>
+            <span id="status"></span>
+        </div>
+    </main>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

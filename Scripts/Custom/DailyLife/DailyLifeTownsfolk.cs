@@ -47,12 +47,17 @@ namespace Server.Custom
                 AddItem(new LongPants(Utility.RandomNeutralHue()));
                 AddItem(new Shirt(Utility.RandomNeutralHue()));
             }
+
+            LiveRegistry.Register(this);
         }
 
         public DailyLifeTownsfolk(Serial serial)
             : base(serial)
         {
         }
+
+        // Registered from the live constructor only. These delete themselves on world load, so
+        // registering from Deserialize would put a corpse in the live map for one tick.
 
         /// <summary>
         /// The AI that stands aside while NavWalker steers. See DailyLifeAI - without it the
@@ -160,6 +165,7 @@ namespace Server.Custom
         public override void OnDelete()
         {
             StopWalking();
+            LiveRegistry.Unregister(this);
 
             base.OnDelete();
         }
