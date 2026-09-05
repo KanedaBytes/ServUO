@@ -301,6 +301,128 @@ namespace Server.Custom
             return new NavRoute(steps, route.Cost);
         }
 
+        // ---- laps and patrols ----
+
+        /// <summary>
+        /// Builds one full lap of an authored route as a walkable step list.
+        ///
+        /// NavWalker is deliberately one-shot, so looping lives here: a consumer follows the lap
+        /// and re-follows it from the Arrived callback. The lap already contains the return leg,
+        /// so "re-follow the same route" is all a patrol ever has to do.
+        ///
+        /// cycle    - the authored waypoints, then back to the first.
+        /// pingpong - out along the waypoints, then back down the same line.
+        /// oneway   - exactly as authored; Arrived means finished.
+        /// </summary>
+        public static bool TryBuildRouteLap(string routeId, out NavRoute route, out string error)
+        {
+            route = null;
+
+            NavRouteDef definition = NavigationSystem.Route(routeId);
+
+            if (definition == null)
+            {
+                error = String.Format("no usable route '{0}'", routeId);
+                return false;
+            }
+
+            string[] ids = definition.WaypointList;
+
+            if (ids == null || ids.Length < 2)
+            {
+                error = String.Format("route '{0}' has fewer than two waypoints", routeId);
+                return false;
+            }
+
+            var order = new List<string>(ids);
+
+            if (definition.Mode == NavRouteMode.Cycle)
+            {
+                order.Add(ids[0]);
+            }
+            else if (definition.Mode == NavRouteMode.PingPong)
+            {
+                for (int i = ids.Length - 2; i >= 0; i--)
+                {
+                    order.Add(ids[i]);
+                }
+            }
+
+            var steps = new List<NavStep>(order.Count);
+            double cost = 0.0;
+
+            for (int i = 0; i < order.Count; i++)
+            {
+                NavWaypoint waypoint = NavigationSystem.Graph.Node(order[i]);
+
+                if (waypoint == null)
+                {
+                    error = String.Format("route '{0}' names unknown waypoint '{1}'", routeId, order[i]);
+                    return false;
+                }
+
+                if (i > 0)
+                {
+                    cost += NavGraph.Chebyshev(steps[i - 1].Point, waypoint.Location);
+                }
+
+                steps.Add(new NavStep(waypoint.Location, waypoint.Map, waypoint.Id, NavStepKind.Walk));
+            }
+
+            route = new NavRoute(steps, cost);
+            error = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Builds a looping patrol between two or more destinations, routing each leg through
+        /// the graph. The lap returns to the first destination, so it can be re-followed.
+        /// </summary>
+        public static bool TryBuildPatrol(IList<string> destinationIds, out NavRoute route, out string error)
+        {
+            route = null;
+
+            if (destinationIds == null || destinationIds.Count < 2)
+            {
+                error = "a patrol needs at least two destinations";
+                return false;
+            }
+
+            var steps = new List<NavStep>();
+            double cost = 0.0;
+
+            for (int i = 0; i < destinationIds.Count; i++)
+            {
+                string from = destinationIds[i];
+                string to = destinationIds[(i + 1) % destinationIds.Count];
+
+                NavRoute leg;
+
+                if (!TryRoute(from, to, out leg, out error))
+                {
+                    return false;
+                }
+
+                cost += leg.Cost;
+
+                // Skip the leg's first step after the first leg: it is the previous leg's last.
+                for (int j = steps.Count == 0 ? 0 : 1; j < leg.Steps.Count; j++)
+                {
+                    steps.Add(leg.Steps[j]);
+                }
+            }
+
+            if (steps.Count < 2)
+            {
+                error = "the patrol collapsed to a single point";
+                return false;
+            }
+
+            route = new NavRoute(steps, cost);
+            error = null;
+            return true;
+        }
+
         // ---- arrivals ----
 
         /// <summary>

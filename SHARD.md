@@ -72,7 +72,7 @@ Ported from the ModernUO shard, in this order:
 | 2 | Jail administration (on ServUO's existing jail region) | **done** |
 | 3 | Old Marta + auto-collect + `[ResetQuest` | **done** |
 | 4a | `Scripts/Custom/Core/Navigation/` — waypoint graph, destinations, arrivals, zones, routes | **done** |
-| 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | pending |
+| 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | **done** |
 | 5 | Admin API + MapExport + shard editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
@@ -103,6 +103,12 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
 | `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
+| `[DayPhase` | GameMaster | Report the day phase, anchor time and whether an override is active |
+| `[DayPhase <dawn\|day\|dusk\|night\|clear>` | GameMaster | Force a phase for testing, or release it |
+| `[DailyLifeReload` | GameMaster | Re-read `britain-daily-life.json` and rebuild the town |
+| `[DailyLifeSmoke` | Administrator | Force a full day cycle and check the town reacts |
+| `[GG_MigrateVendors` | Administrator | Hand Britain's six shopkeeper spawn points to daily life (one time, reversible) |
+| `[GG_RestoreVendors` | Administrator | Undo the migration |
 
 ## Custom spawns
 
@@ -137,6 +143,28 @@ against real map data and is the check that keeps the file honest; set
 See `Scripts/Custom/Core/Navigation/README.md`, and `Scripts/Custom/Core/Navigation/nav-format-comparison.md`
 for how the schema maps onto the `uo-offline-server` bot navigation format.
 
+## Britain daily life
+
+`Data/Custom/britain-daily-life.json` drives the town's day: tavern patrons after dark, the night
+watch on its posts, a courier and a farmer walking their rounds, and six shopkeepers who go home
+at dusk. **Every location in it is a nav id**, including the clock anchor — there are no
+coordinates in the file. All movement goes through `NavWalker`.
+
+The six shopkeepers are `GG*` subclasses of the stock vendor types, because a stock `BaseVendor`
+moves one step per 30-120 seconds and could never finish a walk home inside the night. Handing the
+stock spawn points over is an explicit, reversible, one-time migration:
+
+```
+[GG_MigrateVendors     # switch the stock six off (asks for confirmation)
+[GG_Reimport           # import Spawns/Custom, which brings ours in
+```
+
+`[DailyLifeSmoke` forces a whole dusk-to-day cycle in milliseconds and checks the town reacts; its
+last result shows up in `[CoreSmoke` as `DailyLife.Smoke`. Set `Custom.DailyLifeSmokeOnStart=True`
+to run it headlessly.
+
+See `Scripts/Custom/DailyLife/README.md`.
+
 ## Health checks
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
@@ -162,3 +190,9 @@ Map tiles are rendered separately and are safe to build while the shard is up:
 ```
 dotnet run --project MapExport -c Release -- --out web/tiles --client "C:\Games\Electronic Arts\Ultima Online Classic"
 ```
+
+## Tech debt
+
+- **`NotifyStaff` is copied privately in three systems** (`RestrictedZoneSystem`,
+  `NavigationSystem`, `DailyLifeSystem`). Three is tolerable; the fourth should become a
+  `Custom/Core` helper rather than a fourth copy.

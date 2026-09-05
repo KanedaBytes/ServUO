@@ -7,6 +7,19 @@ registry. See CLAUDE.md §11.
 | File | What it is |
 | --- | --- |
 | `OldMarta.cs` | A fishwife in Britain Trammel offering `MartasFishRequest` |
+| `GGVendors.cs` | The six Britain shopkeepers daily life manages |
+
+## GG vendors
+
+One-line subclasses of `Baker`, `Jeweler`, `Provisioner`, `Butcher`, `Bowyer` and `Carpenter` that
+exist for one reason: **a stock `BaseVendor` cannot walk.** `GetMoveDelay` (`BaseVendor.cs:74`) is
+30-120 *seconds* per step and `VendorAI.TransformMoveDelay` returns it verbatim, ignoring
+`CurrentSpeed`, so a shopkeeper could never reach its house before dawn.
+
+`ForcedAI` (`BaseCreature.cs:3342`) is the seam - a `protected virtual BaseAI` that
+`ChangeAIType` returns before its switch, used throughout `DespiseEvilCreatures.cs`. Each GG
+vendor returns a `DailyLifeAI`, which stands aside and speeds up only while a `NavWalker` owns the
+mobile. See `Scripts/Custom/DailyLife/README.md`.
 
 ## Old Marta
 

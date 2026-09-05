@@ -91,6 +91,16 @@ namespace Server.Custom
         /// <summary>Whether the mobile runs rather than walks.</summary>
         public bool Run { get; set; }
 
+        /// <summary>
+        /// Moves the mobile's Home to each hop as it is taken.
+        ///
+        /// For an actor whose AI we do not own, BaseAI.WalkRandomInHome (BaseAI.cs:2509) keeps
+        /// stepping it back toward Home with no spawner gate, dragging against the route.
+        /// Pointing Home at where we are going anyway makes the wander pull the same way instead
+        /// of backwards. Restore Home yourself when the journey ends.
+        /// </summary>
+        public bool KeepHomeAligned { get; set; }
+
         // ---- driving ----
 
         public void Follow(NavRoute route)
@@ -304,7 +314,14 @@ namespace Server.Custom
                 return;
             }
 
-            _goal = new NavGoal(step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point));
+            int z = ResolveZ(_mobile.Map, step.Point);
+
+            _goal = new NavGoal(step.Point.X, step.Point.Y, z);
+
+            if (KeepHomeAligned)
+            {
+                _mobile.Home = new Point3D(step.Point.X, step.Point.Y, z);
+            }
         }
 
         /// <summary>

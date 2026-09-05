@@ -53,3 +53,15 @@ Non-obvious element meanings:
 | `<MinDelay>` `<MaxDelay>` | Respawn delay, in **minutes** unless `<DelayInSec>True</DelayInSec>` |
 | `<DespawnTime>` | Hours. `<Duration>` and the refractory pair are minutes |
 | `<Objects2>` | `TypeName:MX=<max>:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1`, multiple entries joined by the literal `:OBJ=` |
+
+## Files
+
+| File | What it spawns |
+| --- | --- |
+| `trammel/GG_OldMarta.xml` | Old Marta, the fishwife |
+| `trammel/GG_DailyLife.xml` | The six Britain shopkeepers daily life manages |
+
+`GG_DailyLife.xml` also respawns the **companions** of the two multi-type stock spawners it
+replaces - `Cobbler` and `Fisherman` alongside `GGProvisioner`, `Architect` and
+`RealEstateBroker` alongside `GGCarpenter`. Switching those stock spawners off must not quietly
+delete Britain's cobbler. It only takes effect after `[GG_MigrateVendors`.

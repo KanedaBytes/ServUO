@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "comment": "Britain daily life. Every location here is a nav id from Data/Custom/navigation.json - there are no coordinates in this file, including the clock anchor. A shopkeeper entry is identified by its SPAWNER, not its vendor type, so two of the same trade can have different homes. Adding a seventh shopkeeper needs no code: place a home destination with [NavMark and [NavArrival, add a vendor subclass if the trade is not already covered, and add one line here.",
+  "anchor": "brit-square",
+  "tavern": {"destination":"brit-tavern-blue-boar","patronCount":5},
+  "chatter": [
+    "Another round over here!",
+    "You'll not find better ale this side of Vesper.",
+    "I heard the smith's daughter has taken up with a sailor.",
+    "Mind the roads after dark, friend.",
+    "*laughs*",
+    "One more and I'm for home, I swear it.",
+    "They say something moves in the graveyard at night.",
+    "Innkeeper! My cup is empty and my heart is heavy."
+  ],
+  "watchChatter": [
+    "All is well.",
+    "Keep to the lit streets.",
+    "Ten of the clock, and all is well.",
+    "Move along now.",
+    "Quiet night, thank Britannia."
+  ],
+  "watch": [
+    {"id":"north","route":"brit-watch-north"},
+    {"id":"south","route":"brit-watch-south"},
+    {"id":"west-gate","destinations":"brit-guard-west"}
+  ],
+  "townsfolk": [
+    {"id":"perrin","name":"Perrin","title":"the courier","body":"male","route":"brit-courier-loop"},
+    {"id":"hedda","name":"Hedda","title":"the farmer","body":"female","route":"brit-farmer-loop"}
+  ],
+  "shopkeepers": [
+    {"id":"baker","spawner":"GG_Baker","stockSpawner":"Vendors#2","vendor":"GGBaker","shop":"brit-shop-baker","home":"brit-home-baker","closes":true},
+    {"id":"jeweler","spawner":"GG_Jeweler","stockSpawner":"Vendors#15","vendor":"GGJeweler","shop":"brit-shop-jeweler","home":"brit-home-jeweler","closes":true},
+    {"id":"provisioner","spawner":"GG_Provisioner","stockSpawner":"prov/cobbler/fisherman","vendor":"GGProvisioner","shop":"brit-shop-provisioner","home":"brit-home-provisioner","closes":true},
+    {"id":"butcher","spawner":"GG_Butcher","stockSpawner":"Vendors#39","vendor":"GGButcher","shop":"brit-shop-butcher","home":"brit-home-butcher","closes":true},
+    {"id":"bowyer","spawner":"GG_Bowyer","stockSpawner":"Vendors#17","vendor":"GGBowyer","shop":"brit-shop-bowyer","home":"brit-home-bowyer","closes":true},
+    {"id":"carpenter","spawner":"GG_Carpenter","stockSpawner":"Vendors#20","vendor":"GGCarpenter","shop":"brit-shop-carpenter","home":"brit-home-carpenter","closes":true}
+  ]
+}
