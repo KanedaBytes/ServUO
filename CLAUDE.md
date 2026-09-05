@@ -414,9 +414,20 @@ of `0x04EA`. Flagging an item makes it undroppable, untradeable and visibly reco
 never flag anything that has not passed a safety gate (see
 `Scripts/Custom/Quests/QuestItemSafety.cs`).
 
-**There is no `[ResetQuest`.** The nearest stock command is `[Quests`
+**There is no stock `[ResetQuest`.** The nearest stock command is `[Quests`
 (`Scripts/Services/Expansions/MondainsLegacy.cs:201`, `AccessLevel.GameMaster`), which targets
-a player and opens their `MondainQuestGump`.
+a player and opens their `MondainQuestGump`. This shard supplies `[ResetQuest` and
+`[ResetAllQuests` from `Scripts/Custom/Commands/ResetQuestCommands.cs` (port step 3).
+
+**Once per character is `BaseQuest.DoneOnce`**, not `OneTimeOnly`. On turn-in,
+`BaseQuest.RemoveQuest` appends a `QuestRestartInfo` to `PlayerMobile.DoneQuests` — serialized in
+the **PlayerMobile save**, while active quests live separately in `MondainQuestData`
+(`Saves/Quests/MLQuests.bin`). It is skipped entirely for `AccessLevel > Player`, so staff
+characters can repeat a `DoneOnce` quest forever.
+
+**`PlayerMobile.Quests` is not a field.** The getter is `MondainQuestData.GetQuests(this)`, which
+*inserts* an empty list for anyone it is asked about, and the save writes every entry it holds.
+Anything sweeping players on a timer must read `MondainQuestData.QuestData.TryGetValue` instead.
 
 ServUO auto-counts quest items in exactly two places — crafting
 (`Scripts/Services/Craft/Core/CraftItem.cs:1871` → `QuestHelper.CheckItem`) and quest rewards

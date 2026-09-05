@@ -116,6 +116,7 @@ If upstream ever changes `Persistence.Serialize` to truncate, this deviation can
 | `Config/Server.cfg` | Shard name, and port `2594` (committed upstream of this work) |
 | `Config/DataPath.cfg` | Client data path (committed upstream of this work) |
 | `Config/Custom.cfg` | New config file, scope `Custom`. Auto-discovered at boot; no registration needed |
+| `Spawns/Custom/trammel/GG_OldMarta.xml` | New custom spawn definition. Imported with `[GG_Reimport`; the `GG_` name prefix is the set handle |
 
 ---
 
@@ -175,6 +176,61 @@ of these, the dependent system breaks quietly.** Re-verify each after every upst
 - `BaseQuest.Objectives` is a mutable `public List<BaseObjective>`, and
   `BaseObjective.CurProgress` is publicly settable and fires `OnCompleted`.
 - `MondainQuester.Quests` (`public abstract Type[]`) is the quest-to-NPC binding.
+- **`QuestHelper.CheckItem(PlayerMobile, Item)` is the only path that turns an item into obtain
+  progress**, and it has exactly two upstream callers: `SelectQuestItem.ToggleQuestItem_Callback`
+  (the manual context entry) and `CraftItem.cs:1871`. `Custom/Quests/AutoCollectSystem` is a third
+  caller. If its signature or its flag-then-count behaviour changes, auto-collect silently stops
+  crediting anything.
+- **`ObtainObjective.Update` is a TOGGLE, not an increment** (`QuestObjectives.cs:416`): on an
+  unflagged item it adds progress and flags, on a flagged one it subtracts and un-flags.
+  Auto-collect therefore must never pass an already-flagged item to `CheckItem`. If this ever
+  becomes idempotent, the `!item.QuestItem` guard becomes redundant rather than wrong.
+- **Once per character is `BaseQuest.DoneOnce` plus a `QuestRestartInfo` in
+  `PlayerMobile.DoneQuests`**, written by `BaseQuest.RemoveQuest` and read by
+  `QuestHelper.Delayed`. Two consequences custom code depends on: the record lives in the
+  **PlayerMobile save**, not in `MLQuests.bin`, and `RemoveQuest` **skips it entirely when
+  `Owner.AccessLevel != AccessLevel.Player`** — so staff characters never accumulate one and
+  `[ResetQuest` on one is a no-op.
+- **`QuestHelper.CanOffer` refuses any quest sharing an objective `Type()` with an already-active
+  quest** (`QuestHelper.cs:105-118`). Stock `Norton` offers `DeliciousFishesQuest`, an identical
+  `ObtainObjective(typeof(Fish), "fish", 5)`, and is spawned in `Spawns/trammel.xml`, so a player
+  can hold Marta's errand or Norton's, never both. `OldMarta.OnTalk` detects that specific clash
+  and explains it; if the rule changes upstream, that explanation becomes dead code.
+- **`MondainQuestData.GetQuests` INSERTS an empty list for any player it is asked about**
+  (`Helpers/Persistence.cs:17`), and `OnSave` writes every entry it holds. `PlayerMobile.Quests`
+  is that getter, so `AutoCollectSystem` and `OldMarta` read
+  `MondainQuestData.QuestData.TryGetValue` instead — a 1 Hz sweep through the property would grow
+  and then persist one junk row per online player.
+- **`MondainQuester` suppresses vendor behaviour through `IsActiveVendor => false` alone.** That
+  one override silences `VendorBuy`/`VendorSell` and removes the whole Buy/Sell/BOD/Bribe/Claim
+  block from `BaseVendor.AddCustomContextEntries`. It does **not** cover `CanTeach`, which
+  `MondainQuester` inherits as `true`; `OldMarta` overrides it to false.
+- **`BaseCreature.HandlesOnSpeech` ands the AI's answer with
+  `from.InRange(this, RangePerception)`**, and `BaseVendor`'s constructor passes perception 2.
+  Any quester that must hear speech further away has to override `HandlesOnSpeech` itself.
+- **`BaseQuest.GiveRewards` mishandles a non-stackable reward with `Amount > 1`**
+  (`BaseQuest.cs:428`): the same instance is placed in the backpack N times, yielding one item and
+  N messages. Only stackables honour `Amount`. Use one `BaseReward` per item.
+
+### Commands
+
+- **`[Aliases(...)]` is documentation only.** `HelpInfo` and `Docs` read it, but
+  `CommandSystem.Handle` dispatches on registered names alone, so every alias needs its own
+  `CommandSystem.Register` call. **Known gap:** `[ReloadRestrictedZones`
+  (`Scripts/Custom/Zones/RestrictedZoneCommands.cs`) is declared as an alias but never registered,
+  so it does not work — `[RestrictedZonesReload` does.
+
+### Spawners
+
+- **`[XmlLoad` / `[XmlUnLoad` take an optional `SpawnerPrefixFilter` second argument**, matched
+  with an ordinal `Name.StartsWith` (`XmlSpawner2.cs:6178`, `:4776`). The whole `GG_` naming
+  convention and `[GG_Reimport` rest on it.
+- **`XmlSpawner.XmlLoadFromFile` is `public static`** (`XmlSpawner2.cs:6068`), which is what lets
+  `[GG_Reimport` import without re-entering the command parser.
+- **Deleting an `XmlSpawner` removes its spawned mobiles** (`OnDelete` → `RemoveSpawnObjects()`,
+  `XmlSpawner2.cs:2167`). `[GG_Reimport` relies on this for its pre-sweep.
+- **There is no `<Z>` element in the spawn XML** — `CentreZ` is the spawner's own Z
+  (`XmlSpawner2.cs:6683`), and `<Range>` is `HomeRange`.
 
 ### Spawners
 

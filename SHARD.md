@@ -70,7 +70,7 @@ Ported from the ModernUO shard, in this order:
 | 0 | `Scripts/Custom/Core/` — loop queue, JSON config, logger, persistence base, health checks | **done** |
 | 1 | Restricted zones + countdown gump → auto-jail | **done** |
 | 2 | Jail administration (on ServUO's existing jail region) | **done** |
-| 3 | Old Marta + auto-collect + `[ResetQuest` | pending |
+| 3 | Old Marta + auto-collect + `[ResetQuest` | **done** |
 | 4 | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | pending |
 | 5 | Admin API + MapExport + shard editor | pending |
 
@@ -89,6 +89,26 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[Unjail <player>` | GameMaster | Release immediately |
 | `[JailInfo <player>` | Counselor | Show a player's jail record |
 | `[JailRecord` | Player | Show your own jail record |
+| `[ResetQuest <QuestTypeName>` | GameMaster | Target a player; cancel that quest and clear its completion record |
+| `[ResetAllQuests` | GameMaster | Target a player; erase every quest and record, after confirmation |
+| `[GG_Reimport` | Administrator | Delete every `GG_` spawner and re-import `Spawns/Custom` |
+
+## Custom spawns
+
+Custom XmlSpawner definitions live in `Spawns/Custom/<facet>/GG_<Thing>.xml`, kept out of the
+stock `Spawns/` files so world regeneration never mixes the two.
+
+**Every custom spawner's `<Name>` starts with `GG_`.** That prefix is the handle: both `[XmlLoad`
+and `[XmlUnLoad` take an optional `SpawnerPrefixFilter` second argument matched with an ordinal
+`StartsWith`, so the prefix makes this shard's spawners addressable as a set.
+
+```
+[GG_Reimport                    # preferred: sweeps GG_ spawners, then re-imports
+[XmlLoad Spawns/Custom GG_      # raw import; replaces by <UniqueId>, leaves orphans behind
+```
+
+`[GG_Reimport` is preferred because `[XmlLoad` alone is an upsert — a spawn point deleted from the
+XML would keep its spawner in the world forever. See `Spawns/Custom/README.md`.
 
 ## Health checks
 
