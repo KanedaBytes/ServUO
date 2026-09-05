@@ -148,9 +148,14 @@ per tick.** This is the largest gap versus ModernUO's `LoopContext.Post`, and it
 // Any background thread (e.g. the admin API listener):
 LoopQueue.Post(() => { /* freely touches world state */ });
 
-// Game thread: one repeating Timer, started in Initialize(), drains the queue each tick.
-while (_pending.TryDequeue(out var work)) { try { work(); } catch (Exception e) { Log(e); } }
+// Request/response across the boundary:
+LoopQueue.TryPostAndWait(() => World.Mobiles.Count, TimeSpan.FromSeconds(10), out count, out error);
 ```
+
+Implemented in `Scripts/Custom/Core/LoopQueue.cs`: a `ConcurrentQueue<Action>` drained by one
+repeating `Timer` at `TimerPriority.EveryTick`, capped at `Custom.LoopQueueBudget` items per
+tick, skipping while `World.Loading || World.Saving`, and force-drained on `BeforeWorldSave` so
+posted mutations land in the save. See `Scripts/Custom/Core/README.md`.
 
 For **request/response** across the boundary, use a `TaskCompletionSource` created with
 `TaskCreationOptions.RunContinuationsAsynchronously`, plus a timeout. Do **not** use a
@@ -473,7 +478,9 @@ release timer, no persistence, no escalation. That is what `Scripts/Custom/Jail/
 | `MLQuestSystem`, `CollectObjective`, `MLQuestContext` | **None.** `BaseQuest` + `MondainQuester.Quests` |
 | `ImportSpawnersCommand.ImportFile` | `[XmlLoad` (XmlSpawner2) — XML, not JSON |
 | `LogFactory.GetLogger` | **None.** `Utility.WriteConsoleColor`, or `Scripts/Custom/Core/CustomLogger.cs` |
-| `Map.TryParse` | **Only `Map.Parse`** — guard it |
+| `Core.Now` | **Does not exist** in this build — use `DateTime.UtcNow` |
+| `Core.TickCount` | Exists, but is `long` **milliseconds** (`Stopwatch`-based, monotonic) |
+| `Map.TryParse` | **Only `Map.Parse`, and it *throws*** on an unknown name — use `JsonConfig.TryParseMap` |
 | `BaseCreature.HomeMap` | **None** — `Home` is a `Point3D` only |
 | `map.GetMobilesInRange<T>()` | Non-generic `IPooledEnumerable` — type-test it, and dispose it |
 | `string.InsensitiveEquals` / `InsensitiveContains` | `Insensitive.Equals` / `Insensitive.Contains` |

@@ -67,7 +67,7 @@ Ported from the ModernUO shard, in this order:
 
 | # | System | Status |
 | --- | --- | --- |
-| 0 | `Scripts/Custom/Core/` — loop queue, JSON config, logger, persistence base | pending |
+| 0 | `Scripts/Custom/Core/` — loop queue, JSON config, logger, persistence base, health checks | **done** |
 | 1 | Restricted zones + countdown gump → auto-jail | pending |
 | 2 | Jail administration (on ServUO's existing jail region) | pending |
 | 3 | Old Marta + auto-collect + `[ResetQuest` | pending |
@@ -75,6 +75,19 @@ Ported from the ModernUO shard, in this order:
 | 5 | Admin API + MapExport + shard editor | pending |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
+
+## Health checks
+
+`[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
+registered health check — including any persistence store that has gone **degraded** and is
+refusing to save. Run it after every upstream merge.
+
+Systems register their own checks with `HealthCheck.Register(...)` rather than growing the
+command, so `[CoreSmoke` stays a one-command health check for the whole shard.
+
+ServUO's console cannot invoke staff commands, so to run it headlessly set
+`CoreSmokeOnStart=True` in `Config/Custom.cfg` and read the console. Leave it `False` on a
+live shard.
 
 ## Shard editor (once ported)
 

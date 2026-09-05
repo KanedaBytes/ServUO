@@ -85,6 +85,25 @@ format above.)*
 
 ---
 
+## Deliberate deviations from stock helpers
+
+Not upstream edits, but places where custom code knowingly does **not** use the stock helper.
+
+### `CustomPersistence` writes its own file rather than calling `Persistence.Serialize`
+
+`Server/Persistence/Persistence.cs:31` opens with `file.OpenWrite()`, which is
+`FileMode.OpenOrCreate` and **does not truncate**. A save that writes fewer bytes than the
+previous one therefore leaves stale tail bytes behind. That is harmless for a strictly
+forward-reading loader and fatal for anything that reads to EOF.
+
+`Scripts/Custom/Core/CustomPersistence.cs` opens its own `FileStream` with `FileMode.Create`
+(which truncates) and wraps it in the same `BinaryFileWriter`. **Reads still go through
+`Persistence.Deserialize`**, for its directory-creation and zero-length-file handling.
+
+If upstream ever changes `Persistence.Serialize` to truncate, this deviation can be dropped.
+
+---
+
 ## Files that look like modifications but are not
 
 | Path | What it is |
@@ -96,6 +115,7 @@ format above.)*
 | `Spawns/Custom/**` | New folder for custom XmlSpawner XML, kept out of the stock `Spawns/` files |
 | `Config/Server.cfg` | Shard name, and port `2594` (committed upstream of this work) |
 | `Config/DataPath.cfg` | Client data path (committed upstream of this work) |
+| `Config/Custom.cfg` | New config file, scope `Custom`. Auto-discovered at boot; no registration needed |
 
 ---
 
@@ -166,6 +186,56 @@ of these, the dependent system breaks quietly.** Re-verify each after every upst
   duplicate. If ServUO *does* check distance, the shop schedule needs a different approach.
 - **Also to verify:** that `BaseVendor`'s `FightMode.None` exempts it from `BaseCreature`'s
   return-to-home path, as it did on ModernUO.
+
+### Timers
+
+- **`Timer` `count == 0` means repeat forever** (`Server/Timer.cs:361`). Both the two-argument
+  constructor and the three-argument `DelayCall` overloads forward `count: 0`.
+- **The priority bucket, not `Interval`, governs how often a timer is examined**
+  (`Server/Timer.cs:136`: `{0, 10, 25, 50, 250, 1000, 5000, 60000}` ms). An `Interval` shorter
+  than its derived bucket's poll delay is silently coarsened, which is why
+  `Custom/Core/LoopQueue` sets `Priority = TimerPriority.EveryTick` explicitly rather than
+  relying on the default derived from the interval.
+
+### Saving rotates the whole Saves/ directory
+
+`Scripts/Misc/AutoSave.cs` `Backup()` **moves the entire `Saves/` directory** into
+`Backups/Automatic/Most Recent` before each save, shifting the previous ones down through
+`Second Backup` and `Third Backup`.
+
+This is why a degraded `CustomPersistence` store refusing to save is not enough on its own:
+the file it is protecting is moved out of `Saves/` by the very next save, is gone after three
+rotations, and the boot after that finds no file, loads clean, and would quietly persist empty
+state. `CustomPersistence` therefore **quarantines** an unreadable save to `Backups/Degraded/`
+(which AutoSave never touches) at the moment the load fails.
+
+Known limitation: the degraded flag itself does not survive a restart. The quarantined copy
+and the red console log are the durable evidence.
+
+### Fatal event handlers
+
+Exceptions escaping these handlers **terminate the shard**, so custom handlers must swallow
+their own:
+
+- `EventSink.WorldSave` - rethrown by `World.cs:1168-1174` as
+  `"FATAL: Exception in EventSink.WorldSave"`.
+- `EventSink.BeforeWorldSave` - rethrown by `World.cs:1149-1156`.
+- `EventSink.WorldLoad` - `EventSink.InvokeWorldLoad()` is uncaught inside `World.Load()`,
+  which is itself outside any try in `Main.cs:547`; it reaches
+  `AppDomain.UnhandledException` and kills the process.
+
+This is the whole reason `CustomPersistence` degrades rather than throwing.
+
+### Maps
+
+- **`Map.Parse` throws `ArgumentException` on an unrecognised name.** The null-returning
+  variant at `Server/Map.cs:446` is behind `#if Map_InternalProtection || Map_AllUpdates`,
+  neither of which is defined; the compiled `#else` branch at `:493` throws. Custom code uses
+  `JsonConfig.TryParseMap` instead.
+- **Maps are registered in `Scripts/Misc/MapDefinitions.cs` `Configure()`, which is untagged
+  and therefore `[CallPriority]` 0.** Any custom `Configure()` that resolves map names must
+  carry a higher priority or the maps do not exist yet.
+- `Map.AllMaps` includes `Map.Internal`; filter it out of anything player-facing.
 
 ### Time and light
 
