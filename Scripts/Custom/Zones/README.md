@@ -71,14 +71,11 @@ to every occupant and then immediately re-warns them. Cosmetic, and matches Mode
 
 ## Jail
 
-`IJailService` / `JailService.Provider` is the seam. **The current provider is
-`StubJailService` — a placeholder, not a jail.** It teleports the player into ServUO's existing
-Jail region (on their own facet, clamped to Felucca/Trammel) and remembers them in memory only.
-No sentence, no release, no persistence. `[CoreSmoke` reports it as `Warn` while it is active.
-
-Port step 2 replaces it by assigning `JailService.Provider` from its own `Configure()`, which
-runs before `JailService.Initialize()` so no stub is ever constructed.
+`IJailService` / `JailService.Provider` is the seam, and it is now backed by the real
+`JailSystem` (`Scripts/Custom/Jail/`) — escalating sentences, persistence, release timers and a
+status gump. A zone expiry produces a genuine sentence, not just a teleport.
 
 Callers must **guard with `IsPlayerJailed` before jailing and assert it afterwards**. That shape
 is carried over from the ModernUO shard, where jailing an already-jailed player overwrote the
-release timer without stopping it, and `JailPlayer` could silently no-op.
+release timer without stopping it, and `JailPlayer` could silently no-op. Our implementation
+fixes both, but the guard stays: it is what turns a silent failure into a staff notification.

@@ -239,6 +239,39 @@ and the red console log are the durable evidence.
 - Flags are `Closable` / `Disposable` / `Dragable` (one 'g') / `Resizable`, all defaulting true.
   `Closable = false` blocks right-click; **`Disposable = false` is what blocks Escape.**
 
+### Jail and pets
+
+- **`Jail.AllowAutoClaim` returns false** (`Scripts/Regions/Jail.cs:13`), and
+  `PlayerMobile.ClaimAutoStabledPets()` short-circuits on it — which is what withholds a
+  prisoner's stabled pets for the whole sentence and returns them on the first login after
+  release. `Custom/Jail` relies on this rather than tracking pets itself.
+- **`BaseCreature.CanAutoStable` returns false for anything `Summoned` and for a mount whose
+  `Rider != null`** (`Scripts/Mobiles/Normal/BaseCreature.cs:1065`). So `AutoStablePets()` must
+  be preceded by a dismount and an explicit summon dismissal, or the mount and every summon are
+  silently left in the world.
+- **`Mobile.Frozen` blocks movement only** — three call sites, all `Move()`/packet flags. It is
+  **not persisted** and `Kill()` clears it (`Server/Mobile.cs:4045`). Never use it to represent a
+  sentence; only for short in-flight sequences.
+- **`Mobile.Mount` is read-only.** Use `BaseMount.Dismount(mobile)`, which also handles Animal
+  Form and gargoyle Flying.
+- **The ten integration points that make a sentence meaningful** are listed in CLAUDE.md section
+  13. We add no enforcement of our own, so removing any of them upstream silently gives prisoners
+  that ability back.
+
+### Login ordering
+
+`EventSink.Login` fires *after* `Mobile.Map`/`Location` are restored (the restore is in the
+`NetState` setter, `Server/Mobile.cs:9112`, and the event is raised at
+`Server/Network/PacketHandlers.cs:2580`), so `Map`, `Location`, `Region` and `NetState` are all
+valid and final in a handler. **`EventSink.Connected` fires before the restore** — do not use it
+for anything location-dependent.
+
+### CommandLogging
+
+`CommandLogging.WriteLine(Mobile from, ...)` dereferences `from.NetState`, `from.Account` and
+`from.AccessLevel`, so it **throws on a null actor**. Automatic actions (a zone expiry jailing
+someone) legitimately have no actor and must guard before calling it.
+
 ### Fatal event handlers
 
 Exceptions escaping these handlers **terminate the shard**, so custom handlers must swallow

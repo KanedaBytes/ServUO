@@ -460,8 +460,12 @@ Ten subsystems already react to it: `AccountHandler.cs:466` (no auto-claim on lo
 `BraceletOfBinding`, `HornOfRetreat`, `BaseCreature.cs:6605` (escape items disabled), and
 `PreventInaccess.cs:24`.
 
-**Missing is the entire administrative layer**: no `[Jail` command, no sentence records, no
-release timer, no persistence, no escalation. That is what `Scripts/Custom/Jail/` provides.
+The administrative layer — `[Jail` / `[Unjail` / `[JailInfo` / `[JailRecord`, sentence records,
+escalation, persistence, release timers and the status gump — is **not** stock. It is supplied by
+`Scripts/Custom/Jail/` (port step 2); see that folder's README for what is ours versus ServUO's.
+
+Note `Jail.AllowAutoClaim` returning false is load-bearing: it is what keeps a prisoner's stabled
+pets stabled for the length of the sentence.
 
 ## 14. Missing-equivalent table (ModernUO → ServUO)
 
