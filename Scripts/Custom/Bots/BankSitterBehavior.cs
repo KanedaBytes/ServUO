@@ -21,10 +21,12 @@
 // BaseCreature, so the engine does it. Their PickScatteredHome we DO keep, and
 // the reason is at OnAttached: it is load-bearing here in a way it was not there.
 //
-// NOT PORTED: upstream's six roles (Regular, Hawker, Afk, and three macroers).
-// Hawker is pure speech and belongs with the chat corpus; the macro roles need
-// real spellcasting, Hidden toggling and reagent bookkeeping, which is a lot of
-// machinery for posture. What is left is the non-speech, non-magic crowd.
+// THE ROLES. Upstream rolls six. Session 7d brought the three that are pure
+// speech or pure silence - Regular, Hawker and Afk - and the three macro roles
+// still need real spellcasting, Hidden toggling and reagent bookkeeping, which
+// is a lot of machinery for posture. Their WEIGHTS are kept in the table below
+// rather than removed, so restoring them when combat lands is one column of
+// edits and not a re-derivation from upstream. See RollRole.
 
 using System;
 
@@ -55,6 +57,35 @@ namespace Server.Custom
 
         private string _destinationId;
         private bool _pinned;
+        private BankRole _role;
+
+        /// <summary>
+        /// What kind of person is standing at this bank.
+        ///
+        /// Upstream's six, three of them live. The macro three are listed so the enum still
+        /// describes the design, and so the weights in RollRole have somewhere to point when
+        /// spellcasting lands.
+        /// </summary>
+        public enum BankRole
+        {
+            /// <summary>Talks about everything. The bank crowd's baseline.</summary>
+            Regular,
+
+            /// <summary>Talks shop, loudly and often, and nothing else.</summary>
+            Hawker,
+
+            /// <summary>Away from the keyboard. Says "afk" once, then nothing, ever.</summary>
+            Afk,
+
+            /// <summary>SEAM: needs spellcasting. Rolls as Regular today.</summary>
+            ResistMacro,
+
+            /// <summary>SEAM: needs Hidden toggling. Rolls as Regular today.</summary>
+            HidingMacro,
+
+            /// <summary>SEAM: needs Hidden toggling and stealth. Rolls as Regular today.</summary>
+            StealthMacro,
+        }
 
         public override string SerializableName
         {
@@ -67,6 +98,159 @@ namespace Server.Custom
             get { return _destinationId; }
             set { _destinationId = value; }
         }
+
+        /// <summary>Where a {place} token resolves from while this bot is standing here.</summary>
+        public override string CurrentDestinationId
+        {
+            get { return _destinationId; }
+        }
+
+        public BankRole Role
+        {
+            get { return _role; }
+        }
+
+        /// <summary>
+        /// Is this one of the away-from-keyboard roles?
+        ///
+        /// Asked by the speech responder, which must not make an AFK bot answer you. Phrased as a
+        /// question about the role rather than a test against Afk inline, so the macro roles
+        /// answer it correctly the moment they come back.
+        /// </summary>
+        public bool IsAway
+        {
+            get
+            {
+                return _role == BankRole.Afk
+                    || _role == BankRole.ResistMacro
+                    || _role == BankRole.HidingMacro
+                    || _role == BankRole.StealthMacro;
+            }
+        }
+
+        public BankSitterBehavior()
+        {
+            ApplyRoleVoice(BankRole.Regular);
+        }
+
+        /// <summary>
+        /// Upstream's role distribution, all six rows kept.
+        ///
+        /// The macro three map to Regular because their machinery is not ported. Restoring them is
+        /// deleting the three redirects, NOT re-deriving the numbers - which is the whole reason
+        /// the rows are still here rather than the table being rewritten as a three-way roll.
+        ///
+        ///   Regular      30      talks about everything
+        ///   Hawker       20      talks shop
+        ///   Afk          15      silent
+        ///   ResistMacro  15      SEAM -> Regular
+        ///   HidingMacro  10      SEAM -> Regular
+        ///   StealthMacro 10      SEAM -> Regular
+        ///
+        /// Live distribution today is therefore Regular 65, Hawker 20, Afk 15.
+        /// </summary>
+        private static BankRole RollRole()
+        {
+            int roll = Utility.Random(100);
+
+            if (roll < 30)
+            {
+                return BankRole.Regular;
+            }
+
+            if (roll < 50)
+            {
+                return BankRole.Hawker;
+            }
+
+            if (roll < 65)
+            {
+                return BankRole.Afk;
+            }
+
+            // SEAM: ResistMacro (65-79), HidingMacro (80-89), StealthMacro (90-99). Return the
+            // real role here once spellcasting and Hidden toggling exist.
+            return BankRole.Regular;
+        }
+
+        /// <summary>
+        /// What this role talks about, and how loudly.
+        ///
+        /// Banks are loud places, so even a Regular is chattier and quicker off the mark than the
+        /// wandering archetype.
+        /// </summary>
+        private void ApplyRoleVoice(BankRole role)
+        {
+            _role = role;
+
+            switch (role)
+            {
+                case BankRole.Hawker:
+                    {
+                        // A seller talks shop and nothing else.
+                        //
+                        // SEAM: the WTS half is missing, and its absence is deliberate. Upstream's
+                        // hawker shouts a line built by BotShop from a real item in its pack, so
+                        // "WTS GM halberd 5k" means there IS one and 5k buys it. BotShop is the
+                        // economy layer. A WTS from a bot holding nothing - or holding something
+                        // no trade path can hand over - is precisely the lie this system exists
+                        // not to tell, so until then a hawker only ever asks to buy. Wanting to
+                        // buy promises nothing.
+                        ChatCategories = new[] { ChatLibrary.Wtb };
+                        ChatChance = 0.55;
+                        MinChatCooldown = TimeSpan.FromSeconds(10.0);
+                        MaxChatCooldown = TimeSpan.FromSeconds(25.0);
+                        break;
+                    }
+
+                case BankRole.Afk:
+                case BankRole.ResistMacro:
+                case BankRole.HidingMacro:
+                case BankRole.StealthMacro:
+                    {
+                        // Statues do not talk, and macroers were away by definition.
+                        ChatCategories = new string[0];
+                        ChatChance = 0.0;
+                        break;
+                    }
+
+                default:
+                    {
+                        // Everything trade-related plus small talk. bank_actions are short ("bank",
+                        // "withdraw 1000") so they land hard; lfg is here because the bank is
+                        // historically where you found a group.
+                        //
+                        // No "wts", for the reason above: a regular is holding nothing.
+                        ChatCategories = new[]
+                        {
+                            ChatLibrary.SmallTalk,
+                            ChatLibrary.BankActions,
+                            ChatLibrary.Wtb,
+                            ChatLibrary.Lfg,
+                        };
+
+                        ChatChance = 0.25;
+                        MinChatCooldown = TimeSpan.FromSeconds(15.0);
+                        MaxChatCooldown = TimeSpan.FromSeconds(45.0);
+                        break;
+                    }
+            }
+        }
+
+        /// <summary>
+        /// Force a role, for the chat probe.
+        ///
+        /// In memory and per-instance, never persisted - the same discipline BotLifecycle.Override
+        /// keeps. A probe that needs a bot which definitely talks cannot be left at the mercy of a
+        /// 15% chance of rolling the one role whose entire job is silence.
+        /// </summary>
+        public void ForceRole(BankRole role)
+        {
+            ApplyRoleVoice(role);
+            _roleFixed = true;
+        }
+
+        private bool _roleFixed;
 
         public override string GetStatusLine(PlayerBot bot)
         {
@@ -92,6 +276,23 @@ namespace Server.Custom
             bot.Home = PickScatteredHome(bot);
             bot.RangeHome = SitterRange;
             _pinned = true;
+
+            // The role is rolled on arrival rather than in the constructor, so a bot that visits
+            // the same bank twice is not the same character both times.
+            if (!_roleFixed)
+            {
+                ApplyRoleVoice(RollRole());
+            }
+
+            // The one line an AFK player ever said, on the way out of the chair. Most did not
+            // even manage that, hence the roll.
+            if (_role == BankRole.Afk && Utility.RandomDouble() < 0.25)
+            {
+                bot.Say("afk");
+
+                bot.SpeechLines++;
+                ChatLibrary.NoteSpoken("afk");
+            }
         }
 
         public override void OnDetached(PlayerBot bot)
@@ -199,11 +400,25 @@ namespace Server.Custom
                 return;
             }
 
-            // SPEECH GOES HERE, in session 7d with the chat corpus. Upstream's bank crowd is
-            // mostly talk - WTS spam, small talk, the "afk" line - and the posture below was
-            // written to punctuate it. Deliberately a no-op rather than a stub method, so there
-            // is nothing to leave accidentally wired up.
+            // Speak first: chatter is the whole point of a bank crowd, and the posture below was
+            // always written to punctuate it rather than to stand on its own.
+            if (TrySpeak(bot))
+            {
+                // You talk TO someone. A bot that announces at a wall is worse than a quiet one.
+                FaceNearestPerson(bot);
 
+                // A hawker punctuates the pitch - waves the goods around.
+                if (_role == BankRole.Hawker && Utility.RandomDouble() < 0.40)
+                {
+                    bot.Animate(33, 5, 1, true, false, 0);
+                }
+
+                return;
+            }
+
+            // Idle life between lines. An AFK bot keeps doing this: it is a character standing
+            // there, not a character switched off, and the bank box gesture is exactly what a
+            // client left running looked like.
             if (Utility.RandomDouble() >= IdleChance)
             {
                 return;

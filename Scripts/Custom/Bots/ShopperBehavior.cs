@@ -35,10 +35,41 @@ namespace Server.Custom
 
         public static readonly TimeSpan MaxPause = TimeSpan.FromSeconds(20.0);
 
+        /// <summary>
+        /// The lines that a real player used to open a vendor.
+        ///
+        /// "vendor buy" appears twice because it was overwhelmingly the common one - a duplicate
+        /// entry is how this corpus weights anything, and it is upstream's own convention.
+        /// </summary>
+        private static readonly string[] VendorTriggers =
+        {
+            "vendor buy",
+            "vendor buy",
+            "vendor sell",
+            "vendor view",
+            "show me your wares",
+            "i'd like to see what you have",
+            "let me see your goods",
+        };
+
+        /// <summary>How long between vendor trigger lines. Its own cadence, not the chat one.</summary>
+        private static readonly TimeSpan MinVendorLine = TimeSpan.FromSeconds(12.0);
+
+        private static readonly TimeSpan MaxVendorLine = TimeSpan.FromSeconds(28.0);
+
         private string _destinationId;
         private NavWalker _walker;
         private long _pauseUntil;
+        private long _nextVendorLine;
         private bool _walking;
+
+        public ShopperBehavior()
+        {
+            ChatCategories = new[] { ChatLibrary.Shopping, ChatLibrary.SmallTalk };
+            ChatChance = 0.18;
+            MinChatCooldown = TimeSpan.FromSeconds(20.0);
+            MaxChatCooldown = TimeSpan.FromSeconds(50.0);
+        }
 
         public override string SerializableName
         {
@@ -50,6 +81,12 @@ namespace Server.Custom
         {
             get { return _destinationId; }
             set { _destinationId = value; }
+        }
+
+        /// <summary>Where a {place} token resolves from while this bot is browsing.</summary>
+        public override string CurrentDestinationId
+        {
+            get { return _destinationId; }
         }
 
         public override string GetStatusLine(PlayerBot bot)
@@ -94,9 +131,28 @@ namespace Server.Custom
                 return;
             }
 
-            // SPEECH GOES HERE, in session 7d. Upstream's shopper is almost entirely speech - the
-            // "vendor buy" trigger lines are the shopping - and what is left without them is the
-            // browsing itself.
+            // Browsing chatter, on the ordinary ambient cadence.
+            TrySpeak(bot);
+
+            // The vendor trigger, on its own clock. Upstream's shopper does not walk, so THIS is
+            // its shopping; here it runs alongside the walking rather than instead of it, and the
+            // two together are what browsing looks like from outside.
+            //
+            // Deliberately a bare Say, as upstream has it: these are typed commands, not chatter,
+            // so they skip the capitalisation roll and the ambient cooldown entirely. They are
+            // also safe to say near a real vendor - Mobile.Say never reaches a listener's
+            // OnSpeech, only client speech packets do. See PlayerBot.OnSpeech.
+            if (Core.TickCount - _nextVendorLine >= 0 && IsPlayerNearby(bot))
+            {
+                ScheduleNextVendorLine();
+
+                string trigger = VendorTriggers[Utility.Random(VendorTriggers.Length)];
+
+                bot.Say(trigger);
+
+                bot.SpeechLines++;
+                ChatLibrary.NoteSpoken(trigger);
+            }
 
             if (_walking)
             {
@@ -126,6 +182,15 @@ namespace Server.Custom
             int seconds = Utility.RandomMinMax((int)MinPause.TotalSeconds, (int)MaxPause.TotalSeconds);
 
             _pauseUntil = Core.TickCount + (seconds * 1000L);
+        }
+
+        private void ScheduleNextVendorLine()
+        {
+            int seconds = Utility.RandomMinMax(
+                (int)MinVendorLine.TotalSeconds,
+                (int)MaxVendorLine.TotalSeconds);
+
+            _nextVendorLine = Core.TickCount + (seconds * 1000L);
         }
 
         /// <summary>

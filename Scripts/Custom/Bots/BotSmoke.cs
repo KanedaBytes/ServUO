@@ -34,6 +34,7 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Party", BuildPartyHealthResult);
             HealthCheck.Register("Bots.Travel", BotWalkProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Life", BotLifeProbe.BuildHealthResult);
+            HealthCheck.Register("Bots.Speech", BotChatProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -322,9 +323,18 @@ namespace Server.Custom
             // The lifecycle probe runs after the walk probe rather than alongside it: both spawn
             // bots that compete for the same arrival points, and a stuck reading from one would
             // be indistinguishable from contention caused by the other.
+            TimeSpan afterWalk =
+                BotWalkProbe.ConvergeWindow + BotWalkProbe.DisperseWindow + TimeSpan.FromSeconds(10.0);
+
+            Timer.DelayCall(afterWalk, () => BotLifeProbe.Run(map, location));
+
+            // Last, and alone. The chat probe spawns a PlayerMobile listener, and a player
+            // standing in the middle of the walk or lifecycle probes would set every one of their
+            // bots talking - harmless, but it makes three overlapping console logs unreadable.
+            // Its own silence stage also needs the room genuinely empty to mean anything.
             Timer.DelayCall(
-                BotWalkProbe.ConvergeWindow + BotWalkProbe.DisperseWindow + TimeSpan.FromSeconds(10.0),
-                () => BotLifeProbe.Run(map, location));
+                afterWalk + BotLifeProbe.Window + TimeSpan.FromSeconds(10.0),
+                () => BotChatProbe.Run(map, location));
 
             return _last;
         }

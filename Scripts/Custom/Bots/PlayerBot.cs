@@ -97,6 +97,15 @@ namespace Server.Custom
         public bool PartyAcceptPending { get; set; }
 
         /// <summary>
+        /// How many lines this bot has said since it was created.
+        ///
+        /// Transient and not serialized - a bot does not survive a restart. It is here rather than
+        /// only as a fleet total because "which bot is doing the talking?" is the first question
+        /// asked of a crowd that sounds wrong. [BotBehavior reports it.
+        /// </summary>
+        public int SpeechLines { get; set; }
+
+        /// <summary>
         /// The current brain. Never null; falls back to Idle. Swapping fires OnDetached on the
         /// old and OnAttached on the new.
         /// </summary>
@@ -356,6 +365,44 @@ namespace Server.Custom
             base.OnThink();
 
             BotParty.CheckInvite(this);
+        }
+
+        /// <summary>
+        /// Required, not belt-and-braces: without it a bot cannot hear you from three tiles away.
+        ///
+        /// BaseCreature.HandlesOnSpeech (BaseCreature.cs:4605-4615) ANDs the AI's answer with
+        /// from.InRange(this, RangePerception), and this class's constructor passes a perception
+        /// of 2. The responder needs ten tiles, because your NAME carries across a room. The same
+        /// trap is documented at Scripts/Custom/Mobiles/README.md:76-85, where OldMarta hit it.
+        ///
+        /// It lives on the mobile rather than on BotAI on purpose. Seam 5 keeps BotAI thin so it
+        /// can become a MeleeAI or a MageAI when combat lands; hearing is not a property of how a
+        /// bot fights, and putting it here means it survives that swap untouched.
+        /// </summary>
+        public override bool HandlesOnSpeech(Mobile from)
+        {
+            return from.InRange(Location, BotSpeechResponder.ListenRange) || base.HandlesOnSpeech(from);
+        }
+
+        /// <summary>
+        /// Somebody spoke nearby. Answer if it was meant for us.
+        ///
+        /// Note what does NOT reach here: a bot's own Say(). Mobile.Say goes to
+        /// PublicOverheadMessage (Mobile.cs:7236-7239), which only sends packets, while the
+        /// listener pipeline hangs off Mobile.DoSpeech - and DoSpeech is invoked from exactly two
+        /// places, both real client speech packets (PacketHandlers.cs:1547, :1628). So bots cannot
+        /// hear each other, cannot echo, and cannot have "withdraw 1000" read as a command by a
+        /// passing Banker. That is structural rather than something this code arranges, which is
+        /// why the chat probe asserts it: the day somebody routes bot speech through DoSpeech to
+        /// make bots hear each other, every bank_actions line becomes a live command at once.
+        /// </summary>
+        public override void OnSpeech(SpeechEventArgs e)
+        {
+            BotSpeechResponder.OnSpeech(this, e);
+
+            // Always chain: BaseCreature's own handler does the AI and speech-type work, and
+            // swallowing it here would break anything that lands on the bot later.
+            base.OnSpeech(e);
         }
 
         public override void OnDelete()

@@ -45,6 +45,9 @@ namespace Server.Custom
             Lingering = 2,
         }
 
+        /// <summary>What a bot talks about on the road.</summary>
+        private static readonly string[] AmbientChat = { ChatLibrary.Traveling, ChatLibrary.SmallTalk };
+
         private TravelState _state;
         private NavWalker _walker;
         private string _destinationId;
@@ -52,9 +55,73 @@ namespace Server.Custom
         private string _lastDestinationId;
         private long _lingerUntil;
 
+        public TravelerBehavior()
+        {
+            // Quieter and slower than the bank crowd. A bot on the road is walking past you, not
+            // standing next to you, and the same cadence would read as a stream of nonsense
+            // trailing across town.
+            ChatCategories = AmbientChat;
+            ChatChance = 0.10;
+            MinChatCooldown = TimeSpan.FromSeconds(30.0);
+            MaxChatCooldown = TimeSpan.FromSeconds(90.0);
+        }
+
         public override string SerializableName
         {
             get { return "Traveler"; }
+        }
+
+        /// <summary>Where a {place} token resolves from - where this bot is heading, or standing.</summary>
+        public override string CurrentDestinationId
+        {
+            get { return _destinationId; }
+        }
+
+        /// <summary>
+        /// What to talk about while standing at a destination.
+        ///
+        /// SEAM 1, paid off. Upstream keyed this on its 31-member DestinationType enum, which is
+        /// the enum this shard deliberately did not port - our destination type is a free token
+        /// with nine values, and the discrimination that matters lives in the tags. So a shop is
+        /// not one thing here: it is a forge or a bakery depending on what it is tagged, exactly
+        /// as the destination weighting already treats it.
+        ///
+        /// The mapping is coarse on purpose. There are no tavern or forge chat files in the
+        /// corpus yet - upstream's own comment says the same of theirs - so this points several
+        /// places at small_talk rather than inventing categories with nothing behind them.
+        /// </summary>
+        private static string[] ArrivalChatFor(NavDestination destination)
+        {
+            if (destination == null)
+            {
+                return new[] { ChatLibrary.SmallTalk };
+            }
+
+            switch (destination.Type)
+            {
+                case "bank":
+                {
+                    // No "wts": a bot stopping at a bank is holding nothing to sell.
+                    return new[] { ChatLibrary.BankActions, ChatLibrary.Wtb, ChatLibrary.SmallTalk };
+                }
+
+                case "tavern":
+                case "inn":
+                {
+                    // Where you found a group, so lfg belongs here as much as at the bank.
+                    return new[] { ChatLibrary.SmallTalk, ChatLibrary.Lfg };
+                }
+
+                case "shop":
+                {
+                    return new[] { ChatLibrary.Wtb, ChatLibrary.Shopping, ChatLibrary.SmallTalk };
+                }
+
+                default:
+                {
+                    return new[] { ChatLibrary.SmallTalk };
+                }
+            }
         }
 
         public override string GetStatusLine(PlayerBot bot)
@@ -146,13 +213,27 @@ namespace Server.Custom
                         BotTickManager.NoteAbandoned();
                         Release(bot);
                         _state = TravelState.Choosing;
+
+                        return;
                     }
+
+                    // Chatter on the road. The categories are the travelling ones - a bot walking
+                    // down a street must not say "still on the road" while standing in a bank,
+                    // which is why they are swapped rather than shared with the arrival set.
+                    ChatCategories = AmbientChat;
+                    TrySpeak(bot);
 
                     return;
                 }
 
                 case TravelState.Lingering:
                 {
+                    // Standing somewhere, so talk about being there.
+                    ChatCategories = ArrivalChatFor(
+                        _destinationId == null ? null : Nav.Destination(_destinationId));
+
+                    TrySpeak(bot);
+
                     // Wraparound-safe: compare by subtraction, never a < b (CLAUDE.md section 15).
                     if (Core.TickCount - _lingerUntil >= 0)
                     {

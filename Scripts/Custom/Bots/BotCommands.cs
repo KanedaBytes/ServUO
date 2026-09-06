@@ -287,6 +287,20 @@ namespace Server.Custom
                 bot.Name,
                 behavior.SerializableName,
                 String.IsNullOrEmpty(status) ? "" : " - " + status));
+
+            // The voice. Which categories it draws from is the first thing to check when a bot is
+            // saying the wrong sort of thing, and the line count is the first thing to check when
+            // it is saying nothing - the two questions this command is actually asked.
+            var sitter = behavior as BankSitterBehavior;
+
+            from.SendMessage(0x3B2, String.Format(
+                "  voice: {0}, {1} line(s) said, hue {2}{3}",
+                behavior.ChatCategories == null || behavior.ChatCategories.Length == 0
+                    ? "silent"
+                    : String.Join(", ", behavior.ChatCategories),
+                bot.SpeechLines,
+                bot.SpeechHue,
+                sitter == null ? "" : ", role " + sitter.Role));
         }
 
         private static void BotBehaviorSet_OnTarget(Mobile from, object targeted, string name)

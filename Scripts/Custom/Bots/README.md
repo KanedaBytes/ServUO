@@ -10,7 +10,7 @@
 Fake players: a `PlayerBot` with a class, a skill tier, a personality, a name, a speech colour and
 an outfit. Config is `Data/Custom/bots.json`; namespace `Server.Custom`.
 
-**Sessions 1 to 3 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
+**Sessions 1 to 4 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
 tier, skills, stats, name, speech hue, outfit. Session 2 made them live in the world — a behaviour
 tick, a `Traveler` that walks the shard's `NavWalker` between destinations, and class-weighted
 destination choice from `bots.json`.
@@ -18,7 +18,10 @@ destination choice from `bots.json`.
 Session 3 gave them a life: a phase roller that picks a new behaviour from the bot's own
 personality, a bank with a standing crowd, and shops worth browsing.
 
-Speech and population management arrive in later sessions.
+Session 4 gave them a voice — the chat corpus, ambient chatter per behaviour, and a bot that turns
+and answers when you say its name. See [Speech](#speech).
+
+Population management arrives in a later session.
 
 The full port survey is `docs-src/uo-offline-port-survey.md`.
 
@@ -174,6 +177,34 @@ the time. A roller that simply skipped a busy bot would pass over the same bot f
 phase expires against a refusal, `PlayerBot.TransitionPending` remembers, and the roll happens the
 moment the bot is free.
 
+### There is no emote path
+
+Upstream routes any line starting with `*` to `Mobile.Emote`. Here every line goes through `Say`
+in the bot's own hue, and a `*` line is **rejected at load** and reported by `Bots.Chat` — spoken,
+it would show its asterisks.
+
+No shipped line starts with one, so this changes nothing today; the check is a guard for future
+corpus edits. `emotes.txt` keeps its 10% ambient draw either way, because what is actually in that
+file is the deliberate typo-noise (`asdf`, `oops wrong window`) its own header defends as
+*"imperfection reads human"* — which is the good part, and is plain speech.
+
+### The responder hooks OnSpeech, not OnThink
+
+The party check lives in `OnThink` and belongs there: an invitation is *state*, sitting on the bot
+waiting to be noticed. Speech is an *event*. ServUO delivers it through
+`Mobile.DoSpeech` → `HandlesOnSpeech` → `OnSpeech`, which fires only when somebody actually speaks
+near the bot — a **tighter** gate than `OnThink`'s sector test, not a looser one, and one that
+cannot miss an utterance by falling between ticks.
+
+**`PlayerBot.HandlesOnSpeech` is required, not defensive.** `BaseCreature.HandlesOnSpeech`
+(`:4605-4615`) ANDs the AI's answer with `from.InRange(this, RangePerception)`, and `PlayerBot`'s
+constructor passes a perception of **2** — so without the override a bot cannot hear you from three
+tiles away, let alone the ten the name branch needs. `OldMarta` hit the identical trap; it is
+recorded at `Scripts/Custom/Mobiles/README.md:76-85`.
+
+Both overrides go on the **mobile**, not on `BotAI`. Seam 5 keeps `BotAI` thin so it can become a
+`MeleeAI` or `MageAI` when combat lands, and hearing is not a property of how a bot fights.
+
 ### The bank crowd is a pull, not a garrison
 
 Upstream keeps bank crowds with `BankFixtures`: a spawner at every bank holding five permanent,
@@ -213,7 +244,7 @@ Ours additionally passes `checkMobiles: true` when picking the spot, which upstr
 
 ## Severed seams
 
-Five places where this session deliberately stops short. Each is marked with a one-line comment at
+Nine places where this layer deliberately stops short. Each is marked with a one-line comment at
 the site naming the session that restores it, so none of them has to be rediscovered.
 
 | # | Site | Severed as | Restored by |
@@ -223,6 +254,10 @@ the site naming the session that restores it, so none of them has to be rediscov
 | 3 | `EquipmentTable.SeedCrafterStarterProps`, `EquipCrafterTool` | Empty. Both read `CrafterProfiles`, a crafting-layer file | Economy session, which brings `CrafterProfiles` |
 | 4 | `EquipmentTable` → `BotItemFactory` | **Not severed** — pulled in as a leaf, since it is self-contained and the outfit roller cannot work without it | n/a |
 | 5 | **`BotAI`'s base class** | `: VendorAI` — the right stand-aside for a bot that only stands still | Combat session — becomes `MeleeAI`, `MageAI` or a purpose-built `BaseAI` |
+| 6 | `BankSitterBehavior` Hawker's **WTS** half | Only `wtb`. Upstream's hawker shouts a line `BotShop` builds from a real item in its pack, so "WTS GM halberd 5k" means there *is* one and 5k buys it. A WTS from a bot holding nothing is the lie this system exists not to tell | Economy session, with `BotShop` |
+| 7 | `BankSitterBehavior`'s **three macro roles** | `ResistMacro`, `HidingMacro` and `StealthMacro` roll as `Regular`. Their **weights are kept** in `RollRole` behind markers, so restoring them is deleting three redirects rather than re-deriving upstream's distribution | Combat session, which brings spellcasting and `Hidden` toggling |
+| 8 | Gossip, and `PlayerBotBehavior`'s `GossipShare` branch | A marker comment. `Gossip/` is copied but never scanned, and its `{actor}`/`{other}`/`{when}` tokens are registered unwired — so the lines are doubly unreachable | Event-journal session, with `BotEventJournal` |
+| 9 | `friend_greet` and `BotSocialGraph` | Not wired. `{name}` **resolves**, but nothing decides that two bots are friends, so no path picks the category | Social session |
 
 **Seam 5 is a discipline, not a stub.** `BotAI.cs` is the only file in the tree permitted to name
 `VendorAI` — no cast, no type test, no call to a `VendorAI` member anywhere else. `PlayerBot`
@@ -364,6 +399,119 @@ everything downstream assumes that: `WalkRandomInHome` special-cases a zero `Hom
 wander (`BaseAI.cs:2516`), so a leftover `Home` would quietly leash a later Traveler back to the
 bank whenever it stopped commuting.
 
+## Speech
+
+The corpus is `Data/Custom/BotChat/` — uo-offline's `PlayerBotChat/` copied byte for byte, 123
+files plus 22 in `Gossip/`. `ChatLibrary` loads it; one file is one category, named by its stem.
+Editing a `.txt` and running `[BotsReload` changes what bots say with no restart and no compile.
+
+**The scan is flat, and that is load-bearing.** `Gossip/` is a subdirectory precisely so its files
+are never served as ambient chatter: they are `{actor}`/`{other}`/`{place}`/`{when}` templates for
+an event journal that does not exist yet, and a recursive scan would have a bot say
+`{other} killed {actor} at {place}` out loud, verbatim. Upstream used a non-recursive
+`EnumerateFiles` for exactly this reason.
+
+### Three gates, in this order, and the order is the cost control
+
+```
+1. cooldown   a long, an integer compare
+2. chance     a double compare
+3. audience   a sector query - the only expensive one
+```
+
+Behaviour ticks run on a shared timer whether or not anyone is watching, so without gate 3 a
+thousand bots would chatter at an empty world for ever. Putting it **last** means the query is paid
+only when a line is otherwise about to be said.
+
+`IsPlayerNearby` asks the sector, not `NetState.Instances`. A bounded `GetMobilesInRange(22)` is
+not the `World.Mobiles` sweep §15 warns about — `FaceNearestPerson` already does the same — and
+unlike the client list it can see a mobile with no `NetState`, which is what the chat probe's
+synthetic listener is. Upstream tested "is a `PlayerMobile` and is not a `PlayerBot`"; here a
+`PlayerBot` is a `BaseCreature`, so **bots cannot trigger each other by construction** and the
+second test is unnecessary.
+
+### Who says what
+
+| | categories | chance / cooldown |
+| --- | --- | --- |
+| **BankSitter** Regular | `small_talk`, `bank_actions`, `wtb`, `lfg` | 0.25 / 15–45s |
+| **BankSitter** Hawker | `wtb` | 0.55 / 10–25s |
+| **BankSitter** Afk | — | silent |
+| **Shopper** | `shopping`, `small_talk`, plus vendor triggers on a 12–28s clock | 0.18 / 20–50s |
+| **Traveler** walking | `traveling`, `small_talk` | 0.10 / 30–90s |
+| **Traveler** lingering | by destination `type`, discriminated by tag | as above |
+| **Idle** | `small_talk` | 0.05 / 60–180s |
+
+Two texture layers steal an occasional ambient slot rather than adding one, so neither makes a bot
+chattier: `night_talk` at 25% between 21:00 and 05:00 **real** time, and `emotes` at 10%.
+
+`TravelerBehavior.ArrivalChatFor` is **severed seam 1 being paid off**: upstream keyed it on its
+31-member `DestinationType` enum, and ours keys on our free `type` token discriminated by tag,
+exactly as the destination weighting already does.
+
+### The token ledger
+
+`ChatTokens` is the single place that knows every `{token}` in the corpus, who owns it, and whether
+it resolves yet. Each line is classified once, at load:
+
+| | meaning | treatment |
+| --- | --- | --- |
+| **wired** | every token has a live resolver | enters the pool |
+| **reserved** | every token is known, one or more unwired | counted, **never enters a pool** |
+| **unknown** | a token nobody registered — a typo | counted, **Warn** |
+
+Ownership: `{place}` `{dest}` → nav (**wired**, from `NavDestination.Name`); `{name}` → identity
+(**wired**); `{price}` `{item}` `{mat}` `{short}` → economy; `{pet}` → taming; `{dungeon}` →
+adventurer; `{actor}` `{other}` `{when}` → journal.
+
+> `{short}` is **coin**, not a short name — `trade_short.txt` reads *"need {short} more"*, the gap
+> between an offer and a price, and it always travels with `{price}`. It is economy-owned.
+
+At the time of writing: **1,224 non-comment lines across 106 categories — 1,060 wired, 164
+reserved (economy 146, adventurer 14, taming 4), 0 unknown.** Reserved is a progress meter, not a
+fault list: it falls as later sessions land. If it ever *rises*, a corpus edit has introduced lines
+nothing can say.
+
+**Classification is static; the guard is not.** A wired token can still fail at runtime — `{place}`
+needs a destination and a bot may have none — so `ChatTokens.TryResolve` refuses any line still
+holding a `{` when substitution finishes. Both are needed, and every category wired today happens
+to be token-free, so the guard is currently belt to the static pass's braces.
+
+### Answering
+
+`BotSpeechResponder` is upstream's, with its ranges and probabilities intact: name at 10 tiles
+(its own 15s guard, cutting through the general cooldown — you answer to your **name**), greeting
+at 5 (answered 65% of the time), question at 5 (75%), anything said in your face at 2 (45%).
+Deliberate silence is a valid answer; upstream's note is worth keeping — *"sometimes it just
+ignores you, which is also exactly what a real player did."*
+
+**One reply per utterance.** Every listener's `OnSpeech` runs in the same pass, so distance checks
+alone cannot stop a chorus — ties and same-pass cooldown writes poison any "am I closest?" logic.
+The first bot to answer **claims** the utterance for two seconds and the rest let it stand; a name
+mention overrides a generic claim.
+
+Replies come after a typing delay of `0.9 + rand(0..1.2) + min(len × 0.04, 1.2)` seconds, and the
+bot turns to face you first. Upstream's reason, in `BotShopTalk`: *"an instant answer is the
+loudest tell there is."*
+
+### Bot speech is not a command
+
+`bank_actions` has bots saying `bank`, `withdraw 1000` and `balance` out loud, and a bot carries
+`Player = true` for the party gate — so the obvious worry is a real `Banker` treating those as
+commands.
+
+**It cannot.** `Mobile.Say` goes to `PublicOverheadMessage` (`Mobile.cs:7236-7239`), which only
+sends packets; the listener pipeline hangs off `Mobile.DoSpeech`, and `DoSpeech` is invoked from
+exactly two places, both real client speech packets (`PacketHandlers.cs:1547`, `:1628`). Scripted
+speech never enters that path, so no keyword handler ever sees it and no `Handled` flag is needed —
+there is no dispatch to suppress.
+
+Which is exactly why `BotChatProbe` asserts it, against a sentinel mobile whose `HandlesOnSpeech`
+is unconditionally true. Nothing else in this folder holds that invariant up, so nothing here would
+notice it going: the day somebody routes bot speech through `DoSpeech` to make bots hear each
+other, every `bank_actions` line becomes a live command in the same commit. The fix then is to
+suppress the dispatch for bot speech — **never** to strip the lines out of the corpus.
+
 ## Class-weighted destinations
 
 ```
@@ -403,11 +551,11 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | --- | --- | --- |
 | `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet. Class and tier are rolled when omitted, and may be given in either order (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and every non-zero skill against the caps in force |
-| `[BotBehavior` | GameMaster | Target a bot; report its brain and status line |
+| `[BotBehavior` | GameMaster | Target a bot; report its brain, status line, and its **voice** — chat categories, lines said, speech hue, and its bank role if it has one |
 | `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`, `BankSitter`, `Shopper`) |
 | `[BotLifecycle` | GameMaster | Report the roller, its cadence and the transition tally |
 | `[BotLifecycle on\|off` | GameMaster | Pause the roller, so a behaviour can be watched without it being rolled away |
-| `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
+| `[BotsReload` | GameMaster | Re-read `bots.json`, the player caps it defaults from, **and the chat corpus** (alias `[ReloadBots`). The corpus reloads either way — a bad edit to one has nothing to do with the other |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 
 ## `[BotSmoke`
@@ -454,6 +602,22 @@ the audit or reporting a result that had not happened yet.
 
 `Bots.Life` — the last twelve-bot lifecycle probe.
 
+`Bots.Chat` — the corpus: files, lines, and the wired / reserved / unknown ledger, plus how many
+lines have actually been said since boot. **Fail** if the corpus is missing or nothing is
+speakable — mute bots have no other symptom. **Warn** for an unrecognised token (a typo, and
+therefore a line that can never be spoken), a rejected `*` line, or a category a behaviour draws
+from that loaded nothing.
+
+```
+corpus 123 file(s) + 22 gossip held back, 1224 line(s): 1060 wired, 164 reserved
+(adventurer 14, economy 146, taming 4), 0 unknown. 106 categor(ies) loaded.
+spoken since boot: 3 (0 repl(ies)). Last load 06:29:43Z
+```
+
+`Bots.Speech` — the last chat probe. Separate from `Bots.Chat` for the same reason `Bots.Party` is
+separate from `Bots.Smoke`: it lands seconds later, and folding an asynchronous result into a
+synchronous one means reporting something that has not happened yet.
+
 The population line carries the recovery counts too:
 
 ```
@@ -484,19 +648,23 @@ lingers and then departs again of its own accord, so "still walking" is the *nor
 
 ## Known simplifications
 
-1. **No behaviour.** `IdleBehavior.Tick` is empty and nothing calls it — there is no tick manager,
-   because with one behaviour there would be nothing for it to do.
-2. **`PlayerBotBehavior` is a stub of the upstream contract.** The speech scheduling, chat
-   categories, cooldowns and timed-visit machinery are not ported; the members that are here keep
-   their upstream shapes so the speech layer drops onto this rather than replacing it.
-3. **The behaviour name is serialized but not restored.** There is no registry to construct a brain
+1. **The behaviour name is serialized but not restored.** There is no registry to construct a brain
    from a string yet, and a bot is deleted on load regardless.
-4. **`Personality` is rolled and persisted but nothing reads it.** It belongs to the lifecycle
-   session; it is rolled now because it is part of the character and the save format is easier to
-   get right before there is anything to migrate.
-5. **Every class is rollable, including the six artisan and gatherer classes** whose station and
+2. **Every class is rollable, including the six artisan and gatherer classes** whose station and
    starter kit are severed (seams 1 and 3). They are fully dressed and skilled; they just have
    nothing they have made yet, which is true of one that has not worked a shift.
+3. **A bot only ever talks to the room.** It has no memory of a conversation, so it cannot be
+   asked a follow-up: the second question gets another line from the same pool, not an answer to
+   the first. That is deliberately upstream's shape too — these are passers-by, not quest NPCs.
+
+Retired by later sessions, listed so a reader of an older diff is not misled:
+
+- *"No behaviour — `IdleBehavior.Tick` is empty and nothing calls it."* `BotTickManager` has called
+  it since session 2, and session 4 gave `IdleBehavior` a `Tick` body of its own.
+- *"`Personality` is rolled and persisted but nothing reads it."* The session-3 lifecycle roller
+  reads it on every phase expiry.
+- *"`PlayerBotBehavior` is a stub of the upstream contract — the speech scheduling, chat categories
+  and cooldowns are not ported."* Session 4 ported them, onto the shapes that were left for them.
 
 ## Reference
 

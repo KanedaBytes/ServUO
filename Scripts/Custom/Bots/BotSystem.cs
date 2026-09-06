@@ -50,6 +50,12 @@ namespace Server.Custom
         [CallPriority(120)]
         public static void Configure()
         {
+            // The chat corpus is plain text on disk, not a bound config, so it has no failure
+            // contract to honour and nothing depends on it being loaded first. It is read here
+            // rather than in Initialize only so that a bot spawned by anything early already has
+            // a voice. Its own failure is reported through Bots.Chat.
+            ChatLibrary.Load();
+
             string error;
 
             if (!TryLoad(out error))
@@ -63,6 +69,7 @@ namespace Server.Custom
         public static void Initialize()
         {
             HealthCheck.Register("Bots.Population", BuildHealthResult);
+            HealthCheck.Register("Bots.Chat", ChatLibrary.BuildHealthResult);
 
             BotTickManager.Initialize();
 
@@ -114,13 +121,22 @@ namespace Server.Custom
 
         public static bool TryReload(out string error, out IList<string> errors)
         {
+            // The corpus reloads either way. It is independent of bots.json - a bad edit to one
+            // has nothing to do with the other - and re-reading it is the whole point of running
+            // [BotsReload after editing a .txt.
+            ChatLibrary.Load();
+
             if (!TryLoad(out error, out errors))
             {
                 Log.Error("Bot config NOT reloaded: {0}", error);
                 return false;
             }
 
-            Log.Info("Bot config reloaded. {0}", _caps.Describe());
+            Log.Info(
+                "Bot config reloaded. {0}. Chat corpus: {1} line(s) across {2} categor(ies).",
+                _caps.Describe(),
+                ChatLibrary.WiredLines,
+                ChatLibrary.CategoryCount);
 
             return true;
         }
