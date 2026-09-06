@@ -376,6 +376,13 @@ Three things the real data does that the format does not:
 None of these stop a file being read. `parse` reports them as findings rather than throwing, because
 a reader that refused the file would just mean nobody could be shown the problem.
 
+### The panel never sees `<Objects2>`
+
+The bridge sends each spawner an `entries` list of `{type, max}` and rebuilds the string on save.
+That is deliberate: the grammar below has no escaping and two of its rules fail silently, so a
+second copy of it in the browser would be a second thing to get wrong. The panel adds, removes and
+recounts entries; an entry whose type and count did not change keeps its original source text.
+
 ### `<Objects2>` has no escaping at all
 
 `GGBaker:MX=1:SB=0:…`, entries joined by the literal `:OBJ=`. No quoting, no backslash, no encoding
@@ -385,6 +392,26 @@ any other key token is misparsed, because `GetParm` searches the entire entry. S
 would vanish is refused before it is written, naming the token that would have done it.
 
 `SpawnObject.Disabled` is not serialized to XML at all, so the editor cannot see or set it.
+
+## Labels, measured
+
+The thresholds are not guesses. At the default Britain view the old ones made **206 labels eligible
+and 39 fit** — collision then culled 81% in a priority order no viewer can perceive, which is what
+"the map is anonymous" actually described. Lowering thresholds makes that worse by adding
+competitors; the fix is to let fewer things compete at each zoom.
+
+| layer | was | now | why |
+| --- | --- | --- | --- |
+| nav zones, restricted | 0.10 | **0.08** | six of them, and they are the frame |
+| destinations | 0.35 | **0.25** | 27 landmarks — the names worth reading at town scale |
+| daily life | 0.50 | **hover/selection** | a marker sits *on* the destination it names |
+| waypoints | 0.60 | **3.0** | 75 ids, interesting when you are editing the graph |
+| arrivals | 1.20 | **6.0** | four and five deep around one destination |
+| GG spawners | — | **1.0** | few, and named |
+| stock spawners | — | **hover only** | 2,572 names is the thing being avoided |
+
+At the default view that goes from 39 of 206 to **27 of 33**, and what survives is zones and
+destination names rather than an arbitrary fifth of everything. A test pins it.
 
 ## The request channel
 

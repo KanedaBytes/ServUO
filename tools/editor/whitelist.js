@@ -43,7 +43,9 @@ const FILES = {
     dailyLife: path.join(REPO_ROOT, 'Data', 'Custom', 'britain-daily-life.json'),
     restrictedZones: path.join(REPO_ROOT, 'Data', 'Custom', 'restricted-zones.json'),
     entities: path.join(REPO_ROOT, 'Data', 'Live', 'entities.json'),
-    health: path.join(REPO_ROOT, 'Data', 'Live', 'health.json')
+    health: path.join(REPO_ROOT, 'Data', 'Live', 'health.json'),
+    spawnerState: path.join(REPO_ROOT, 'Data', 'Live', 'spawners.json'),
+    navAudit: path.join(REPO_ROOT, 'Data', 'Live', 'nav-audit.json')
 };
 
 /**

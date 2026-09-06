@@ -232,6 +232,32 @@ of these, the dependent system breaks quietly.** Re-verify each after every upst
 - **There is no `<Z>` element in the spawn XML** — `CentreZ` is the spawner's own Z
   (`XmlSpawner2.cs:6683`), and `<Range>` is `HomeRange`.
 
+#### Upstream data defect: 47 Khaldun spawners exist twice (found in 5c, NOT yet fixed)
+
+`Spawns/trammel.xml` contains 47 `<Points>` blocks for Khaldun spawners **on Felucca**, with their
+`<UniqueId>` **commented out** — `<!--guid-->` sitting exactly where the element belongs. The same
+47 `(name, map, tile)` are in `Spawns/felucca.xml` with `<UniqueId>` intact, and **the commented
+GUIDs are byte-identical to felucca.xml's**.
+
+`[XmlLoad` replaces by `<UniqueId>`, and a row without one takes a freshly generated GUID
+(`XmlSpawner2.cs:6182-6186`) — so those rows are **added** on every load rather than replaced. Each
+file contributes one copy: the world holds 94 where 47 spawn points exist, confirmed by counting
+every world spawner by name and tile (`Data/Live/spawners.json`).
+
+Whoever commented them out was stopping two files fighting over the same records by GUID. The
+effect is the opposite.
+
+**Do not "fix" this by restoring the GUIDs.** That would make `trammel.xml`'s rows replace
+`felucca.xml`'s — the right count, but two files permanently claiming the same records with
+last-load-wins. The fix is to **delete the 47 rows from `trammel.xml`**, which has no business
+holding Felucca content. That is an upstream-file edit and needs its own entry above when it is
+made — and it is more than a file edit, because the world already holds the 47 extra spawners and
+removing those is a separate decision.
+
+Sixteen further blocks in the same file carry `<MinDelay>` twice and no `<MaxDelay>`, which
+`DataSet` schema inference may well turn into every trammel spawner loading with default delays.
+Unverified; `spawnxml.js` reports both defects and neither is acted on.
+
 ### Spawners
 
 - `[XmlLoad` recurses directories and treats `<UniqueId>` as identity, so re-importing

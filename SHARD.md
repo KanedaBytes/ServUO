@@ -98,7 +98,7 @@ Ported from the ModernUO shard, in this order:
 | 4b | Britain daily life (day cycle, tavern, watch, townsfolk, shops) | **done** |
 | 5a | Map export + editor bridge, read-only layers | **done** |
 | 5b | Editing through the bridge | **done** |
-| 5c | Spawners in the editor | pending |
+| 5c | Spawners in the editor | **done** |
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
 
@@ -253,7 +253,13 @@ reloads **one file** - `spawn-reload`, which unloads from the `.bak` and loads t
 than `[GG_Reimport`, which deletes every `GG_` spawner in the world along with its spawned mobiles.
 `Data/Live/spawners.json` carries what each spawner is actually doing: running, current count, next
 spawn, its source file, and whether the vendor migration switched it off. Written on a slow timer
-and immediately after any spawner reload.
+and immediately after any spawner reload. It also counts every spawner in the world by name and
+tile, which is how a spawn point that exists twice becomes visible - see the note in
+`Scripts/Custom/MODIFICATIONS.md` about the 47 Khaldun rows.
+
+The sidebar's **Audit** button runs `[NavAudit` and draws what it could not path; **Resync all
+spawns** runs `[GG_Reimport` behind a confirmation, because that one deletes every `GG_` spawner in
+the world along with its spawned mobiles.
 
 See `tools/editor/README.md` for the save contract, the two tiers of validation failure - a dangling
 edge id is a warning here, not a rejection - and what is still to bring back from the ModernUO

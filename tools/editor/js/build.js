@@ -109,10 +109,45 @@ export function buildShape(key, props, map, draft, context = {}) {
                 fields: [{ key: 'name', label: 'Name', type: 'string' }]
             };
 
+        case 'spawner': {
+            // The file is part of the identity, because the spawner family is many files and a save
+            // is scoped to one of them. The GUID is minted here rather than by the shard: <UniqueId>
+            // is what [XmlLoad replaces on, and a row without one is ADDED with a fresh GUID on
+            // every load instead - which is exactly how 47 stock spawners came to exist twice.
+            const id = context.uniqueId;
+
+            return {
+                ...common, id: `spawner:${props.file}#${id}`, kind: 'point', label: props.Name,
+                map, points: [[point[0], point[1], point[2] === undefined ? 0 : point[2]]],
+                props: {
+                    Name: props.Name,
+                    UniqueId: id,
+                    Map: map,
+                    Range: props.Range || '0',
+                    MaxCount: props.MaxCount || '1',
+                    MinDelay: props.MinDelay || '5',
+                    MaxDelay: props.MaxDelay || '10',
+                    IsRunning: 'True'
+                },
+                entries: [{ type: props.Objects2, max: props.MaxCount || '1' }],
+                fields: SPAWNER_FIELDS
+            };
+        }
+
         default:
             return null;
     }
 }
+
+/** Mirrors spawners.js FIELDS; editor.test.js asserts the two agree. */
+const SPAWNER_FIELDS = [
+    { key: 'Name', label: 'Name', type: 'string' },
+    { key: 'MaxCount', label: 'Max at once', type: 'int' },
+    { key: 'Range', label: 'Home range', type: 'int' },
+    { key: 'MinDelay', label: 'Min delay (minutes)', type: 'int' },
+    { key: 'MaxDelay', label: 'Max delay (minutes)', type: 'int' },
+    { key: 'IsRunning', label: 'Running (True/False)', type: 'string' }
+];
 
 const LAYER_FOR = {
     waypoint: 'nav',
@@ -121,5 +156,6 @@ const LAYER_FOR = {
     edge: 'nav-edges',
     route: 'nav-routes',
     navzone: 'nav-zones',
-    restricted: 'restricted'
+    restricted: 'restricted',
+    spawner: 'spawners'
 };

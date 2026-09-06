@@ -27,22 +27,25 @@ export const LAYERS = {
         labelAt: Infinity, labelPriority: 0
     },
     nav: {
+        // 75 waypoint ids. Interesting when you are editing the graph, which is close in.
         label: 'Nav waypoints', color: '#7bd88f', file: 'navigation', reload: 'nav-reload',
-        labelAt: 0.6, labelPriority: 3
+        labelAt: 3.0, labelPriority: 3
     },
     'nav-destinations': {
+        // The landmarks, and the names actually worth reading at town scale.
         label: 'Destinations', color: '#ffd479', file: 'navigation', reload: 'nav-reload',
-        labelAt: 0.35, labelPriority: 5
+        labelAt: 0.25, labelPriority: 5
     },
     'nav-arrivals': {
-        // Arrivals cluster four and five deep around one destination, so their labels are hover-only
-        // until you are zoomed far enough in for them to be individually meaningful.
+        // Four and five deep around one destination, so hover or selection only until you are
+        // zoomed far enough in for them to be individually meaningful.
         label: 'Arrival points', color: '#c792ea', file: 'navigation', reload: 'nav-reload',
-        labelAt: 1.2, labelPriority: 1
+        labelAt: 6.0, labelPriority: 1
     },
     'nav-zones': {
+        // Six of them, and they are the frame - readable even fitting the whole facet.
         label: 'Nav zones', color: '#5b8db8', file: 'navigation', reload: 'nav-reload',
-        labelAt: 0.1, labelPriority: 4
+        labelAt: 0.08, labelPriority: 4
     },
     'nav-routes': {
         // A polyline is identifiable from its shape; ten of them labelled at once buries the town.
@@ -50,15 +53,35 @@ export const LAYERS = {
         labelAt: Infinity, labelPriority: 2
     },
     dailylife: {
+        // Hover or selection only: a daily-life marker sits ON the destination it names, so its
+        // label collides with that destination's by construction.
         label: 'Daily life', color: '#6fb3ff', file: 'dailyLife', reload: 'dailylife-reload',
-        labelAt: 0.5, labelPriority: 3
+        labelAt: Infinity, labelPriority: 3
     },
     restricted: {
         label: 'Restricted zones', color: '#ff7a6b', file: 'restrictedZones', reload: 'zones-reload',
-        labelAt: 0.1, labelPriority: 4
+        labelAt: 0.08, labelPriority: 4
+    },
+    spawners: {
+        // Few, and named. `file` is null because the family is many files: which one a spawner
+        // belongs to is carried in its own id, and fileOf reads it from there.
+        label: 'GG spawners', color: '#ff6fd8', file: null, reload: 'spawn-reload',
+        labelAt: 1.0, labelPriority: 4
+    },
+    'spawners-stock': {
+        // 2,572 on Trammel alone, loaded by viewport and never written. Labels on hover only -
+        // they are context, and 2,572 names in the label pass is the thing being avoided.
+        label: 'Stock spawners', color: '#8a7f9c', file: null, reload: null,
+        labelAt: Infinity, labelPriority: 0
     },
     entities: { label: 'Live entities', color: '#ffffff', file: null, reload: null }
 };
+
+/** Layers the editor draws but never writes. */
+export const READ_ONLY_LAYERS = new Set(['spawners-stock', 'entities']);
+
+/** Layers whose shapes come from /api/spawners rather than /api/shapes. */
+export const SPAWNER_LAYERS = new Set(['spawners', 'spawners-stock']);
 
 // Edges are drawn first and everything else on top - there are more of them than anything else
 // and they are the least interesting thing on the map when you are looking at a waypoint.
@@ -151,6 +174,22 @@ function drawLabels(ctx, view, drawn, selected, hovered, matches) {
 }
 
 /**
+ * Edges the last audit could not path, keyed `from>to`.
+ *
+ * Module-level rather than threaded through draw(), following coverage.js: it is a derived overlay
+ * that changes rarely and is read on every frame, and the alternative is a parameter on four
+ * functions that only one of them uses.
+ */
+let audited = new Set();
+
+export function setAuditFlags(problems) {
+    audited = new Set(
+        (problems || [])
+            .filter((problem) => problem.blocked)
+            .flatMap((problem) => [`${problem.from}>${problem.to}`, `${problem.to}>${problem.from}`]));
+}
+
+/**
  * A walk edge's colour by how close it is to the hop cap, or null for everything else.
  *
  * Chebyshev, because that is what the shard measures with and what the pathfinder walks in. A gate
@@ -163,6 +202,13 @@ function hopColor(shape) {
 
     if (shape.props && shape.props.kind === 'gate') {
         return null;
+    }
+
+    // An edge the audit could not walk is red regardless of length. Length is a proxy the editor
+    // can compute; walkability is a fact only the engine's own pathfinder knows, so when it has
+    // spoken it wins.
+    if (audited.size > 0 && shape.props && audited.has(`${shape.props.from}>${shape.props.to}`)) {
+        return 'rgba(255, 40, 40, 1)';
     }
 
     const [a, b] = shape.points;

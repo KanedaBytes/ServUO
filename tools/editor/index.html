@@ -54,6 +54,10 @@
                 <button id="live-on" type="button">Live on</button>
                 <button id="live-off" type="button">Live off</button>
             </div>
+            <div class="buttons">
+                <button id="run-audit" type="button" title="Pathfind every walk edge against the real map">Audit</button>
+                <button id="resync-spawns" type="button" title="Delete and re-import every GG spawner">Resync all spawns</button>
+            </div>
             <p id="live-status" class="muted">live: off</p>
         </section>
 
@@ -136,6 +140,8 @@
 <datalist id="destination-list"></datalist>
 <datalist id="route-list"></datalist>
 <datalist id="navid-list"></datalist>
+<datalist id="spawnfile-list"></datalist>
+<datalist id="creature-list"></datalist>
 
 <script type="module" src="js/app.js"></script>
 </body>

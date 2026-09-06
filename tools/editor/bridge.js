@@ -344,6 +344,18 @@ const ROUTES = {
         sendJson(response, 200, { ...live, running: true });
     },
 
+    /** The last [NavAudit, as records rather than prose, so the editor can draw it. */
+    '/api/audit': (request, response) => {
+        sendJson(response, 200, readJson(whitelist.FILES.navAudit) || { utc: null, problems: [] });
+    },
+
+    /** What the spawners are actually doing, as opposed to what the files say. */
+    '/api/spawner-state': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.spawnerState)
+            || { sequence: 0, utc: null, total: 0, duplicateGroups: 0, duplicates: [], spawners: [] });
+    },
+
     '/api/health': (request, response) => {
         const health = readJson(whitelist.FILES.health);
 

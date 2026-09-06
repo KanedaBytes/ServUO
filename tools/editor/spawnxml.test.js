@@ -315,6 +315,30 @@ test('a new entry gets the writer defaults', () => {
         'GGBaker:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1');
 });
 
+test('a created spawner gets the spawn list the tool collected, not an empty one', () => {
+    // Found by creating one against the live shard: the create tool supplies `entries` and no
+    // Objects2 string, and createShape only read props.Objects2 - so the new spawner was written
+    // with `<Objects2 />`, which the shard reads as spawning nothing and then will not even start.
+    // The file looked fine; only the world said otherwise.
+    const spawners = require('./spawners.js');
+    const written = spawners.unproject(
+        'trammel/GG_OldMarta.xml',
+        read(path.join(REPO_ROOT, 'Spawns', 'Custom', 'trammel', 'GG_OldMarta.xml')),
+        {
+            creates: [{
+                id: 'spawner:trammel/GG_OldMarta.xml#11111111-2222-3333-4444-555555555555',
+                layer: 'spawners', kind: 'point', map: 'Trammel', label: 'GG_TestRat',
+                points: [[1470, 1650, 20]],
+                props: { Name: 'GG_TestRat', MaxCount: '2', IsRunning: 'True' },
+                entries: [{ type: 'Rat', max: '2' }]
+            }]
+        });
+
+    assert.match(written, /<Objects2>Rat:MX=2:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1<\/Objects2>/);
+    assert.doesNotMatch(written, /<Objects2 \/>/, 'the new spawner spawns nothing');
+    assert.match(written, /<IsRunning>True<\/IsRunning>/);
+});
+
 test('Objects2 anomalies in the stock data are reported rather than tolerated in silence', () => {
     // Two entries in trammel.xml repeat a key; one in underworld.xml stops three keys early. All
     // harmless to the shard, and invisible until something looks.

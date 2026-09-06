@@ -54,6 +54,11 @@ for (const name of ['GG_DailyLife.xml', 'GG_OldMarta.xml']) {
         full.slice(0, cut) + '</Spawns>', 'utf8');
 }
 
+/** How many lines a file has, without an escape sequence in the middle of an assertion. */
+function countLines(text) {
+    return text.split(String.fromCharCode(10)).length;
+}
+
 function nthIndex(text, needle, n) {
     let at = -1;
 
@@ -469,9 +474,8 @@ test('saving a spawn file writes a .bak and asks for that file by name, not the 
     assert.match(after, /<CentreY>1650<\/CentreY>/);
 
     // One field per line changed, and nothing else in the file moved.
-    assert.strictEqual(after.split('\n').length, before.split('\n').length);
-
-    // Per file, and the token says which - not gg-reimport, which would delete and respawn every
+    assert.strictEqual(after.split('\n').length, before.split('\n').length,
+        'editing a spawn list changed the shape of the file');
     // GG mobile in the world on every save.
     assert.deepStrictEqual(shard.seen.map((t) => t.name), ['spawn-reload']);
     assert.match(shard.seen[0].body, /^trammel\/GG_OldMarta\.xml #[0-9a-f]{8}$/);
@@ -506,17 +510,53 @@ test('a stock spawner shape is refused by name even when addressed at a writable
 
 test('a spawn entry the shard would silently drop is refused before it is written', async () => {
     // A type name containing ':MX=' makes XmlSpawner discard the whole entry, so the spawner just
-    // stops spawning with nothing said anywhere.
+    // stops spawning with nothing said anywhere. Both routes into a spawn list are checked: the
+    // panel's {type, max} list, and a raw Objects2 string on a shape that carries no entry list.
+    const { body: listed } = await call('GET', '/api/spawners');
+    const shape = listed.shapes.find((s) => s.id.includes('GG_OldMarta'));
+    const hash = listed.files[GG_KEY].hash;
+
+    const viaEntries = await call('POST', `/api/save/${GG_KEY}`, {
+        baseHash: hash,
+        updates: [{ ...shape, entries: [{ type: 'Bad:MX=9', max: '1' }] }]
+    });
+
+    assert.strictEqual(viaEntries.status, 400);
+    assert.match(viaEntries.body.error, /discard the whole entry/);
+
+    const { entries, ...noEntries } = shape;
+    const viaProps = await call('POST', `/api/save/${GG_KEY}`, {
+        baseHash: hash,
+        updates: [{ ...noEntries, props: { ...shape.props, Objects2: 'Bad:MX=1:MX=2' } }]
+    });
+
+    assert.strictEqual(viaProps.status, 400);
+    assert.match(viaProps.body.error, /does not have exactly one/);
+});
+
+test('the panel edits a spawn list without ever seeing the micro-format', async () => {
+    // The browser gets {type, max} and sends it back; the bridge owns the grammar. Editing a count
+    // must leave the other entries byte-identical, since they were not touched.
+    const before = fs.readFileSync(GG_FILE, 'utf8');
     const { body: listed } = await call('GET', '/api/spawners');
     const shape = listed.shapes.find((s) => s.id.includes('GG_OldMarta'));
 
-    const { status, body } = await call('POST', `/api/save/${GG_KEY}`, {
+    assert.deepStrictEqual(shape.entries, [{ type: 'OldMarta', max: '1' }]);
+
+    runShard(() => ({ ok: true, message: 'reloaded' }));
+
+    const { status } = await call('POST', `/api/save/${GG_KEY}`, {
         baseHash: listed.files[GG_KEY].hash,
-        updates: [{ ...shape, props: { ...shape.props, Objects2: 'Bad:MX=1:MX=2' } }]
+        updates: [{ ...shape, entries: [{ type: 'OldMarta', max: '3' }, { type: 'Fisherman', max: '2' }] }]
     });
 
-    assert.strictEqual(status, 400);
-    assert.match(body.error, /does not have exactly one/);
+    assert.strictEqual(status, 200);
+
+    const after = fs.readFileSync(GG_FILE, 'utf8');
+
+    assert.match(after, /<Objects2>OldMarta:MX=3:.*:OBJ=Fisherman:MX=2:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1<\/Objects2>/);
+    assert.strictEqual(countLines(after), countLines(before),
+        'editing a spawn list changed the shape of the file');
 });
 
 // ---- the two languages agree --------------------------------------------------------------------

@@ -25,6 +25,7 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags,
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
 } from './shapes.js';
 import * as coverage from './coverage.js';
@@ -36,6 +37,12 @@ import { liveStatusText } from './live.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
+
+// Stock spawners: how zoomed in you must be before they are worth fetching, how long a pan settles
+// before asking, and the grid the request box snaps to so revisits hit the same box.
+const STOCK_MIN_SCALE = 0.5;
+const STOCK_DEBOUNCE_MS = 250;
+const STOCK_GRID = 256;
 
 const $ = (id) => document.getElementById(id);
 
@@ -50,6 +57,16 @@ const state = {
 
     // The hash each file was loaded at, handed back on save so the bridge can refuse a stale write.
     hashes: {},
+
+    // Which stock box is on screen, and how much of the facet it is. The count says "N in view /
+    // 2,572 total" because a bare N would read as the whole world.
+    spawnerBox: null,
+    stockTotal: null,
+    stockInView: 0,
+    spawnFindings: [],
+
+    // The last [NavAudit result, drawn over the edges.
+    audit: null,
 
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
@@ -177,6 +194,11 @@ async function refreshShapes({ force = false } = {}) {
         return false;
     }
 
+    // The spawners come from their own endpoint, because the stock ones are fetched by viewport
+    // rather than in full. Awaited here so a refresh leaves one complete world rather than a nav
+    // map that grows spawners a moment later.
+    await refreshSpawners({ force: true });
+
     state.dirty.clear();
     state.created.clear();
     state.deleted.clear();
@@ -200,6 +222,102 @@ async function refreshShapes({ force = false } = {}) {
     requestRender();
 
     return true;
+}
+
+/**
+ * Loads the spawner layers, replacing what is on screen without disturbing an edit in progress.
+ *
+ * A pan refetches, so a spawner being dragged or renamed must survive it. Dirty and created shapes
+ * are kept and the incoming copy of them dropped - the same rule refreshShapes follows for the
+ * whole world, applied here per shape because a pan is not a refresh.
+ */
+async function refreshSpawners({ force = false } = {}) {
+    const bbox = stockBox();
+    const key = bbox ? `${bbox.x},${bbox.y},${bbox.width},${bbox.height}` : 'none';
+
+    if (!force && key === state.spawnerBox) {
+        return;
+    }
+
+    let response;
+
+    try {
+        response = await api.spawners(bbox);
+    } catch (error) {
+        setStatus(`Could not load spawners: ${error.message}`, 'error');
+        return;
+    }
+
+    state.spawnerBox = key;
+    state.stockTotal = response.total;
+    state.stockInView = response.shapes.filter((s) => s.layer === 'spawners-stock').length;
+
+    for (const [file, info] of Object.entries(response.files || {})) {
+        state.hashes[file] = info.hash;
+    }
+
+    const keep = new Set([...state.dirty.keys(), ...state.created.keys()]);
+
+    state.shapes = state.shapes
+        .filter((shape) => !SPAWNER_LAYERS.has(shape.layer) || keep.has(shape.id))
+        .concat(response.shapes.filter((shape) => !keep.has(shape.id)));
+
+    if ((response.findings || []).length > 0) {
+        state.spawnFindings = response.findings;
+    }
+
+    fillLists(state.shapes);
+    updateCounts();
+    requestRender();
+}
+
+/**
+ * The box to ask stock spawners for, or null when we are too far out to want them.
+ *
+ * PADDED BY A SCREEN in each direction, so a small pan lands inside what was already fetched and
+ * refetches nothing. Tile-ALIGNED, so panning back and forth across a boundary asks the same
+ * question twice rather than two nearly-identical ones - which is what makes the cache work at all.
+ *
+ * Below the zoom floor there is no box: 2,572 markers on a whole-facet view is a grey smear that
+ * costs a 4 MB parse to draw.
+ */
+function stockBox() {
+    if (!view.facet || view.scale < STOCK_MIN_SCALE) {
+        return null;
+    }
+
+    const wide = canvas.clientWidth / view.scale;
+    const high = canvas.clientHeight / view.scale;
+
+    const left = view.centerX - wide * 1.5;
+    const top = view.centerY - high * 1.5;
+
+    const snap = (n) => Math.floor(n / STOCK_GRID) * STOCK_GRID;
+
+    return {
+        x: snap(left),
+        y: snap(top),
+        width: snap(wide * 3) + STOCK_GRID,
+        height: snap(high * 3) + STOCK_GRID
+    };
+}
+
+let spawnerTimer = null;
+
+/** Debounced, because a pan is a hundred mousemove events and none of them is the one that matters. */
+function requestSpawners() {
+    if (!state.visible.has('spawners-stock')) {
+        return;
+    }
+
+    if (spawnerTimer) {
+        clearTimeout(spawnerTimer);
+    }
+
+    spawnerTimer = setTimeout(() => {
+        spawnerTimer = null;
+        refreshSpawners();
+    }, STOCK_DEBOUNCE_MS);
 }
 
 function computeCoverage() {
@@ -259,6 +377,17 @@ function buildLayerList() {
                 updateCounts();
                 requestRender();
             }));
+    }
+
+    // Turning the stock layer on is the first time anyone wants it, so that is when it is fetched.
+    const stockRow = dom.layers.querySelector('#layer-spawners-stock');
+
+    if (stockRow) {
+        stockRow.addEventListener('change', () => {
+            if (stockRow.checked) {
+                refreshSpawners({ force: true });
+            }
+        });
     }
 
     dom.layers.appendChild(layerRow('coverage', 'Coverage gaps', '#ff2800', false, (on) => {
@@ -327,6 +456,15 @@ function updateCounts() {
 
         if (layer === 'entities') {
             element.textContent = String(state.entities.length);
+            continue;
+        }
+
+        // Never a bare number: 68 markers out of 2,572 looks like the whole world otherwise, and
+        // the whole point of the viewport fetch is that it is not.
+        if (layer === 'spawners-stock') {
+            element.textContent = state.stockTotal === null
+                ? (view.scale < STOCK_MIN_SCALE ? 'zoom in' : '-')
+                : `${state.stockInView} / ${state.stockTotal}`;
             continue;
         }
 
@@ -498,12 +636,29 @@ function render() {
 
 // --- selection and properties ---------------------------------------------------------------------
 
-/** Everything except the derived daily-life markers, whose coordinates live in navigation.json. */
+/**
+ * Whether a shape can be edited at all.
+ *
+ * Two kinds cannot. The derived daily-life markers have their coordinates in navigation.json rather
+ * than their own file, and the stock spawners are somebody else's content - the editor writes
+ * Spawns/Custom and nothing else.
+ */
 function isWritable(shape) {
-    return !shape.id.startsWith('marker:');
+    return !shape.id.startsWith('marker:') && !READ_ONLY_LAYERS.has(shape.layer);
 }
 
+/**
+ * Which file a shape is saved to.
+ *
+ * A table lookup for everything with one file, and read off the id for spawners, whose family is
+ * many files. `spawner:trammel/GG_DailyLife.xml#<guid>` carries its own file, which is the same
+ * reason the id carries it at all: a save is scoped to one file and the shape has to say which.
+ */
 function fileOf(shape) {
+    if (shape.layer === 'spawners') {
+        return `spawn:${shape.id.slice('spawner:'.length, shape.id.lastIndexOf('#'))}`;
+    }
+
     return LAYERS[shape.layer] ? LAYERS[shape.layer].file : null;
 }
 
@@ -558,6 +713,98 @@ function showProperties(shape) {
     for (const field of shape.fields || []) {
         dom.properties.append(editableField(shape, field));
     }
+
+    if (shape.entries) {
+        dom.properties.append(entryEditor(shape));
+    }
+}
+
+/**
+ * What a spawner spawns: a list of type and count.
+ *
+ * The panel never sees the <Objects2> micro-format. It has no escaping at all and two of its rules
+ * fail silently on the shard - a type name containing `:MX=` makes the reader discard the whole
+ * entry - so the grammar lives in one place, on the bridge, and this edits a plain list.
+ */
+function entryEditor(shape) {
+    const box = document.createElement('div');
+    const heading = document.createElement('span');
+
+    heading.className = 'muted';
+    heading.textContent = 'Spawns';
+    box.append(heading);
+
+    const editable = isWritable(shape);
+
+    shape.entries.forEach((entry, index) => {
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const type = document.createElement('input');
+        type.value = entry.type;
+        type.readOnly = !editable;
+        type.setAttribute('list', 'creature-list');
+
+        const max = document.createElement('input');
+        max.value = entry.max;
+        max.readOnly = !editable;
+        max.style.maxWidth = '4em';
+
+        if (editable) {
+            const commit = () => {
+                const before = shape.entries.map((e) => ({ ...e }));
+
+                shape.entries[index] = { type: type.value.trim(), max: max.value.trim() || '1' };
+                pushOp({ op: 'entries', shapeId: shape.id, before, after: shape.entries.map((e) => ({ ...e })) });
+                markDirty(shape);
+                showProperties(shape);
+            };
+
+            type.addEventListener('change', commit);
+            max.addEventListener('change', commit);
+        }
+
+        row.append(type, max);
+
+        if (editable) {
+            const remove = document.createElement('button');
+
+            remove.type = 'button';
+            remove.textContent = '−';
+            remove.title = 'Remove this entry';
+            remove.addEventListener('click', () => {
+                const before = shape.entries.map((e) => ({ ...e }));
+
+                shape.entries.splice(index, 1);
+                pushOp({ op: 'entries', shapeId: shape.id, before, after: shape.entries.map((e) => ({ ...e })) });
+                markDirty(shape);
+                showProperties(shape);
+            });
+
+            row.append(remove);
+        }
+
+        box.append(row);
+    });
+
+    if (editable) {
+        const add = document.createElement('button');
+
+        add.type = 'button';
+        add.textContent = 'Add a spawn entry';
+        add.addEventListener('click', () => {
+            const before = shape.entries.map((e) => ({ ...e }));
+
+            shape.entries.push({ type: '', max: '1' });
+            pushOp({ op: 'entries', shapeId: shape.id, before, after: shape.entries.map((e) => ({ ...e })) });
+            markDirty(shape);
+            showProperties(shape);
+        });
+
+        box.append(add);
+    }
+
+    return box;
 }
 
 function readonlyRow(pairs) {
@@ -667,6 +914,11 @@ function applyStep(step, direction) {
 
     if (step.op === 'props') {
         Object.assign(shapeById(step.shapeId), { props: { ...value } });
+        return;
+    }
+
+    if (step.op === 'entries') {
+        shapeById(step.shapeId).entries = value.map((entry) => ({ ...entry }));
         return;
     }
 
@@ -926,7 +1178,11 @@ async function completeTool() {
     const shape = buildShape(tool.key, props, map, draft, {
         ownerId,
         ids: state.tool.ids,
-        arrivalIndex: state.shapes.filter((s) => s.id.startsWith(`arr:${ownerId}#`)).length
+        arrivalIndex: state.shapes.filter((s) => s.id.startsWith(`arr:${ownerId}#`)).length,
+        // A spawner without a <UniqueId> is ADDED with a fresh GUID on every import rather than
+        // replaced, which is how 47 stock spawners came to exist twice in this world. Every
+        // spawner this editor creates gets one at birth.
+        uniqueId: crypto.randomUUID()
     });
 
     cancelTool();
@@ -1081,6 +1337,7 @@ function wireInput() {
             drag.lastX = event.clientX;
             drag.lastY = event.clientY;
             requestRender();
+            requestSpawners();
             return;
         }
 
@@ -1159,6 +1416,7 @@ function wireInput() {
         event.preventDefault();
         view.zoomAt(event.offsetX, event.offsetY, event.deltaY < 0 ? 1.2 : 1 / 1.2);
         requestRender();
+        requestSpawners();
     }, { passive: false });
 
     canvas.addEventListener('contextmenu', (event) => {
@@ -1318,6 +1576,9 @@ function wireInput() {
             hideMenu();
         }
     });
+
+    wireAudit();
+    wireResync();
 
     wireRequest('reload-nav', 'nav-reload', '', 'Navigation reloaded');
     wireRequest('reload-dailylife', 'dailylife-reload', '', 'Daily life reloaded');
@@ -1659,6 +1920,118 @@ function hideBannerIfClean() {
 }
 
 // --- the shard buttons ---------------------------------------------------------------------------
+
+/**
+ * Runs [NavAudit and draws what it found.
+ *
+ * The audit pathfinds every walk edge with the engine's own MovementPath against real map data, so
+ * it is the only thing here that knows whether a hop is actually walkable rather than merely short.
+ * The ack carries the summary; the structured findings come from nav-audit.json, because the ack's
+ * arrays are capped and a formatted line cannot be drawn as a layer.
+ */
+function wireAudit() {
+    const button = $('run-audit');
+
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        setStatus('Auditing every walk edge against the map...', 'ok');
+
+        try {
+            const dropped = await api.request('nav-audit', '');
+            const ack = await api.awaitAck('nav-audit', { nonce: dropped.nonce, timeoutMs: 60000 });
+
+            state.audit = await api.audit();
+            setAuditFlags(state.audit.problems);
+
+            setStatus(ack.message, state.audit.problems.length > 0 ? 'error' : 'ok');
+
+            if (state.audit.problems.length > 0) {
+                showBanner(
+                    `${ack.message}
+
+`
+                    + state.audit.problems.slice(0, 12)
+                        .map((p) => `• ${p.blocked ? 'BLOCKED' : 'over cap'} ${p.from} -> ${p.to}`
+                            + ` (${p.distance} tiles)`)
+                        .join('
+')
+                    + '
+
+A waypoint at a closed door is a false positive. Verify before editing.',
+                    'warn');
+            } else {
+                hideBanner();
+            }
+
+            updateCounts();
+            requestRender();
+        } catch (error) {
+            setStatus(`Audit failed: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
+
+/**
+ * Re-imports every GG spawn file.
+ *
+ * Behind a confirmation because it is the disruptive one: it deletes every GG_ spawner in the world
+ * and re-imports the tree, and deleting an XmlSpawner deletes its spawned mobiles with it. A save
+ * does not do this - it reloads one file - so this is for when the world and the files have drifted
+ * apart, not for ordinary editing.
+ */
+function wireResync() {
+    const button = $('resync-spawns');
+
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener('click', async () => {
+        const values = await askFor({
+            title: 'Resync all spawns?',
+            submit: 'Resync',
+            fields: [{
+                key: 'confirm',
+                label: 'This deletes every GG_ spawner in the world and re-imports every file, so '
+                    + 'the shopkeepers and Old Marta all vanish and come back. Type RESYNC.',
+                required: true
+            }]
+        });
+
+        if (!values || values.confirm.trim().toUpperCase() !== 'RESYNC') {
+            setStatus('Resync cancelled.', 'ok');
+            return;
+        }
+
+        button.disabled = true;
+        setStatus('Resyncing every spawn file...', 'ok');
+
+        try {
+            const dropped = await api.request('gg-reimport', '');
+            const ack = await api.awaitAck('gg-reimport', { nonce: dropped.nonce, timeoutMs: 30000 });
+
+            setStatus(ack.ok ? ack.message : `Resync failed: ${ack.message}`, ack.ok ? 'ok' : 'error');
+
+            if (!ack.ok) {
+                showBanner(`The shard refused the resync and changed nothing:
+
+${ack.message}`, 'warn');
+            }
+
+            await refreshSpawners({ force: true });
+        } catch (error) {
+            setStatus(`Resync failed: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
 
 /**
  * Wires a button to a request token.

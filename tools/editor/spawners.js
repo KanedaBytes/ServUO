@@ -116,8 +116,20 @@ function projectGG(file, block, index) {
         label: name || 'Spawner',
         points: [at],
         props,
+        // What it spawns, already parsed. THE BROWSER NEVER SEES THE MICRO-FORMAT: <Objects2> has
+        // no escaping at all and two rules in it fail silently on the shard, so a second copy of
+        // the grammar in the editor would be a second thing to get wrong. The panel edits a list of
+        // {type, max} and unproject turns it back into a string here, where the rules already live.
+        entries: entriesOf(block),
         fields: FIELDS
     };
+}
+
+function entriesOf(block) {
+    return objects2.parse(xml.get(block, 'Objects2') || '').map((entry) => ({
+        type: entry.type,
+        max: entry.MX === undefined ? '1' : entry.MX
+    }));
 }
 
 function projectStock(file, block, index, bbox) {
@@ -146,6 +158,7 @@ function projectStock(file, block, index, bbox) {
             MaxCount: xml.get(block, 'MaxCount'),
             Objects2: xml.get(block, 'Objects2')
         },
+        entries: list.map((entry) => ({ type: entry.type, max: entry.MX === undefined ? '1' : entry.MX })),
         fields: []
     };
 }
@@ -222,6 +235,10 @@ function locate(doc, relative, shapeId) {
 }
 
 function applyShape(block, shape) {
+    if (shape.entries) {
+        xml.set(block, 'Objects2', renderEntries(xml.get(block, 'Objects2'), shape.entries));
+    }
+
     if (shape.points && shape.points.length === 1) {
         const [x, y, z] = shape.points[0];
 
@@ -243,6 +260,13 @@ function applyShape(block, shape) {
             continue;
         }
 
+        // `entries` wins over `props.Objects2`. Both describe the spawn list and the panel edits
+        // the former, so letting props through here would write the string back exactly as it was
+        // and silently undo the edit.
+        if (key === 'Objects2' && shape.entries) {
+            continue;
+        }
+
         if (!xml.COLUMNS.includes(key)) {
             throw new Error(`A spawner has no field '${key}'`);
         }
@@ -253,6 +277,36 @@ function applyShape(block, shape) {
 
         xml.set(block, key, value);
     }
+}
+
+/**
+ * A {type, max} list back into an <Objects2> string.
+ *
+ * An entry whose type and count are unchanged keeps its ORIGINAL source text, matched by position
+ * against what was there. That is what lets a spawner whose delays were edited keep a spawn list
+ * written in some form this module would not have chosen - the same discipline as everywhere else
+ * here: only what changed gets rewritten.
+ */
+function renderEntries(current, entries) {
+    const before = objects2.parse(current || '');
+
+    const rebuilt = entries.map((entry, index) => {
+        const was = before[index];
+
+        if (was && was.type === entry.type && String(was.MX) === String(entry.max)) {
+            return was;
+        }
+
+        const reason = objects2.checkType(entry.type);
+
+        if (reason) {
+            throw new Error(reason);
+        }
+
+        return { ...objects2.makeEntry(entry.type), MX: String(entry.max) };
+    });
+
+    return objects2.stringify(rebuilt);
 }
 
 /** Refuses a spawn list the shard would silently drop or misread. See objects2.js. */
@@ -284,7 +338,15 @@ function createShape(doc, relative, shape) {
     const [x, y, z] = shape.points[0];
     const props = shape.props || {};
 
-    checkSpawnList(props.Objects2);
+    // `entries` wins over `props.Objects2`, exactly as it does on an update. The create tool
+    // supplies the entry list and no Objects2 string at all, and without this the new spawner is
+    // written with `<Objects2 />` - which the shard reads as a spawner that spawns nothing, and
+    // then will not even start.
+    const list = shape.entries
+        ? renderEntries('', shape.entries)
+        : (props.Objects2 === undefined ? '' : props.Objects2);
+
+    checkSpawnList(list);
 
     // Every field the shard's writer always emits, so a created spawner is indistinguishable from
     // one [XmlSave produced. The reader defaults all of them, but a file whose rows disagree about
@@ -310,7 +372,7 @@ function createShape(doc, relative, shape) {
         ['Team', 0], ['Amount', 1], ['IsGroup', false],
         ['IsRunning', props.IsRunning === undefined ? true : props.IsRunning],
         ['IsHomeRangeRelative', false],
-        ['Objects2', props.Objects2 === undefined ? '' : props.Objects2]
+        ['Objects2', list]
     ];
 
     xml.push(doc, xml.makeBlock(pairs, doc.newline));

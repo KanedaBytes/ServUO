@@ -41,7 +41,22 @@ async function request(method, path, body) {
 export const api = {
     status: () => request('GET', '/api/status'),
     shapes: () => request('GET', '/api/shapes'),
+
+    /**
+     * The spawner layers.
+     *
+     * The GG files always come back in full. The stock ones come back only for a bbox, because
+     * there are 2,572 on Trammel alone and putting them all in the shape list would grow it tenfold
+     * and swamp the label pass for no gain.
+     */
+    spawners: (bbox) => request(
+        'GET',
+        bbox
+            ? `/api/spawners?bbox=${bbox.x},${bbox.y},${bbox.width},${bbox.height}`
+            : '/api/spawners'),
     entities: () => request('GET', '/api/entities'),
+    audit: () => request('GET', '/api/audit'),
+    spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
 
     /**

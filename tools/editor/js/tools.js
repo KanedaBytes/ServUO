@@ -157,6 +157,26 @@ export const TOOLS = {
         hint: 'Drag a rectangle for the restricted zone. Esc cancels.',
         title: 'New restricted zone',
         fields: [{ key: 'name', label: 'Name', required: true }]
+    },
+
+    spawner: {
+        layer: 'spawners',
+        label: 'Spawner',
+        kind: 'point',
+        autoId: true,
+        hint: 'Click where the spawner goes. Esc cancels.',
+        title: 'New GG spawner',
+        fields: [
+            // The GG_ prefix is not decoration: [XmlLoad and [XmlUnLoad filter on it with an
+            // ordinal StartsWith, and it is what makes this shard's spawners addressable as a set.
+            { key: 'Name', label: 'Name (must start with GG_)', required: true },
+            { key: 'file', label: 'File', required: true, list: 'spawnfile-list' },
+            { key: 'Objects2', label: 'Spawns (type name)', required: true, list: 'creature-list' },
+            { key: 'MaxCount', label: 'Max at once', value: '1' },
+            { key: 'Range', label: 'Home range', value: '0' },
+            { key: 'MinDelay', label: 'Min delay (minutes)', value: '5' },
+            { key: 'MaxDelay', label: 'Max delay (minutes)', value: '10' }
+        ]
     }
 };
 
@@ -257,6 +277,25 @@ export function fillLists(shapes) {
 
     // Anything a daily-life field may name: Nav.TryRoute takes either, and so does a shop or home.
     fill('navid-list', [...destinations, ...waypoints]);
+
+    // The spawn files that exist, so a new spawner picks one rather than inventing a path. Free
+    // text still works, which is how a brand-new file gets made.
+    fill('spawnfile-list', [...new Set(
+        shapes
+            .filter((shape) => shape.layer === 'spawners')
+            .map((shape) => shape.id.slice('spawner:'.length, shape.id.lastIndexOf('#')))
+    )]);
+
+    // Every type already spawning anywhere on the map, GG and stock alike. Read off `shape.entries`,
+    // which the bridge parsed - the <Objects2> grammar has no escaping and a second copy of it in
+    // the browser would be a second thing to get wrong. Not a validated list either: the shard
+    // resolves type names and this cannot. It beats typing one from memory.
+    fill('creature-list', [...new Set(
+        shapes
+            .flatMap((shape) => shape.entries || [])
+            .map((entry) => entry.type)
+            .filter((type) => type && !type.includes('/'))
+    )].sort());
 }
 
 function fill(id, values) {

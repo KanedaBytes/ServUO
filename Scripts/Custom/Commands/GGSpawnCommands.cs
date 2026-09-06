@@ -158,6 +158,10 @@ namespace Server.Custom
             // transition - and they were not there for the last one.
             DailyLifeCommands.Reconcile();
 
+            // Same reason the per-file path writes one: without it the editor's view of the world
+            // is up to a minute stale immediately after the one command that changed it most.
+            SpawnerSnapshot.Write();
+
             return true;
         }
 

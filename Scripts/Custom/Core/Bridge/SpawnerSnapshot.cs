@@ -36,6 +36,9 @@ namespace Server.Custom
 
         public const string OutputPath = "Data/Live/spawners.json";
 
+        /// <summary>Enough to see a pattern; the count beside it says how many there are.</summary>
+        private const int MaxDuplicates = 200;
+
         private static long _sequence;
         private static DateTime? _lastUtc;
         private static string _lastError;
@@ -92,17 +95,18 @@ namespace Server.Custom
             HashSet<string> migrated = MigratedNames();
 
             var builder = new StringBuilder(2048);
+            var detail = new StringBuilder(2048);
 
-            builder.Append("{\n");
-            builder.Append("  \"sequence\": ").Append(_sequence).Append(",\n");
-            builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
-            builder.Append("  \"spawners\": [\n");
+            // Name, map and tile, for every spawner in the world. Two at the same name and place
+            // are the same spawn point loaded twice - see the comment on the duplicates block.
+            var places = new Dictionary<string, int>(StringComparer.Ordinal);
 
+            int total = 0;
             bool first = true;
 
-            // One walk, collecting both sets: the GG spawners, and the stock ones the vendor
-            // migration switched off. The second set is what lets the editor draw a stock spawner
-            // as disabled rather than as missing.
+            // ONE walk, three jobs. World.Items is 183,000 entries and this shard reserves walking
+            // it for explicit commands (CLAUDE.md section 15), so the sixty-second timer earns its
+            // keep by doing everything it needs in a single pass rather than three.
             foreach (Item item in World.Items.Values)
             {
                 var spawner = item as XmlSpawner;
@@ -112,6 +116,16 @@ namespace Server.Custom
                     continue;
                 }
 
+                total++;
+
+                string place = Place(spawner);
+                int seen;
+
+                places[place] = places.TryGetValue(place, out seen) ? seen + 1 : 1;
+
+                // The detailed records stay scoped: the GG spawners, and the stock ones the vendor
+                // migration switched off. Writing all 6,800 every minute would be a 400 KB file
+                // rewritten for the sake of a handful of rows anyone looks at.
                 bool mine = spawner.Name.StartsWith(GGSpawnCommands.Prefix, StringComparison.Ordinal);
                 bool disabled = migrated.Contains(spawner.Name) && InMigratedRegion(spawner);
 
@@ -122,17 +136,83 @@ namespace Server.Custom
 
                 if (!first)
                 {
-                    builder.Append(",\n");
+                    detail.Append(",\n");
                 }
 
                 first = false;
 
-                AppendSpawner(builder, spawner, sources, disabled);
+                AppendSpawner(detail, spawner, sources, disabled);
             }
 
+            builder.Append("{\n");
+            builder.Append("  \"sequence\": ").Append(_sequence).Append(",\n");
+            builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
+            builder.Append("  \"total\": ").Append(total).Append(",\n");
+
+            AppendDuplicates(builder, places);
+
+            builder.Append("  \"spawners\": [\n");
+            builder.Append(detail);
             builder.Append("\n  ]\n}\n");
 
             return builder.ToString();
+        }
+
+        /// <summary>Name, facet and tile - the identity a spawn point has when its file gives it none.</summary>
+        private static string Place(XmlSpawner spawner)
+        {
+            return String.Concat(
+                spawner.Name, "|",
+                spawner.Map == null ? "" : spawner.Map.Name, "|",
+                spawner.Location.X.ToString(), ",", spawner.Location.Y.ToString());
+        }
+
+        /// <summary>
+        /// Spawn points that exist in the world more than once.
+        ///
+        /// This is here for a specific question. `[XmlLoad` replaces by `&lt;UniqueId&gt;`, and a row
+        /// without one takes a freshly generated GUID (XmlSpawner2.cs:6182-6186) - so it is ADDED on
+        /// every load rather than replaced. Ninety-one rows across Spawns/ have no UniqueId, and 47
+        /// of those are in trammel.xml with the element commented out rather than absent.
+        ///
+        /// Totals cannot answer whether that has already happened: the world holds 6,819 spawners
+        /// and which world-generation commands were run is not knowable after the fact. Name and
+        /// place can, per row, which is why this counts rather than sums.
+        ///
+        /// A duplicate here is not automatically a fault - two genuinely distinct spawn points can
+        /// share a name and a tile - so this reports and does not act.
+        /// </summary>
+        private static void AppendDuplicates(StringBuilder builder, Dictionary<string, int> places)
+        {
+            var repeated = new List<KeyValuePair<string, int>>();
+
+            foreach (KeyValuePair<string, int> entry in places)
+            {
+                if (entry.Value > 1)
+                {
+                    repeated.Add(entry);
+                }
+            }
+
+            repeated.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            builder.Append("  \"duplicateGroups\": ").Append(repeated.Count).Append(",\n");
+            builder.Append("  \"duplicates\": [");
+
+            int shown = Math.Min(repeated.Count, MaxDuplicates);
+
+            for (int i = 0; i < shown; i++)
+            {
+                string[] parts = repeated[i].Key.Split('|');
+
+                builder.Append(i == 0 ? "\n" : ",\n");
+                builder.Append("    {\"name\":").Append(Json.Quote(parts[0]));
+                builder.Append(",\"map\":").Append(Json.Quote(parts[1]));
+                builder.Append(",\"at\":").Append(Json.Quote(parts[2]));
+                builder.Append(",\"count\":").Append(repeated[i].Value).Append("}");
+            }
+
+            builder.Append(shown > 0 ? "\n  ],\n" : "],\n");
         }
 
         private static void AppendSpawner(

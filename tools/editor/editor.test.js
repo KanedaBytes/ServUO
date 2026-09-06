@@ -11,7 +11,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { FILES, WRITABLE } = require('./whitelist.js');
+const whitelist = require('./whitelist.js');
+const { FILES, WRITABLE, REPO_ROOT } = whitelist;
 const { project } = require('./project.js');
 
 let ids;
@@ -133,8 +134,21 @@ test('no tool creates a daily-life record, because adding one stays a JSON edit'
 
 test('every editable layer names the file it is saved to, and the request that reloads it', () => {
     for (const [name, layer] of Object.entries(shapes.LAYERS)) {
-        if (name === 'entities') {
-            assert.strictEqual(layer.file, null);
+        // Layers the editor draws but never writes carry no file and no reload.
+        if (shapes.READ_ONLY_LAYERS.has(name)) {
+            assert.strictEqual(layer.file, null, `${name} is read-only but names a file`);
+            assert.strictEqual(layer.reload, null, `${name} is read-only but names a reload`);
+            continue;
+        }
+
+        // GG spawners are the one writable family that is many files rather than one, so the file
+        // is carried in each shape's own id and the layer names only the request.
+        if (name === 'spawners') {
+            assert.strictEqual(layer.file, null, 'the spawner file comes from the shape id');
+            assert.strictEqual(layer.reload, 'spawn-reload');
+            assert.strictEqual(
+                whitelist.reloadFor('spawn:trammel/GG_DailyLife.xml'), layer.reload,
+                'the layer and the whitelist disagree about how a spawn file reloads');
             continue;
         }
 
@@ -142,6 +156,27 @@ test('every editable layer names the file it is saved to, and the request that r
         assert.strictEqual(layer.reload, WRITABLE[layer.file],
             `${name} reloads with '${layer.reload}' but its file reloads with '${WRITABLE[layer.file]}'`);
     }
+});
+
+test('the spawner layers are what the projector actually emits', () => {
+    const spawners = require('./spawners.js');
+    const fs2 = require('fs');
+
+    const projected = spawners.project([{
+        key: 'spawn:trammel/GG_DailyLife.xml',
+        relative: 'trammel/GG_DailyLife.xml',
+        text: fs2.readFileSync(
+            path.join(REPO_ROOT, 'Spawns', 'Custom', 'trammel', 'GG_DailyLife.xml'), 'utf8')
+    }]);
+
+    assert.ok(projected.length > 0);
+
+    for (const shape of projected) {
+        assert.ok(shapes.LAYERS[shape.layer], `${shape.layer} is not a layer`);
+        assert.ok(Array.isArray(shape.entries), 'a spawner shape carries no entry list');
+        assert.match(shape.id, /^spawner:[a-z]+\/GG_[A-Za-z0-9_-]+\.xml#[0-9a-f-]{36}$/);
+    }
+
 });
 
 const view = { scale: 1, facet: { name: 'Trammel' }, toScreen: (x, y) => [x, y] };
@@ -449,6 +484,61 @@ test('the live line carries the snapshot age, and says when it has gone stale', 
     // like a bug here rather than a difference between two machines.
     assert.strictEqual(snapshotAge(at(-1), now).text, '0s ago');
     assert.strictEqual(snapshotAge('not a date', now), null);
+});
+
+test('at the default Britain view the labels are landmarks, not a fifth of everything', () => {
+    // The thresholds are measured, not guessed. Before them, 206 labels were eligible at this zoom
+    // and 39 fitted - collision culled 81% in a priority order no viewer can perceive, which is
+    // what "the map is anonymous" actually described. Lowering thresholds makes that worse by
+    // adding competitors; the fix is to let fewer things compete at each zoom.
+    const world = realShapes();
+    const visible = new Set(shapes.LAYER_ORDER);
+    const view = {
+        scale: 2, facet: { name: 'Trammel' },
+        toScreen: (x, y) => [(x - 1475) * 2 + 800, (y - 1645) * 2 + 450]
+    };
+
+    const eligible = (scale) => world.filter((shape) => {
+        const layer = shapes.LAYERS[shape.layer];
+        return shape.label && layer && scale >= (layer.labelAt === undefined ? 0.35 : layer.labelAt);
+    });
+
+    const atTown = eligible(2);
+    const layers = new Set(atTown.map((shape) => shape.layer));
+
+    // Only the frame and the landmarks compete at town scale.
+    assert.deepStrictEqual([...layers].sort(), ['nav-destinations', 'nav-zones']);
+
+    // Waypoint ids arrive when you are close enough to be working on the graph, arrivals later
+    // still - they cluster four and five deep around one destination.
+    assert.ok(eligible(3).some((s) => s.layer === 'nav'), 'waypoints never become eligible');
+    assert.ok(!eligible(3).some((s) => s.layer === 'nav-arrivals'), 'arrivals arrive too early');
+    assert.ok(eligible(6).some((s) => s.layer === 'nav-arrivals'), 'arrivals never arrive');
+
+    // And most of what is eligible actually gets drawn, which is the point of the whole change.
+    let drawn = 0;
+    const ctx = {
+        canvas: { clientWidth: 1600, clientHeight: 900 }, globalAlpha: 1, font: '', textAlign: 'left',
+        fillStyle: '', strokeStyle: '', lineWidth: 1,
+        measureText: (t) => ({ width: t.length * 6 }),
+        fillText: () => drawn++, fillRect: () => {}, strokeRect: () => {}, arc: () => {},
+        beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, closePath: () => {},
+        stroke: () => {}, fill: () => {}
+    };
+
+    shapes.draw(ctx, view, world, visible, null, null, null);
+
+    assert.ok(drawn / atTown.length > 0.6,
+        `only ${drawn} of ${atTown.length} eligible labels were drawn`);
+});
+
+test('the shard-written snapshots are readable and not writable', () => {
+    // entities, health, spawners and nav-audit are all written BY the shard. An editor that could
+    // overwrite one could lie to itself about the live world.
+    for (const name of ['entities', 'health', 'spawnerState', 'navAudit']) {
+        assert.ok(FILES[name], `${name} is not a known file`);
+        assert.strictEqual(whitelist.resolveSave(name), null, `${name} should not be writable`);
+    }
 });
 
 // --- the seam between the tools and the writer --------------------------------------------------
