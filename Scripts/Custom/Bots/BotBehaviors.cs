@@ -23,6 +23,8 @@ namespace Server.Custom
             {
                 { "Idle", () => new IdleBehavior() },
                 { "Traveler", () => new TravelerBehavior() },
+                { "BankSitter", () => new BankSitterBehavior() },
+                { "Shopper", () => new ShopperBehavior() },
             };
 
         public static PlayerBotBehavior Create(string name)

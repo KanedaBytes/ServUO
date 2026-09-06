@@ -171,6 +171,7 @@ namespace Server.Custom
             int travelling = 0;
             int lingering = 0;
             Map facet = null;
+            var byBehaviour = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             // The live list, not World.Mobiles. LiveRegistry already tracks exactly the mobiles
             // this shard cares about (CLAUDE.md section 15).
@@ -198,7 +199,16 @@ namespace Server.Custom
                     facet = bot.Map;
                 }
 
-                var traveler = bot.Behavior as TravelerBehavior;
+                PlayerBotBehavior behaviour = bot.Behavior;
+
+                if (behaviour != null)
+                {
+                    int behaviourCount;
+                    byBehaviour.TryGetValue(behaviour.SerializableName, out behaviourCount);
+                    byBehaviour[behaviour.SerializableName] = behaviourCount + 1;
+                }
+
+                var traveler = behaviour as TravelerBehavior;
 
                 if (traveler != null)
                 {
@@ -235,6 +245,30 @@ namespace Server.Custom
                     BotTickManager.NoDestinationLastTick);
             }
 
+            if (byBehaviour.Count > 0)
+            {
+                var parts = new List<string>();
+
+                foreach (var entry in byBehaviour)
+                {
+                    parts.Add(String.Format("{0} {1}", entry.Value, entry.Key));
+                }
+
+                parts.Sort(StringComparer.Ordinal);
+
+                detail += ". behaviours: " + String.Join(", ", parts.ToArray());
+            }
+
+            List<string> belowFloor = BotCrowds.BelowFloor(facet ?? Map.Trammel);
+
+            if (belowFloor.Count > 0)
+            {
+                detail += String.Format(
+                    ". banks below floor: {0} ({1})",
+                    belowFloor.Count,
+                    String.Join(", ", belowFloor.ToArray()));
+            }
+
             if (BotTickManager.AbandonedTotal > 0)
             {
                 detail += String.Format(
@@ -262,6 +296,28 @@ namespace Server.Custom
                     starved.Count,
                     String.Join(", ", names.ToArray()),
                     ConfigPath,
+                    detail));
+            }
+
+            List<string> overcrowded = _store.Life.OvercrowdedDestinations();
+
+            if (overcrowded.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} destination(s) want a bigger crowd than they have arrival points ({1}). {2}",
+                    overcrowded.Count,
+                    String.Join("; ", overcrowded.ToArray()),
+                    detail));
+            }
+
+            List<string> unknownPhases = _store.Life.UnknownPhaseKeys();
+
+            if (unknownPhases.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} phase clamp(s) name a behaviour that does not exist ({1}) - they do nothing. {2}",
+                    unknownPhases.Count,
+                    String.Join(", ", unknownPhases.ToArray()),
                     detail));
             }
 

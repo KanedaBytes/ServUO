@@ -101,12 +101,15 @@ Ported from the ModernUO shard, in this order:
 | 5c | Spawners in the editor | **done** |
 | 6 | `Scripts/Custom/Bots/` — PlayerBots, session 1: the bot mobile you can spawn and inspect | **done** |
 | 7 | PlayerBots, session 2: the behaviour tick, `Traveler` on `NavWalker`, class-weighted destinations | **done** |
+| 8 | PlayerBots, session 3: the lifecycle roller, bank crowds and shoppers | **done** |
 
 The bot layer is being ported in sessions, from the survey in `docs-src/uo-offline-port-survey.md`.
 Session 1 was identity — class, tier, skills, stats, name, speech hue, outfit. Session 2 made them
 walk: a behaviour tick over `LiveRegistry`, a `Traveler` on the shard's existing `NavWalker`, and
-class-weighted destinations from `bots.json`. Speech, lifecycle and population follow. See
-`Scripts/Custom/Bots/README.md`, in particular its **Severed seams** table.
+class-weighted destinations from `bots.json`. Session 3 gave them a life — a personality-weighted
+phase roller, a bank with a standing crowd, and shops worth browsing. Speech and population follow.
+See `Scripts/Custom/Bots/README.md`, in particular its **Deviations from uo-offline** and **Severed
+seams** sections.
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
 
@@ -146,7 +149,8 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and skills against the caps in force |
 | `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
 | `[BotBehavior [name]` | GameMaster | Target a bot; report its brain, or switch it (`Idle`, `Traveler`) |
-| `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party and five-traveller probes |
+| `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
+| `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 
 ## Custom spawns
 

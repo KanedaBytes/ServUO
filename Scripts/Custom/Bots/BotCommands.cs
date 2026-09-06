@@ -15,6 +15,7 @@ namespace Server.Custom
             CommandSystem.Register("SpawnBot", AccessLevel.GameMaster, SpawnBot_OnCommand);
             CommandSystem.Register("BotInfo", AccessLevel.GameMaster, BotInfo_OnCommand);
             CommandSystem.Register("BotBehavior", AccessLevel.GameMaster, BotBehavior_OnCommand);
+            CommandSystem.Register("BotLifecycle", AccessLevel.GameMaster, BotLifecycle_OnCommand);
             CommandSystem.Register("BotsReload", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("ReloadBots", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("BotSmoke", AccessLevel.Administrator, BotSmoke_OnCommand);
@@ -157,6 +158,81 @@ namespace Server.Custom
             }
 
             from.SendMessage(bot.Personality.ToString());
+
+            PlayerBotBehavior behaviour = bot.Behavior;
+
+            if (behaviour != null && bot.Personality.IsAssigned)
+            {
+                TimeSpan phase = BotLifecycle.Config_.PhaseLength(
+                    behaviour.SerializableName, bot.Personality.AveragePhaseDuration);
+
+                TimeSpan elapsed = CustomTime.Now - bot.PhaseStartedAt;
+                TimeSpan left = phase - elapsed;
+
+                if (behaviour.VisitExpiresAt != null)
+                {
+                    TimeSpan visit = behaviour.VisitExpiresAt.Value - CustomTime.Now;
+
+                    from.SendMessage(String.Format(
+                        "Phase {0}: a timed visit, {1:0} second(s) left.",
+                        behaviour.SerializableName,
+                        visit.TotalSeconds));
+                }
+                else
+                {
+                    from.SendMessage(String.Format(
+                        "Phase {0}: {1:0}s of {2:0}s elapsed, {3:0}s left.",
+                        behaviour.SerializableName,
+                        elapsed.TotalSeconds,
+                        phase.TotalSeconds,
+                        left.TotalSeconds > 0 ? left.TotalSeconds : 0));
+                }
+            }
+        }
+
+        [Usage("BotLifecycle [on|off]")]
+        [Description("Reports the phase roller, or pauses it so a behaviour can be watched.")]
+        private static void BotLifecycle_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            if (e.Length == 0)
+            {
+                from.SendMessage(String.Format(
+                    "Lifecycle is {0}; every {1:0}s, {2} transition(s) so far: {3}",
+                    BotLifecycle.Enabled ? "running" : "PAUSED",
+                    BotLifecycle.Interval.TotalSeconds,
+                    BotLifecycle.TotalTransitions,
+                    BotLifecycle.DescribeTransitions()));
+                return;
+            }
+
+            string argument = e.GetString(0);
+
+            if (Insensitive.Equals(argument, "on"))
+            {
+                BotLifecycle.Enabled = true;
+            }
+            else if (Insensitive.Equals(argument, "off"))
+            {
+                BotLifecycle.Enabled = false;
+            }
+            else
+            {
+                from.SendMessage(0x35, "Usage: [BotLifecycle [on|off]");
+                return;
+            }
+
+            from.SendMessage(String.Format(
+                "Lifecycle {0}.", BotLifecycle.Enabled ? "running" : "paused"));
+
+            CommandLogging.WriteLine(
+                from,
+                String.Format(
+                    "{0} {1} turning the bot lifecycle {2}",
+                    from.AccessLevel,
+                    CommandLogging.Format(from),
+                    BotLifecycle.Enabled ? "on" : "off"));
         }
 
         [Usage("BotBehavior [name]")]

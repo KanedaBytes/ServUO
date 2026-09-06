@@ -308,7 +308,18 @@ namespace Server.Custom
 
             if (traveler == null)
             {
-                return false;
+                // The bot arrived somewhere and STAYED - it is a BankSitter or a Shopper now,
+                // which is the arrival handoff working. For the probe's purposes that is a bot
+                // that needs putting back on the road: without this the disperse phase silently
+                // did nothing for every bot that had committed, and they read as stuck.
+                bot.Behavior = BotBehaviors.Create("Traveler");
+
+                traveler = bot.Behavior as TravelerBehavior;
+
+                if (traveler == null)
+                {
+                    return false;
+                }
             }
 
             return traveler.SendTo(bot, target);

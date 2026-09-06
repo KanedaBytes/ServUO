@@ -153,6 +153,18 @@ namespace Server.Custom
                 }
             }
 
+            // The lifecycle rides this same pass on its own slower accumulator. One scan, two
+            // cadences: a second timer would mean a second walk of a registry that also holds
+            // every daily-life actor.
+            try
+            {
+                BotLifecycle.Pass(_scratch);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "The bot lifecycle pass faulted.");
+            }
+
             _scratch.Clear();
 
             NoDestinationLastTick = _noDestination;

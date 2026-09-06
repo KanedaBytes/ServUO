@@ -22,12 +22,16 @@ namespace Server.Custom
         [JsonProperty("destinations")]
         public BotDestinationConfig Destinations { get; set; }
 
+        [JsonProperty("life")]
+        public BotLifeConfig Life { get; set; }
+
         [JsonConstructor]
         public BotStore()
         {
             SchemaVersion = BotSystem.SchemaVersion;
             Caps = new BotCapsConfig();
             Destinations = new BotDestinationConfig();
+            Life = new BotLifeConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -55,6 +59,13 @@ namespace Server.Custom
             }
 
             Destinations.Validate(errors);
+
+            if (Life == null)
+            {
+                Life = new BotLifeConfig();
+            }
+
+            Life.Validate(errors);
         }
     }
 

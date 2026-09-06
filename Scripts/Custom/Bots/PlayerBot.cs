@@ -59,8 +59,32 @@ namespace Server.Custom
         [CommandProperty(AccessLevel.GameMaster)]
         public CrafterType CrafterSpec { get; set; }
 
-        /// <summary>Inclination toward each behaviour. Rolled at creation; nothing reads it yet.</summary>
+        /// <summary>Inclination toward each behaviour. Read by BotLifecycle when a phase expires.</summary>
         public BotPersonality Personality { get; set; }
+
+        /// <summary>
+        /// When the current lifecycle phase began.
+        ///
+        /// Written ONLY by BotLifecycle, deliberately - not by the Behavior setter. Upstream reset
+        /// it on every swap anywhere, which meant a bot that visited a bank or a shop restarted its
+        /// phase clock each time and never accrued enough to roll at all. See the deviations list
+        /// in Scripts/Custom/Bots/README.md.
+        /// </summary>
+        public DateTime PhaseStartedAt { get; set; }
+
+        /// <summary>How many times this bot's brain has changed since it was created. Transient.</summary>
+        public int BehaviorChanges { get; private set; }
+
+        /// <summary>
+        /// The phase expired while the behaviour was refusing to be interrupted; roll as soon as
+        /// it stops refusing.
+        ///
+        /// Without this a bot that is almost always busy never transitions at all. A Traveler
+        /// declines mid-walk, and on a large graph a Traveler is mid-walk most of the time - so
+        /// the roller would look at it, find it busy, and simply forget, every pass, for ever.
+        /// Deferring instead of dropping is what makes the lifecycle reach a working bot.
+        /// </summary>
+        public bool TransitionPending { get; set; }
 
         /// <summary>True while a walker is steering. Transient - see IBotActor.</summary>
         public bool Commuting { get; set; }
@@ -95,6 +119,11 @@ namespace Server.Custom
 
                 _behavior = next;
                 _behavior.OnAttached(this);
+
+                // Counts every real change of brain, whatever caused it - a lifecycle roll, an
+                // arrival handoff, a visit ending. The phase clock deliberately does NOT move on a
+                // handoff, so it cannot answer "has this bot done anything?"; this can.
+                BehaviorChanges++;
             }
         }
 

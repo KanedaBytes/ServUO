@@ -10,12 +10,15 @@
 Fake players: a `PlayerBot` with a class, a skill tier, a personality, a name, a speech colour and
 an outfit. Config is `Data/Custom/bots.json`; namespace `Server.Custom`.
 
-**Sessions 1 and 2 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
+**Sessions 1 to 3 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
 tier, skills, stats, name, speech hue, outfit. Session 2 made them live in the world — a behaviour
 tick, a `Traveler` that walks the shard's `NavWalker` between destinations, and class-weighted
 destination choice from `bots.json`.
 
-Speech, lifecycle transitions and population management arrive in later sessions.
+Session 3 gave them a life: a phase roller that picks a new behaviour from the bot's own
+personality, a bank with a standing crowd, and shops worth browsing.
+
+Speech and population management arrive in later sessions.
 
 The full port survey is `docs-src/uo-offline-port-survey.md`.
 
@@ -147,6 +150,67 @@ tail of `Deserialize` (ServUO has no `[AfterDeserialization]`). Also verified: t
 tick. `OnAfterSpawn` also registers, harmlessly (`Register` no-ops on a duplicate), so the spawner
 path the population session adds is already covered.
 
+## Deviations from uo-offline
+
+Places where this port deliberately does something else. **Each is a decision, not a gap** - if one
+looks like a mistake later, read the reason before "fixing" it back.
+
+### The phase clock does not reset on every behaviour swap
+
+Upstream resets `PhaseStartedAt` inside the `Behavior` setter, so *any* swap anywhere restarts it.
+Combined with visits of 1-15 minutes and phases of 15-360, the effect is that a bot which visits
+anything never accrues enough phase time to roll at all - their lifecycle is close to dead for any
+bot that travels.
+
+Here, only a **lifecycle transition** resets it. An arrival handoff and a visit expiry preserve it,
+so the phase clock measures what it claims to and an Idle-inclined bot eventually gets its Idle
+phase. `PlayerBot.BehaviorChanges` counts brain changes separately, because the clock deliberately
+cannot answer "has this bot done anything?".
+
+### A busy behaviour defers its transition rather than losing it
+
+A `Traveler` declines to be interrupted mid-walk, and on a real graph a Traveler is mid-walk much of
+the time. A roller that simply skipped a busy bot would pass over the same bot for ever. When a
+phase expires against a refusal, `PlayerBot.TransitionPending` remembers, and the roll happens the
+moment the bot is free.
+
+### The bank crowd is a pull, not a garrison
+
+Upstream keeps bank crowds with `BankFixtures`: a spawner at every bank holding five permanent,
+**lifecycle-exempt**, curve-exempt sitters. Its lifecycle only ever adds extras, by teleporting a
+rolled BankSitter to a uniformly random bank with **no occupancy check at all**.
+
+This shard walks. So the floor is expressed as a weight multiplier on an under-floor destination -
+bots *want* to go where the crowd is thin - and nobody is placed, teleported or commandeered. The
+multiplier is capped at four times, and **bots already routing there count toward the floor**, so
+one empty slot does not pull every traveller in town.
+
+Consequence worth knowing: the floor is a tendency, not a guarantee. `Bots.Population` reports
+`banks below floor` rather than asserting it.
+
+### The Shopper walks
+
+Upstream's is rotation-only, by explicit design - *"No movement = no wall-grinding"* - because it
+leaned on a zone check to guarantee it was already in the right place. The tell is that their file
+still carries `Home`, `HomeMap` and `VendorSpeakRange` fields that are written and never read:
+vestiges of a walking version that was removed.
+
+Ours walks between the shop's arrival points, because the hops are two or three tiles, they go
+through `NavWalker` like every other walk here, and a shopper wedged behind a counter gets the
+recovery ladder for free. What made movement dangerous for them is what steps 4a and 7b already
+solved here.
+
+### `PickScatteredHome` is kept, and matters more here than there
+
+A BankSitter settles a few tiles *off* the arrival point rather than on it. Upstream's reason was
+that "every bot homes on the exact tile it arrived at and the crowd stacks" - cosmetic. Here it is
+load-bearing: an uncontrolled `BaseCreature` cannot walk through another mobile
+(`Movement.cs:411`), so sitters parked on the arrival points make those tiles unreachable for the
+next arrival. Dropping it turned the bank into a traffic jam, visible as a flood of Sidestep and
+Door recoveries in the walk probe.
+
+Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
+
 ## Severed seams
 
 Five places where this session deliberately stops short. Each is marked with a one-line comment at
@@ -245,6 +309,61 @@ last session, reintroduced one layer up.
 So the tick watches for `Walking && !walker.Active` and treats it as a failed journey.
 `Bots.Population` counts them.
 
+## The lifecycle
+
+When a bot's phase expires it rolls a new behaviour weighted by its own personality. The roller
+rides `BotTickManager`'s existing pass over `LiveRegistry` on a slower accumulator
+(`Custom.BotLifecycleSeconds`, 60s) - one scan, two cadences.
+
+**Two mechanisms, not one**, and this is upstream's design rather than an invention:
+
+| | chooses | when |
+| --- | --- | --- |
+| **The lifecycle roll** | behaviours a bot can be *anywhere*: `Traveler`, `Idle` | its phase expires |
+| **The arrival handoff** | behaviours that only make sense *somewhere*: `BankSitter`, `Shopper` | it arrives there |
+
+So `BankSitter` and `Shopper` are **not** roll targets. Rolling one out of nowhere would teleport the
+concept - a bank sitter sitting in a field. `AdventurerTendency` has no target yet and simply does
+not participate; the roll renormalises over what is registered, so that weight starts meaning
+something the session an Adventurer lands.
+
+The roll floors each weight at a small epsilon **first**, then halves the current behaviour's, so it
+leans toward change. That order is upstream's and reversing it silently changes the distribution.
+(Their doc comment claims it "boosts non-current weights"; the code halves the current one. The code
+is right.)
+
+**Not every arrival commits.** `handoff` in `bots.json` is the chance that arriving somewhere turns
+into staying: 40% at a bank, 80% at a shop. A place where every arrival stops is a queue; the
+passers-through are what make a bank look busy. A declined *shop* arrival leaves at once - a bot
+standing in a smithy doing nothing makes no sense - while a declined *bank* arrival may linger.
+
+**Phase length is the bot's own.** `BotPersonality.AveragePhaseDuration` is rolled once per bot
+(15-360 minutes, halved by Restless, doubled by Homebody) and used as the exact threshold every
+phase - it is not an average, despite the name. `bots.json` `phases` entries are **optional clamps
+only**, and production ships none.
+
+## The standing crowd
+
+`crowds` in `bots.json` says how many bots each destination of a type wants:
+
+```json
+"crowds": { "bank": 3 }
+```
+
+An under-floor destination has its weight multiplied by `1 + min(shortfall, 3)` - capped, so a large
+floor cannot make one bank the only place anybody goes. **Bots already routing there count toward
+the floor.** Validated at load: a floor larger than the destination's authored arrival points warns
+(`brit-bank` has four).
+
+A `BankSitter` sets `Home` a few tiles off its arrival point and `RangeHome` to 2, and the stock
+wander does the milling. It faces the nearest person occasionally and now and then bends over the
+bank box. **No speech this session** - the hook is marked in `Tick` and fills in 7d.
+
+**A behaviour that sets `Home` must clear it.** `PlayerBot`'s constructor sets it to zero and
+everything downstream assumes that: `WalkRandomInHome` special-cases a zero `Home` into a *free*
+wander (`BaseAI.cs:2516`), so a leftover `Home` would quietly leash a later Traveler back to the
+bank whenever it stopped commuting.
+
 ## Class-weighted destinations
 
 ```
@@ -285,7 +404,9 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet. Class and tier are rolled when omitted, and may be given in either order (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and every non-zero skill against the caps in force |
 | `[BotBehavior` | GameMaster | Target a bot; report its brain and status line |
-| `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`) without waiting for a lifecycle that does not exist yet |
+| `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`, `BankSitter`, `Shopper`) |
+| `[BotLifecycle` | GameMaster | Report the roller, its cadence and the transition tally |
+| `[BotLifecycle on\|off` | GameMaster | Pause the roller, so a behaviour can be watched without it being rolled away |
 | `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 
@@ -330,6 +451,8 @@ seconds later, and folding an asynchronous result into a synchronous one would m
 the audit or reporting a result that had not happened yet.
 
 `Bots.Travel` — the last five-traveller walk probe. See below.
+
+`Bots.Life` — the last twelve-bot lifecycle probe.
 
 The population line carries the recovery counts too:
 

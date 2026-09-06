@@ -33,6 +33,7 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Smoke", BuildHealthResult);
             HealthCheck.Register("Bots.Party", BuildPartyHealthResult);
             HealthCheck.Register("Bots.Travel", BotWalkProbe.BuildHealthResult);
+            HealthCheck.Register("Bots.Life", BotLifeProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -317,6 +318,13 @@ namespace Server.Custom
             // is what exercises rungs 2-5 of the recovery ladder; a lone walker recovers at rung 1
             // every time and leaves the rest unproven.
             BotWalkProbe.Run(map, location);
+
+            // The lifecycle probe runs after the walk probe rather than alongside it: both spawn
+            // bots that compete for the same arrival points, and a stuck reading from one would
+            // be indistinguishable from contention caused by the other.
+            Timer.DelayCall(
+                BotWalkProbe.ConvergeWindow + BotWalkProbe.DisperseWindow + TimeSpan.FromSeconds(10.0),
+                () => BotLifeProbe.Run(map, location));
 
             return _last;
         }

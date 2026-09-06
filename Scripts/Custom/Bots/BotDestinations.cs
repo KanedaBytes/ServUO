@@ -52,6 +52,19 @@ namespace Server.Custom
                     weight *= 0.05;
                 }
 
+                // A destination short of its standing crowd pulls harder. CAPPED at four times,
+                // because an uncapped multiplier on a large floor makes one bank the only place
+                // anybody goes - the shard would empty into it.
+                if (weight > 0.0)
+                {
+                    int shortfall = BotCrowds.Shortfall(candidate);
+
+                    if (shortfall > 0)
+                    {
+                        weight *= 1.0 + Math.Min(shortfall, 3);
+                    }
+                }
+
                 if (weight < 0.0)
                 {
                     weight = 0.0;

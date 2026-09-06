@@ -4,28 +4,115 @@
   "caps": {},
   "destinations": {
     "byType": {
-      "bank": {"default":1.2,"Merchant":2.5,"TreasureHunter":1.5,"Thief":1.5},
-      "tavern": {"default":1.0,"Bard":5.0,"Warrior":2.0,"Fencer":1.8,"Ranger":1.5,"Mage":0.5,"Healer":0.7},
-      "inn": {"default":1.0,"Bard":3.0,"Ranger":1.5,"TreasureHunter":1.5},
-      "shop": {"default":1.0},
-      "wander": {"default":1.5},
-      "gate": {"default":0.6,"Ranger":1.5,"Lumberjack":1.5,"Miner":1.5,"TreasureHunter":1.5},
-      "home": {"default":0.0},
-      "guard": {"default":0.0},
-      "work": {"default":0.0}
+      "bank": {
+        "default": 1.2,
+        "Merchant": 2.5,
+        "TreasureHunter": 1.5,
+        "Thief": 1.5
+      },
+      "tavern": {
+        "default": 1.0,
+        "Bard": 5.0,
+        "Warrior": 2.0,
+        "Fencer": 1.8,
+        "Ranger": 1.5,
+        "Mage": 0.5,
+        "Healer": 0.7
+      },
+      "inn": {
+        "default": 1.0,
+        "Bard": 3.0,
+        "Ranger": 1.5,
+        "TreasureHunter": 1.5
+      },
+      "shop": {
+        "default": 1.0
+      },
+      "wander": {
+        "default": 1.5
+      },
+      "gate": {
+        "default": 0.6,
+        "Ranger": 1.5,
+        "Lumberjack": 1.5,
+        "Miner": 1.5,
+        "TreasureHunter": 1.5
+      },
+      "home": {
+        "default": 0.0
+      },
+      "guard": {
+        "default": 0.0
+      },
+      "work": {
+        "default": 0.0
+      }
     },
     "byTag": {
-      "craft": {"default":0.6,"Smith":4.0,"Tailor":4.0,"Carpenter":4.0,"Archer":1.5,"Warrior":1.5,"Fencer":1.5,"Miner":2.0,"Lumberjack":2.0},
-      "food": {"default":1.0,"Fisherman":2.5,"Bard":1.3},
-      "magic": {"default":0.5,"Mage":5.0,"Healer":2.0,"Tamer":2.0,"TreasureHunter":1.8},
-      "service": {"default":1.0,"Healer":3.0},
-      "luxury": {"default":0.8,"Merchant":3.0,"Thief":2.0,"Bard":1.5},
-      "social": {"default":1.0,"Bard":2.5,"Merchant":1.5},
-      "guarded": {"default":1.0},
-      "plaza": {"default":1.2},
-      "road": {"default":1.0},
-      "residence": {"default":1.0},
-      "town": {"default":1.0}
+      "craft": {
+        "default": 0.6,
+        "Smith": 4.0,
+        "Tailor": 4.0,
+        "Carpenter": 4.0,
+        "Archer": 1.5,
+        "Warrior": 1.5,
+        "Fencer": 1.5,
+        "Miner": 2.0,
+        "Lumberjack": 2.0
+      },
+      "food": {
+        "default": 1.0,
+        "Fisherman": 2.5,
+        "Bard": 1.3
+      },
+      "magic": {
+        "default": 0.5,
+        "Mage": 5.0,
+        "Healer": 2.0,
+        "Tamer": 2.0,
+        "TreasureHunter": 1.8
+      },
+      "service": {
+        "default": 1.0,
+        "Healer": 3.0
+      },
+      "luxury": {
+        "default": 0.8,
+        "Merchant": 3.0,
+        "Thief": 2.0,
+        "Bard": 1.5
+      },
+      "social": {
+        "default": 1.0,
+        "Bard": 2.5,
+        "Merchant": 1.5
+      },
+      "guarded": {
+        "default": 1.0
+      },
+      "plaza": {
+        "default": 1.2
+      },
+      "road": {
+        "default": 1.0
+      },
+      "residence": {
+        "default": 1.0
+      },
+      "town": {
+        "default": 1.0
+      }
+    }
+  },
+  "life": {
+    "comment": "phases is DELIBERATELY EMPTY: with no clamps a phase is whatever BotPersonality rolled for that bot (15-360 minutes), which is the production case. The smoke installs short clamps in memory for its own run. crowds is the standing-crowd floor per destination type - an under-floor destination pulls bots toward it rather than anyone being placed there. handoff is how often arriving somewhere turns into staying: not every arrival commits, and the ones who pass through are what make a bank look busy.",
+    "phases": {},
+    "crowds": {
+      "bank": 3
+    },
+    "handoff": {
+      "bank": 0.4,
+      "shop": 0.8
     }
   }
 }

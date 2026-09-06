@@ -83,6 +83,21 @@ namespace Server.Custom
             get { return _state == TravelState.Lingering; }
         }
 
+        /// <summary>Where this bot is heading, or null. Counted toward a destination's crowd floor.</summary>
+        public string DestinationId
+        {
+            get { return _destinationId; }
+        }
+
+        /// <summary>
+        /// A Traveler mid-walk is not interrupted by the lifecycle. Abandoning a journey halfway
+        /// down a street looks like a bug; finishing it and then rolling looks like a decision.
+        /// </summary>
+        public override bool CanTransition(PlayerBot bot)
+        {
+            return _state != TravelState.Walking;
+        }
+
         /// <summary>The walker steering this bot, or null. The smoke reads its rung counts.</summary>
         public NavWalker Walker
         {
@@ -248,9 +263,104 @@ namespace Server.Custom
             _lastDestinationId = _destinationId;
             _state = TravelState.Lingering;
 
+            // Arriving somewhere worth staying turns the bot into somebody who is there. This
+            // swaps the brain, which detaches THIS behaviour - nothing below may touch state.
+            if (TryHandoff(bot))
+            {
+                return;
+            }
+
             int seconds = Utility.RandomMinMax((int)MinLinger.TotalSeconds, (int)MaxLinger.TotalSeconds);
 
             _lingerUntil = Core.TickCount + (seconds * 1000L);
+        }
+
+        /// <summary>
+        /// Become whatever this destination is for, if the roll commits.
+        ///
+        /// NOT EVERY ARRIVAL COMMITS, and that is the point. Upstream took a bank handoff 40% of
+        /// the time - "many bank visitors just pass through" - and a shop 80%. A place where every
+        /// arrival stops is a queue; the ones who pass through are what make it look like a town.
+        ///
+        /// A declined SHOP arrival leaves at once rather than lingering: a bot standing in a
+        /// smithy doing nothing makes no sense. A declined BANK arrival is allowed to linger,
+        /// because loitering outside a bank is exactly what people did.
+        /// </summary>
+        private bool TryHandoff(PlayerBot bot)
+        {
+            NavDestination destination = _destinationId == null ? null : Nav.Destination(_destinationId);
+
+            if (destination == null)
+            {
+                return false;
+            }
+
+            string type = destination.Type;
+            double chance = BotLifecycle.Config_.HandoffChance(type);
+
+            if (chance <= 0.0)
+            {
+                return false;
+            }
+
+            // An under-floor destination pulls harder: a bot that walked to a bank nobody is
+            // standing at should be likelier to stay than one arriving at a full house.
+            if (BotCrowds.Shortfall(destination) > 0)
+            {
+                chance += (1.0 - chance) * 0.5;
+            }
+
+            if (Utility.RandomDouble() > chance)
+            {
+                if (Insensitive.Equals(type, "shop"))
+                {
+                    // Leave immediately rather than loiter in somebody's shop.
+                    _state = TravelState.Choosing;
+                }
+
+                return false;
+            }
+
+            PlayerBotBehavior visit = BuildVisit(type, destination);
+
+            if (visit == null)
+            {
+                return false;
+            }
+
+            int minutes = Utility.RandomMinMax(2, 6);
+
+            visit.VisitExpiresAt = CustomTime.Now + TimeSpan.FromMinutes(minutes);
+
+            Log.Debug(
+                "{0} is staying at '{1}' as a {2} for {3} minute(s).",
+                bot.Name,
+                destination.Id,
+                visit.SerializableName,
+                minutes);
+
+            bot.Behavior = visit;
+
+            return true;
+        }
+
+        private static PlayerBotBehavior BuildVisit(string type, NavDestination destination)
+        {
+            if (Insensitive.Equals(type, "bank"))
+            {
+                var sitter = new BankSitterBehavior();
+                sitter.DestinationId = destination.Id;
+                return sitter;
+            }
+
+            if (Insensitive.Equals(type, "shop"))
+            {
+                var shopper = new ShopperBehavior();
+                shopper.DestinationId = destination.Id;
+                return shopper;
+            }
+
+            return null;
         }
 
         /// <summary>
