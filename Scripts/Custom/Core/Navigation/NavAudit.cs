@@ -4,6 +4,77 @@ using System.Text;
 
 namespace Server.Custom
 {
+    /// <summary>What kind of finding this is. Only Blocked means the edge cannot be walked.</summary>
+    public enum NavAuditKind
+    {
+        /// <summary>The engine could not path it at all. The edge is wrong.</summary>
+        Blocked = 0,
+
+        /// <summary>Longer than the hop cap. The edge is walkable but the walker cannot plan it.</summary>
+        Far = 1,
+
+        /// <summary>
+        /// The geometry is fine and something is standing on it.
+        ///
+        /// A WARNING, never a block. The obstruction is a fact about right now, not about the
+        /// data - a vendor wanders off, a crowd disperses - so failing the audit on it would make
+        /// a clean run depend on the weather. But a waypoint with a shopkeeper permanently parked
+        /// on it is worth knowing about, because every walker will meet it and the geometry pass
+        /// is blind to it.
+        /// </summary>
+        Occupied = 2,
+    }
+
+    /// <summary>
+    /// One thing the audit found, structured rather than as prose.
+    ///
+    /// The editor draws these as a layer over the edges, which a formatted line cannot be turned
+    /// into without parsing it back - and a format parsed by the same codebase that wrote it is a
+    /// format defined twice.
+    /// </summary>
+    public sealed class NavAuditProblem
+    {
+        public NavAuditProblem(string from, string to, string map, NavAuditKind kind, int distance)
+            : this(from, to, map, kind, distance, null)
+        {
+        }
+
+        public NavAuditProblem(
+            string from, string to, string map, NavAuditKind kind, int distance, string detail)
+        {
+            From = from;
+            To = to;
+            Map = map;
+            Kind = kind;
+            Distance = distance;
+            Detail = detail;
+        }
+
+        public string From { get; private set; }
+
+        public string To { get; private set; }
+
+        public string Map { get; private set; }
+
+        public NavAuditKind Kind { get; private set; }
+
+        /// <summary>
+        /// True only for a genuinely unwalkable edge.
+        ///
+        /// Kept as its own property because the editor draws a red edge from it, and an
+        /// occupancy warning must not turn an edge red - the data is fine.
+        /// </summary>
+        public bool Blocked
+        {
+            get { return Kind == NavAuditKind.Blocked; }
+        }
+
+        public int Distance { get; private set; }
+
+        /// <summary>What is standing there, for an Occupied finding. Null otherwise.</summary>
+        public string Detail { get; private set; }
+    }
+
     /// <summary>
     /// Walkability audit: pathfinds every walk edge with the real engine against real map data
     /// and reports the ones that cannot be walked.
@@ -39,36 +110,6 @@ namespace Server.Custom
     /// check occupancy, and it does not check the approaches. Treat a pass as "the road exists",
     /// not "everyone will get through".
     /// </summary>
-    /// <summary>
-    /// One thing the audit found, structured rather than as prose.
-    ///
-    /// The editor draws these as a layer over the edges, which a formatted line cannot be turned
-    /// into without parsing it back - and a format parsed by the same codebase that wrote it is a
-    /// format defined twice.
-    /// </summary>
-    public sealed class NavAuditProblem
-    {
-        public NavAuditProblem(string from, string to, string map, bool blocked, int distance)
-        {
-            From = from;
-            To = to;
-            Map = map;
-            Blocked = blocked;
-            Distance = distance;
-        }
-
-        public string From { get; private set; }
-
-        public string To { get; private set; }
-
-        public string Map { get; private set; }
-
-        /// <summary>True when the engine could not path it; false when it is merely over the cap.</summary>
-        public bool Blocked { get; private set; }
-
-        public int Distance { get; private set; }
-    }
-
     public static class NavAudit
     {
         private static readonly CustomLogger Log = CustomLogger.For("Nav");
@@ -128,6 +169,7 @@ namespace Server.Custom
             int blocked = 0;
             int far = 0;
             int adjacent = 0;
+            int occupied = 0;
 
             int cap = NavigationSystem.HopMaxTiles;
 
@@ -165,7 +207,7 @@ namespace Server.Custom
                     far++;
                     lines.Add(String.Format(
                         "FAR      '{0}' -> '{1}' is {2} tiles (cap {3})", a.Id, b.Id, distance, cap));
-                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, false, distance));
+                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, NavAuditKind.Far, distance));
                     continue;
                 }
 
@@ -183,7 +225,7 @@ namespace Server.Custom
                 if (!CanWalk(a.Map, start, goal))
                 {
                     blocked++;
-                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, true, distance));
+                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, NavAuditKind.Blocked, distance));
                     lines.Add(String.Format(
                         "BLOCKED  '{0}' {1}{2} -> '{3}' {4}{5}",
                         a.Id,
@@ -192,14 +234,34 @@ namespace Server.Custom
                         b.Id,
                         goal,
                         goal.Z != b.Z ? String.Format(" (authored z {0})", b.Z) : ""));
+
+                    continue;
+                }
+
+                // Second pass: the geometry is walkable, so ask the other question the geometry
+                // pass cannot - is anything standing on it? See the class comment.
+                string standing = Occupancy(a.Map, start, goal);
+
+                if (standing != null)
+                {
+                    occupied++;
+                    found.Add(new NavAuditProblem(
+                        a.Id, b.Id, a.Map.Name, NavAuditKind.Occupied, distance, standing));
+                    lines.Add(String.Format(
+                        "OCCUPIED '{0}' -> '{1}': geometry is fine, {2}",
+                        a.Id,
+                        b.Id,
+                        standing));
                 }
             }
 
             summary = String.Format(
-                "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} adjacent (skipped).",
+                "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
+                + "{4} adjacent (skipped).",
                 checkedEdges,
                 blocked,
                 far,
+                occupied,
                 adjacent);
 
             report = lines;
@@ -230,7 +292,14 @@ namespace Server.Custom
                 builder.Append(",\"to\":").Append(Json.Quote(problem.To));
                 builder.Append(",\"map\":").Append(Json.Quote(problem.Map));
                 builder.Append(",\"blocked\":").Append(problem.Blocked ? "true" : "false");
+                builder.Append(",\"kind\":").Append(Json.Quote(problem.Kind.ToString().ToLowerInvariant()));
                 builder.Append(",\"distance\":").Append(problem.Distance);
+
+                if (problem.Detail != null)
+                {
+                    builder.Append(",\"detail\":").Append(Json.Quote(problem.Detail));
+                }
+
                 builder.Append("}");
 
                 if (i < problems.Count - 1)
@@ -255,6 +324,109 @@ namespace Server.Custom
         /// Both directions, because a one-way blockage (a ledge you can drop off but not climb)
         /// is exactly the kind of thing that strands a walker halfway through a patrol.
         /// </summary>
+        /// <summary>
+        /// Walk the path the engine just found and report the first thing standing on it, or null.
+        ///
+        /// This is the audit's answer to its own blind spot. The geometry pass probes with a
+        /// Point3D, which sets `checkMobs` false (Movement.cs:411) and walks through anybody; a
+        /// real walker is an uncontrolled BaseCreature and is stopped by them. Rather than spawn a
+        /// probe creature to find that out - which would place a mobile in the world for the sake
+        /// of a report - this re-walks the returned path and looks at who is on it.
+        ///
+        /// Deliberately matched to the engine's own rule so it does not invent obstructions:
+        ///
+        ///   - CanMoveOver (Movement.cs:361) lets a walker pass a dead mobile, a dead bonded pet,
+        ///     and a hidden staff member. So do we.
+        ///   - The engine exempts the GOAL tile (the `xForward != m_Goal.X` clause), because
+        ///     something standing on the destination should not make it unreachable. So do we.
+        ///   - The Z window is +/-15, as in Check.
+        ///
+        /// The first obstruction is enough: the report is there to send a person to look, not to
+        /// enumerate a crowd.
+        /// </summary>
+        private static string Occupancy(Map map, Point3D start, Point3D goal)
+        {
+            var path = new MovementPath(start, goal, map);
+
+            if (!path.Success)
+            {
+                return null;
+            }
+
+            int x = start.X;
+            int y = start.Y;
+
+            Direction[] steps = path.Directions;
+
+            for (int i = 0; i < steps.Length; i++)
+            {
+                Offset(steps[i], ref x, ref y);
+
+                // The goal tile is exempt, exactly as the engine exempts it.
+                if (x == goal.X && y == goal.Y)
+                {
+                    continue;
+                }
+
+                int z = NavWalker.ResolveZ(map, new Point3D(x, y, goal.Z));
+
+                IPooledEnumerable<Mobile> mobiles = map.GetMobilesInRange(new Point3D(x, y, z), 0);
+
+                try
+                {
+                    foreach (Mobile mob in mobiles)
+                    {
+                        if (mob == null || mob.Deleted || mob.X != x || mob.Y != y)
+                        {
+                            continue;
+                        }
+
+                        if (!mob.Alive || mob.IsDeadBondedPet || (mob.Hidden && mob.IsStaff()))
+                        {
+                            continue;
+                        }
+
+                        if (mob.Z + 15 <= z || z + 15 <= mob.Z)
+                        {
+                            continue;
+                        }
+
+                        return String.Format(
+                            "{0} ({1}) is standing at ({2}, {3})",
+                            String.IsNullOrEmpty(mob.Name) ? "something" : mob.Name,
+                            mob.GetType().Name,
+                            x,
+                            y);
+                    }
+                }
+                finally
+                {
+                    mobiles.Free();
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// One tile in a direction. Local rather than borrowed from MovementImpl, which exposes
+        /// this only on the implementation instance.
+        /// </summary>
+        private static void Offset(Direction d, ref int x, ref int y)
+        {
+            switch (d & Direction.Mask)
+            {
+                case Direction.North: y--; break;
+                case Direction.Right: x++; y--; break;
+                case Direction.East: x++; break;
+                case Direction.Down: x++; y++; break;
+                case Direction.South: y++; break;
+                case Direction.Left: x--; y++; break;
+                case Direction.West: x--; break;
+                case Direction.Up: x--; y--; break;
+            }
+        }
+
         private static bool CanWalk(Map map, Point3D start, Point3D goal)
         {
             return new MovementPath(start, goal, map).Success

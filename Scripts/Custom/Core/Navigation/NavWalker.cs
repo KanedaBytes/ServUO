@@ -1,11 +1,44 @@
 using System;
 using System.Collections.Generic;
 
+using Server.Items;
 using Server.Mobiles;
 using Server.Network;
 
 namespace Server.Custom
 {
+    /// <summary>
+    /// The stuck-recovery ladder, in the order it is climbed. Each rung is tried once per hop,
+    /// and the walker drops back to the bottom the moment the hop makes real progress.
+    ///
+    /// Translated from uo-offline-server's leg recovery, which escalates repath, then
+    /// nudge-and-repath, then extract. The middle rungs here are ours: their bots open doors
+    /// inside Move itself (every step, for free) because a PlayerBot overrides Move; a
+    /// BaseCreature does not, so the door attempt has to be a deliberate rung. And they abandon
+    /// the destination where we skip a single waypoint, because a NavWalker does not own the
+    /// journey - the caller does.
+    /// </summary>
+    public enum StuckRung
+    {
+        /// <summary>Nothing wrong yet.</summary>
+        None = 0,
+
+        /// <summary>Throw away the cached path and let A* try again from here.</summary>
+        Repath = 1,
+
+        /// <summary>Step off the tile, then repath. Breaks a wedge against scenery or a crowd.</summary>
+        Sidestep = 2,
+
+        /// <summary>Open the closed door that is in the way, the way a player's client would.</summary>
+        Door = 3,
+
+        /// <summary>Give up on this waypoint and aim at the next one in the route.</summary>
+        SkipWaypoint = 4,
+
+        /// <summary>Move the mobile. Only with nobody watching, unless the bound is spent.</summary>
+        Teleport = 5,
+    }
+
     /// <summary>
     /// Walks a mobile along a NavRoute, one hop at a time.
     ///
@@ -39,11 +72,22 @@ namespace Server.Custom
         /// <summary>How long one hop may take before it counts as failed.</summary>
         private static readonly TimeSpan HopTimeout = TimeSpan.FromSeconds(20.0);
 
-        /// <summary>Repaths before the hop is declared genuinely stuck.</summary>
-        public const int HopRetries = 2;
-
-        /// <summary>A player this close makes a teleport visible, so we hold instead.</summary>
+        /// <summary>A player this close makes a teleport visible, so it is the last resort.</summary>
         public const int PlayerNearTiles = 20;
+
+        /// <summary>
+        /// How many times the recoverable rungs are cycled while a player is watching, before
+        /// the walker gives up and teleports in view anyway.
+        ///
+        /// The bound is the point. Holding position until the player leaves is unbounded, and an
+        /// NPC frozen against a wall for ten minutes is a worse thing to watch than one that
+        /// steps around a corner. At one cycle per HopTimeout this is about two minutes of
+        /// genuine attempts, which is long enough that the in-view teleport is rare.
+        /// </summary>
+        public const int WatchedCycles = 6;
+
+        /// <summary>Tiles a sidestep will try to travel to break a wedge.</summary>
+        private const int SidestepTiles = 2;
 
         /// <summary>Arrival tolerance when a waypoint does not override it.</summary>
         public const int DefaultArrivalRange = 2;
@@ -57,8 +101,16 @@ namespace Server.Custom
         private int _index;
         private NavGoal _goal;
         private long _hopDeadline;
-        private int _retries;
-        private bool _holding;
+
+        private StuckRung _rung;
+        private int _watchedCycles;
+
+        /// <summary>
+        /// The closest this hop has ever got to its goal. Adopted from uo-offline-server, whose
+        /// comment is the reason: a mobile pinned against a lightpost jiggles, so "did it move?"
+        /// reports progress that is not progress. "Did it get closer than ever?" does not.
+        /// </summary>
+        private int _bestDistance;
 
         public NavWalker(BaseCreature mobile)
         {
@@ -123,11 +175,9 @@ namespace Server.Custom
 
             _route = route;
             _index = 0;
-            _retries = 0;
-            _holding = false;
             _goal = null;
 
-            ResetHopDeadline();
+            ResetHop();
             Register(this);
         }
 
@@ -136,8 +186,8 @@ namespace Server.Custom
             _route = null;
             _goal = null;
             _index = 0;
-            _retries = 0;
-            _holding = false;
+            _rung = StuckRung.None;
+            _watchedCycles = 0;
 
             Unregister(this);
         }
@@ -179,6 +229,28 @@ namespace Server.Custom
                 return;
             }
 
+            // Real progress resets the ladder, and "closer than ever" is the test rather than
+            // "moved at all" - a mobile shuffling around a lightpost does the second all day.
+            int distance = Chebyshev(_mobile.Location, step.Point);
+
+            if (distance < _bestDistance)
+            {
+                _bestDistance = distance;
+
+                if (_rung != StuckRung.None)
+                {
+                    Log.Debug(
+                        "{0} is moving again on {1}; recovery reset.",
+                        Who(),
+                        DescribeHop(step));
+                }
+
+                _rung = StuckRung.None;
+                _watchedCycles = 0;
+
+                ResetHopDeadline();
+            }
+
             // Wraparound-safe: compare by subtraction, never a < b.
             if (Core.TickCount - _hopDeadline >= 0)
             {
@@ -200,10 +272,8 @@ namespace Server.Custom
         {
             _index++;
             _goal = null;
-            _retries = 0;
-            _holding = false;
 
-            ResetHopDeadline();
+            ResetHop();
 
             if (_index >= _route.Count)
             {
@@ -224,47 +294,304 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// The hop failed. Retry it a couple of times, then decide between holding and
-        /// cheating - because a mobile frozen against a wall for ever is worse than one that
-        /// steps over it while nobody is looking.
+        /// The hop failed. Climb one rung of the recovery ladder.
+        ///
+        /// Every rung is a thing a person would actually try, in the order a person would try
+        /// them, and each is attempted once before the next. The walker drops back to the bottom
+        /// as soon as the hop makes real progress, so an obstruction that clears on its own costs
+        /// one rung rather than the whole ladder.
+        ///
+        /// The teleport at the top is the only rung that looks wrong to a player, so it waits
+        /// until nobody is watching. What it does NOT do any more is wait for ever: an NPC frozen
+        /// against a wall until the player wanders off is a worse thing to watch than one that
+        /// steps around a corner. While watched the recoverable rungs are cycled up to
+        /// WatchedCycles times, and only then does it move in view.
         /// </summary>
         private void HandleStuck(NavStep step)
         {
-            if (_retries < HopRetries)
-            {
-                _retries++;
+            _rung = NextRung(_rung);
 
-                // Dropping the goal instance makes MoveTo's reference comparison fail, which
-                // builds a fresh PathFollower - a repath, without reaching into BaseAI.
-                _goal = null;
-                ResetHopDeadline();
-                return;
-            }
-
-            if (PlayerIsWatching())
+            switch (_rung)
             {
-                if (!_holding)
+                case StuckRung.Repath:
                 {
-                    _holding = true;
+                    LogRung(step, "repathing");
 
-                    Log.Debug(
-                        "{0} is stuck on {1} but a player is nearby; holding.",
-                        _mobile.Name ?? _mobile.GetType().Name,
-                        DescribeHop(step));
+                    // Dropping the goal instance makes MoveTo's reference comparison fail, which
+                    // builds a fresh PathFollower - a repath, without reaching into BaseAI.
+                    _goal = null;
+                    ResetHopDeadline();
+                    return;
                 }
 
-                ResetHopDeadline();
-                return;
+                case StuckRung.Sidestep:
+                {
+                    bool moved = Sidestep();
+
+                    LogRung(step, moved ? "sidestepped, repathing" : "could not sidestep");
+
+                    _goal = null;
+                    ResetHopDeadline();
+                    return;
+                }
+
+                case StuckRung.Door:
+                {
+                    bool opened = TryOpenBlockingDoor(step);
+
+                    LogRung(step, opened ? "opened a door" : "no door to open");
+
+                    _goal = null;
+                    ResetHopDeadline();
+                    return;
+                }
+
+                case StuckRung.SkipWaypoint:
+                {
+                    if (TrySkipWaypoint(step))
+                    {
+                        return;
+                    }
+
+                    LogRung(step, "nothing to skip to; this is the last step");
+
+                    // Fall through to the top rung on the next timeout rather than stalling here.
+                    ResetHopDeadline();
+                    return;
+                }
+
+                default:
+                {
+                    if (PlayerIsWatching() && _watchedCycles < WatchedCycles)
+                    {
+                        _watchedCycles++;
+
+                        LogRung(
+                            step,
+                            String.Format(
+                                "a player is watching, so cycling the ladder again ({0}/{1})",
+                                _watchedCycles,
+                                WatchedCycles));
+
+                        // Back to the bottom, not frozen: try everything again from here.
+                        _rung = StuckRung.None;
+                        _goal = null;
+                        ResetHopDeadline();
+                        return;
+                    }
+
+                    // This log line IS the bug report: it names the edge in the data that is
+                    // wrong. Read it with the caveats in NavAudit before believing the geometry
+                    // is at fault - something standing in the way looks exactly like this.
+                    Log.Warn(
+                        "{0} could not walk {1} after the whole recovery ladder{2}; it was moved. Check that edge.",
+                        Who(),
+                        DescribeHop(step),
+                        _watchedCycles > 0
+                            ? String.Format(" and {0} watched cycle(s)", _watchedCycles)
+                            : " with nobody watching");
+
+                    Teleport(step);
+                    Advance();
+                    return;
+                }
+            }
+        }
+
+        private static StuckRung NextRung(StuckRung rung)
+        {
+            switch (rung)
+            {
+                case StuckRung.None: return StuckRung.Repath;
+                case StuckRung.Repath: return StuckRung.Sidestep;
+                case StuckRung.Sidestep: return StuckRung.Door;
+                case StuckRung.Door: return StuckRung.SkipWaypoint;
+                default: return StuckRung.Teleport;
+            }
+        }
+
+        /// <summary>One Debug line per rung entered, never per tick.</summary>
+        private void LogRung(NavStep step, string what)
+        {
+            Log.Debug(
+                "{0} stuck on {1} [{2}] - {3}.",
+                Who(),
+                DescribeHop(step),
+                _rung,
+                what);
+        }
+
+        private string Who()
+        {
+            return _mobile.Name ?? _mobile.GetType().Name;
+        }
+
+        /// <summary>
+        /// Step off the tile the mobile is wedged on, so the next repath starts somewhere else.
+        ///
+        /// Translated from uo-offline-server's NudgeAway. Directions are shuffled so a walker
+        /// wedged against the same corner twice does not make the same escape twice, and it
+        /// carries on in whichever direction worked - one tile rarely clears a doorway or a
+        /// bank crowd.
+        /// </summary>
+        private bool Sidestep()
+        {
+            Direction[] directions =
+            {
+                Direction.North, Direction.East, Direction.South, Direction.West,
+                Direction.Up, Direction.Down, Direction.Left, Direction.Right,
+            };
+
+            for (int i = directions.Length - 1; i > 0; i--)
+            {
+                int j = Utility.Random(i + 1);
+
+                Direction swap = directions[i];
+                directions[i] = directions[j];
+                directions[j] = swap;
             }
 
-            // This log line IS the bug report: it names the edge in the data that is wrong.
-            Log.Warn(
-                "{0} could not walk {1}; nobody was watching, so it was moved. Check that edge.",
-                _mobile.Name ?? _mobile.GetType().Name,
-                DescribeHop(step));
+            Direction taken = Direction.North;
+            bool moved = false;
 
-            Teleport(step);
-            Advance();
+            for (int i = 0; i < directions.Length; i++)
+            {
+                if (_mobile.Move(directions[i]))
+                {
+                    taken = directions[i];
+                    moved = true;
+                    break;
+                }
+            }
+
+            if (!moved)
+            {
+                return false;
+            }
+
+            for (int step = 1; step < SidestepTiles; step++)
+            {
+                if (!_mobile.Move(taken))
+                {
+                    break;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Open the closed door in the way, the way a player's client does when they walk into
+        /// one.
+        ///
+        /// Translated from uo-offline-server's DoorHelper, including the two rules its comments
+        /// were written to record. ONLY closed doors are touched, because Use() toggles and
+        /// calling it on an open door slams it shut on whoever is walking through - and a step
+        /// can fail for reasons that have nothing to do with the door, another mobile in the
+        /// doorway being the common one. And it goes through Use() rather than setting Open,
+        /// because Use() carries the rules with it: a locked door stays shut, and a house door
+        /// runs its own access check, so this cannot walk an NPC into someone's locked home.
+        /// </summary>
+        private bool TryOpenBlockingDoor(NavStep step)
+        {
+            Map map = _mobile.Map;
+
+            if (map == null || map == Map.Internal || !_mobile.CheckAlive())
+            {
+                return false;
+            }
+
+            // Doors within a tile of the mobile, plus the tile it is trying to reach. Anything
+            // further away is not what is blocking this step.
+            IPooledEnumerable<Item> items = map.GetItemsInRange(_mobile.Location, 1);
+
+            try
+            {
+                foreach (Item item in items)
+                {
+                    BaseDoor door = item as BaseDoor;
+
+                    if (door == null || door.Open)
+                    {
+                        continue;
+                    }
+
+                    // The same vertical window the client's open-door macro uses, so a door on
+                    // the floor above is not reachable from down here.
+                    if (door.Z + door.ItemData.Height <= _mobile.Z || _mobile.Z + 16 <= door.Z)
+                    {
+                        continue;
+                    }
+
+                    if (!_mobile.CanSee(door) || !_mobile.InLOS(door))
+                    {
+                        continue;
+                    }
+
+                    door.Use(_mobile);
+
+                    // Use() is a no-op on a door this mobile cannot open, so report what actually
+                    // happened rather than that it was tried.
+                    if (door.Open)
+                    {
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                items.Free();
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Give up on this waypoint and aim at the next one in the route.
+        ///
+        /// The cheap version of "route via a different waypoint": the rest of the journey is
+        /// unchanged, one unreachable node is simply omitted. Two hops is at most twice the hop
+        /// cap, which stays inside the engine's 38-tile search box, so the longer leg is usually
+        /// still pathable - and if it is not, the ladder simply reaches its top rung on the new
+        /// step instead.
+        ///
+        /// Refuses on the last step, where there is nothing to skip to and skipping would mean
+        /// arriving somewhere the caller did not ask for.
+        /// </summary>
+        private bool TrySkipWaypoint(NavStep step)
+        {
+            if (_route == null || _index + 1 >= _route.Count)
+            {
+                return false;
+            }
+
+            NavStep next = _route.Steps[_index + 1];
+
+            if (next.Kind == NavStepKind.Transition)
+            {
+                // A gate is not a tile to walk to; let the top rung place the mobile properly.
+                return false;
+            }
+
+            LogRung(
+                step,
+                String.Format("skipping to '{0}'", next.WaypointId ?? "(next)"));
+
+            _index++;
+            _goal = null;
+
+            ResetHop();
+
+            return true;
+        }
+
+        /// <summary>Chebyshev distance, matching how the graph measures a hop.</summary>
+        private static int Chebyshev(Point3D a, Point3D b)
+        {
+            int dx = Math.Abs(a.X - b.X);
+            int dy = Math.Abs(a.Y - b.Y);
+
+            return dx > dy ? dx : dy;
         }
 
         private void Teleport(NavStep step)
@@ -348,6 +675,16 @@ namespace Server.Custom
             }
 
             return map.GetAverageZ(point.X, point.Y);
+        }
+
+        /// <summary>A fresh hop: full deadline, bottom of the ladder, no best distance yet.</summary>
+        private void ResetHop()
+        {
+            _rung = StuckRung.None;
+            _watchedCycles = 0;
+            _bestDistance = Int32.MaxValue;
+
+            ResetHopDeadline();
         }
 
         private void ResetHopDeadline()

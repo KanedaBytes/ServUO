@@ -118,6 +118,36 @@ take it offline:
   with no arrival point within the hop cap of a waypoint; a waypoint with no edges; a failing
   self-test.
 
+## Stuck recovery
+
+A hop that makes no progress for `HopTimeout` climbs a ladder, one rung per timeout. Translated
+from uo-offline-server's leg recovery, which escalates repath → nudge-and-repath → extract.
+
+| Rung | What it does | Why it is where it is |
+| --- | --- | --- |
+| 1 `Repath` | Drop the cached goal so A\* runs again from here | Most obstructions are a mobile that has since moved. The cheapest thing that works, and in practice it is the one that fires |
+| 2 `Sidestep` | Step off the tile in a random direction, up to `SidestepTiles`, then repath | Breaks a wedge against scenery or a crowd, and gives the repath a different starting tile — which matters, because the audit only ever validated the canonical one |
+| 3 `Door` | Open the closed door in the way, through `BaseDoor.Use` | Their bots get this free inside `Move` because a `PlayerBot` overrides it; a `BaseCreature` does not, so it has to be a deliberate rung |
+| 4 `SkipWaypoint` | Give up on this waypoint and aim at the next one in the route | The cheap "route via a different waypoint". Two hops is at most twice the cap, still inside the engine's 38-tile box. Refused on the last step, where skipping would mean arriving somewhere the caller did not ask for |
+| 5 `Teleport` | Move the mobile onto the waypoint | Visibly wrong, so it goes last and prefers nobody watching |
+
+**Progress resets the ladder**, and the test is *closer than ever on this hop*, not *moved* — a
+mobile pinned against a lightpost does the second all day. Adopted from their code, for their
+reason.
+
+**Every rung logs once at Debug, when it is entered** — never per tick. The top rung stays a
+`Warn` naming the edge, because that line is the bug report.
+
+**A watched walker escalates; it does not freeze.** Previously, a walker with its retries spent
+held position for as long as a player stood within `PlayerNearTiles`, resetting its deadline
+without repathing — unbounded, and it never tried anything again. Now the recoverable rungs are
+cycled up to `WatchedCycles` times (about two minutes of genuine attempts), and only then does it
+teleport in view. An NPC frozen against a wall until the player wanders off is a worse thing to
+watch than one that steps around a corner.
+
+Measured on a live boot: four rung entries across two walkers, all of them rung 1, three recoveries
+and no `Warn` at all — on exactly the edges the audit had flagged as occupied.
+
 ## Commands
 
 | Command | Access | Effect |
@@ -172,15 +202,33 @@ Seen in practice: `Perrin could not walk brit-prov-1 -> brit-cour-2` while the a
 audit cannot see her, and every walker can.
 
 This matters more as the graph gets busier. One courier meets an obstruction rarely; a dozen
-walkers plus a bank crowd meet one constantly, and they also block each other. `NavWalker` already
-degrades sensibly — two repaths, then hold if a player is watching, else teleport and log the edge
-— so nothing breaks. But **the log line is the symptom, not the bug**: check occupancy and the
-approach tiles before believing the data is wrong, because the audit has already told you the
-geometry is fine.
+walkers plus a bank crowd meet one constantly, and they also block each other. **On a measured
+boot, 14 of 86 edges were occupied at a single instant** — one in six — and the walkers that got
+stuck got stuck on exactly those edges.
 
-One consequence worth knowing at scale: while a player is within `PlayerNearTiles` the walker
-holds instead of teleporting, and it resets the deadline each time without repathing — so a
-walker obstructed in view of a player stays put until the player leaves.
+So the second pass below now reports occupancy directly, and `NavWalker` climbs a recovery ladder
+rather than giving up after two repaths. But **a `could not walk` line is still the symptom, not
+the bug**: check occupancy and the approach tiles before believing the data is wrong, because the
+geometry pass has already told you the road exists.
+
+### The second pass: `OCCUPIED`
+
+After an edge passes the geometry check, the audit re-walks the path the engine just returned and
+reports the first thing standing on it:
+
+```
+OCCUPIED 'brit-cour-2' -> 'brit-prov-1': geometry is fine, Stanton (Fisherman) is standing at (1471, 1668)
+```
+
+**A warning, never a block.** Occupancy is a fact about right now, not about the data — a vendor
+wanders off, a crowd disperses — so failing the audit on it would make a clean run depend on the
+weather. `blocked` stays false, the editor does not colour the edge red, and `[NavAudit` still
+passes. What it buys is that a permanently-parked shopkeeper stops being invisible.
+
+It does not spawn a probe creature to find this out; that would put a mobile in the world for the
+sake of a report. It re-walks `MovementPath.Directions` and matches the engine's own rules exactly
+— `CanMoveOver` lets a walker pass the dead, dead bonded pets and hidden staff, and the goal tile
+is exempt — so it does not invent obstructions the walker would not meet.
 
 ## Seed data, and what is still missing
 
