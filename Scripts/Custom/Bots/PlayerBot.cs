@@ -66,6 +66,13 @@ namespace Server.Custom
         public bool Commuting { get; set; }
 
         /// <summary>
+        /// True between noticing a party invitation and answering it. Transient, and deliberately
+        /// a flag on the bot rather than a static table in BotParty: a deleted bot takes it with
+        /// it, so there is nothing to leak or sweep.
+        /// </summary>
+        public bool PartyAcceptPending { get; set; }
+
+        /// <summary>
         /// The current brain. Never null; falls back to Idle. Swapping fires OnDetached on the
         /// old and OnAttached on the new.
         /// </summary>
@@ -309,8 +316,23 @@ namespace Server.Custom
             LiveRegistry.Register(this);
         }
 
+        /// <summary>
+        /// Called by the AI timer, and only while a player is in the sector
+        /// (`BaseAI.cs:3072-3082`). That gating is why the party check lives here rather than in
+        /// a sweep of its own: an invitation can only arrive from somebody standing next to the
+        /// bot, which is precisely when this runs.
+        /// </summary>
+        public override void OnThink()
+        {
+            base.OnThink();
+
+            BotParty.CheckInvite(this);
+        }
+
         public override void OnDelete()
         {
+            BotParty.OnBotDeleted(this);
+
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);
 

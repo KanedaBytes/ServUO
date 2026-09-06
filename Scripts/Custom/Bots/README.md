@@ -46,7 +46,7 @@ Four reasons, in the order of what they cost to work around otherwise:
 | **Notoriety** | `Notoriety.cs:441-443` falls through to `CanBeAttacked` for anything not `InitialInnocent`, so the bot reads grey | `InitialInnocent` overridden to `true`. `Murderer`, `Criminal` and guild notoriety all still work — they live on `Mobile` |
 | **Paperdoll** | Works. `Mobile.CanPaperdollBeOpenedBy:6654` gates on `Body.IsHuman` | nothing needed |
 | **Context menu** | `BaseCreature.GetContextMenuEntries:4559` adds Rename, AI commands, Tame and Teach | all four are gated on flags a bot leaves false, so the menu is a player's: just the paperdoll |
-| **Party** | **Refused.** `AddPartyTarget.cs:30-32` answers a human-bodied non-player with *"Nay, I would rather stay here and watch a nail rust."* | `Player = true` |
+| **Party** | **Refused,** then **ignored.** `AddPartyTarget.cs:30-32` answers a human-bodied non-player with *"Nay, I would rather stay here and watch a nail rust."* Passing that gate is not enough: the invitation is a packet, and a bot has no `NetState` to receive it | `Player = true`, plus `BotParty` — see below |
 | **Name and guild** | Works. `Guild`, `GuildTitle` and `DisplayGuildTitle` are all on `Mobile` and serialized there | nothing needed |
 
 ### What `Player = true` costs
@@ -94,6 +94,38 @@ is never silent. `Bots.Population` always ends with a caps clause, one of:
 caps: from PlayerCaps.cfg (skill 100/700, stat 125/225)
 caps: overridden (skillTotal 600 vs players 700)
 ```
+
+## Party invitations
+
+`Player = true` only gets a bot past the *gate*. `Party.Invite` (`Party.cs:167`) then adds the bot
+to the party's `Candidates`, sets `bot.Party` to the **leader Mobile** — that is what "pending"
+looks like — sends an invitation packet, and starts a 30-second `DeclineTimer`. A player answers by
+typing `/accept`.
+
+A bot has no `NetState`, so the packet goes nowhere and nobody types anything. The invite is not
+refused; it *expires*, and the leader is told the bot "does not wish to join the party."
+
+`BotParty.CheckInvite` notices the pending invite and walks the same path `/accept` walks —
+`PartyCommands.Handler.OnAccept(bot, leader)`, **not** `Party.OnAccept` directly, because the
+handler is where the candidate and capacity checks live and going around them would let a bot join
+a full party. It answers on a **1.5–4 second delay**, so it reads as a person clicking rather than
+a reflex, and comfortably inside the 30-second decline.
+
+It is noticed in **`PlayerBot.OnThink`**, which the AI timer calls only while a player is in the
+sector (`BaseAI.cs:3072-3082`). That is exactly when an invitation can arrive — somebody has to be
+standing there to send one — so this costs nothing for a bot alone in the woods and needs no sweep
+of its own.
+
+**Acceptance is unconditional for now.** Whether a bot *should* join — mid-errand, an outlaw,
+dislikes the asker — is the social layer's decision and belongs with the personality it would read.
+
+**Nothing is cached.** `Party.Remove` and `Party.Disband` both write `m.Party = null` straight onto
+the `Mobile` (`Party.cs:297`, `:343`) with no packet involved, so the engine already clears the
+reference when a leader kicks the bot or the party breaks up. The only way to hold a stale one is to
+keep your own, so `BotParty` keeps none: every decision re-reads `bot.Party`, and the accept
+re-validates that the leader has not changed underneath it. A bot deleted while still a candidate
+declines on its way out, so the leader is not left waiting thirty seconds on somebody who no longer
+exists.
 
 ## Ephemerality
 
@@ -185,6 +217,13 @@ stat total within budget, a name, a backpack, something worn, `Player` set, and 
 Then it deletes them. A skill-total failure names every skill and its value, because a total that is
 over cap is only actionable if you can see which template produced it.
 
+It then runs the **party probe**: a throwaway `PlayerMobile` leader invites a bot, and the bot must
+be a full member before the decline timer would fire. This is the one part of the layer that cannot
+be checked synchronously — a bot answering instantly is the bug, not the fix — so the probe
+schedules its own assertion and reports through `Bots.Party` when it lands. With the accept hook
+disabled it fails with exactly the symptom it was written for: *"still not in a party 7s after the
+invite (bot.Party is PlayerMobile). The DeclineTimer will refuse it at 30s."*
+
 ServUO's console cannot invoke staff commands, so set `Custom.BotSmokeOnStart=True` in
 `Config/Custom.cfg` and read the console. The result also shows up in `[CoreSmoke` as `Bots.Smoke`.
 
@@ -201,6 +240,10 @@ of claimed names. A claimed name with no live bot behind it is reported as a war
 in the count the population manager will later depend on.
 
 `Bots.Smoke` — the last audit result, or a note that it has not run this boot.
+
+`Bots.Party` — the last party-probe result. Separate from `Bots.Smoke` because it completes several
+seconds later, and folding an asynchronous result into a synchronous one would mean either blocking
+the audit or reporting a result that had not happened yet.
 
 ## Known simplifications
 

@@ -44,6 +44,7 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `spawners.js` | Spawn files to shapes and back - the XML counterpart to `project.js` |
 | `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
 | `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
+| `modules.test.js` | That the browser code loads at all - see **Why `node --check` is not enough** |
 | `js/`, `index.html`, `style.css` | The editor |
 | `tiles/` | Rendered map, gitignored |
 | `../MapExport/` | The tile renderer |
@@ -173,6 +174,38 @@ is a normal outcome with the shard's own reason attached.
 discard: a save whose reload was refused has already written, so dropping the editor's local edits
 alone would leave a bad file to fail at the next restart. The `.bak` is the pre-save bytes exactly,
 which no reconstruction from shapes can promise.
+
+## Why `node --check` is not enough
+
+`js/app.js` once shipped with an unterminated string literal — a `.join('` with a real newline
+inside single quotes where `'\n'` was meant. The editor loaded completely blank: no layers, no
+health, `live: off`, an empty Create section. The bridge was fine and every endpoint answered 200;
+the browser simply could not parse its entry module.
+
+The whole test suite stayed green, for two reasons worth writing down.
+
+**The tests never touched the browser code.** They `require()` the Node side — `bridge`, `project`,
+`compact`, `whitelist`, `spawnxml` — and import a few pure helpers out of `js/`. Nothing loaded
+`app.js`, which is the file with the canvas, the layer list and the Create section in it.
+
+**And the obvious guard silently lies:**
+
+```
+node --check js/app.js        -> exits 0 on a file with a syntax error
+node --check <same file>.mjs  -> exits 1 and points at the line
+```
+
+`--check` treats a `.js` file as CommonJS. When the CJS parse reaches a top-level `import` it falls
+back to module detection, and that path does not surface the syntax error. A hand-rolled
+"`node --check` every file" loop reports all clear — which is exactly what happened.
+
+`modules.test.js` therefore does two things, because they catch different failures: it copies every
+source to a temporary **`.mjs`** before checking it, which catches the syntax error; and it imports
+the real module graph through a small DOM shim, which also catches a missing export (a link error,
+which is not a syntax error) and anything that throws at module scope.
+
+If a future change needs more of the DOM than the shim provides, widen the shim. The alternative is
+going back to not knowing whether the editor loads.
 
 ## Two tiers of wrong, and which is which
 

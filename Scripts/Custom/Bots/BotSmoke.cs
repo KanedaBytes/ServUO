@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
+using Server.Engines.PartySystem;
+using Server.Mobiles;
+
 namespace Server.Custom
 {
     /// <summary>
@@ -23,9 +26,157 @@ namespace Server.Custom
 
         private static HealthResult _last;
 
+        private static HealthResult _lastParty;
+
         public static void Initialize()
         {
             HealthCheck.Register("Bots.Smoke", BuildHealthResult);
+            HealthCheck.Register("Bots.Party", BuildPartyHealthResult);
+        }
+
+        public static HealthResult BuildPartyHealthResult()
+        {
+            if (_lastParty == null)
+            {
+                return HealthResult.Ok("not run this boot (runs with [BotSmoke)");
+            }
+
+            return _lastParty;
+        }
+
+        /// <summary>
+        /// Invite a bot to a party from a throwaway leader and check it joins before the
+        /// 30-second DeclineTimer fires.
+        ///
+        /// This is the only part of the bot layer that cannot be checked synchronously: the whole
+        /// point of BotParty is that a bot answers on a delay, like a person clicking. So the
+        /// probe schedules its own assertion and reports through the Bots.Party health check when
+        /// it lands, rather than making the caller wait.
+        ///
+        /// The leader is a real PlayerMobile, because that is what the path under test expects -
+        /// Party.Invite reads the leader's faction, and AddPartyTarget's own gate is about the
+        /// invitee, not the inviter. It is deleted either way; on ServUO an accountless
+        /// PlayerMobile would otherwise be written to the save like any other mobile.
+        /// </summary>
+        public static void RunPartyProbe(Map map, Point3D location)
+        {
+            PlayerMobile leader = null;
+            PlayerBot bot = null;
+
+            try
+            {
+                leader = new PlayerMobile
+                {
+                    Name = "Bot Smoke Leader",
+                    Body = 0x190,
+                    AccessLevel = AccessLevel.Player,
+                    Blessed = true
+                };
+
+                leader.MoveToWorld(location, map);
+
+                bot = new PlayerBot(BotClass.Warrior, BotSkillTier.Journeyman);
+                bot.MoveToWorld(location, map);
+
+                Party.Invite(leader, bot);
+
+                if (!(bot.Party is Mobile))
+                {
+                    Finish(leader, bot, HealthResult.Fail(
+                        "the invite did not register: bot.Party is not the leader after Party.Invite. "
+                        + "Party.Invite refused it, or the party gate rejected the bot."));
+                    return;
+                }
+
+                // Long enough for the answer, far short of the 30-second decline.
+                var window = TimeSpan.FromSeconds(BotParty.MaxAcceptDelay + 3.0);
+
+                PlayerMobile capturedLeader = leader;
+                PlayerBot capturedBot = bot;
+
+                Timer.DelayCall(window, () =>
+                {
+                    HealthResult result;
+
+                    if (capturedBot.Deleted)
+                    {
+                        result = HealthResult.Fail("the probe bot vanished before it could answer");
+                    }
+                    else
+                    {
+                        Party party = Party.Get(capturedBot);
+
+                        if (party == null)
+                        {
+                            result = HealthResult.Fail(String.Format(
+                                "still not in a party {0:0.#}s after the invite (bot.Party is {1}). "
+                                + "The DeclineTimer will refuse it at 30s.",
+                                window.TotalSeconds,
+                                capturedBot.Party == null ? "null" : capturedBot.Party.GetType().Name));
+                        }
+                        else if (!party.Contains(capturedBot))
+                        {
+                            result = HealthResult.Fail("holds a Party it is not a member of");
+                        }
+                        else if (party.Leader != capturedLeader)
+                        {
+                            result = HealthResult.Fail("joined a party led by somebody else");
+                        }
+                        else
+                        {
+                            result = HealthResult.Ok(String.Format(
+                                "invite accepted within {0:0.#}s, well inside the 30s decline timer",
+                                window.TotalSeconds));
+                        }
+                    }
+
+                    Finish(capturedLeader, capturedBot, result);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Party probe threw.");
+                Finish(leader, bot, HealthResult.Fail("threw: " + ex.Message));
+            }
+        }
+
+        private static void Finish(Mobile leader, PlayerBot bot, HealthResult result)
+        {
+            _lastParty = result;
+
+            if (result.Status == HealthStatus.Ok)
+            {
+                Log.Info("Bot party probe PASSED - {0}", result.Detail);
+            }
+            else
+            {
+                Log.Error("Bot party probe FAILED - {0}", result.Detail);
+            }
+
+            // Order matters: disband before deleting, or the party keeps a deleted member.
+            if (bot != null && !bot.Deleted)
+            {
+                Party party = Party.Get(bot);
+
+                if (party != null)
+                {
+                    party.Remove(bot);
+                }
+
+                bot.Delete();
+            }
+
+            if (leader != null && !leader.Deleted)
+            {
+                Party leaderParty = Party.Get(leader);
+
+                if (leaderParty != null)
+                {
+                    leaderParty.Disband();
+                }
+
+                leader.Delete();
+            }
         }
 
         public static HealthResult BuildHealthResult()
@@ -156,6 +307,10 @@ namespace Server.Custom
             {
                 from.SendMessage(problems.Count > 0 ? 0x35 : 0x3B2, "Bot smoke: " + _last.Detail);
             }
+
+            // Asynchronous by nature - a bot answers an invitation on a delay, on purpose - so it
+            // reports separately through Bots.Party rather than holding this result open.
+            RunPartyProbe(map, location);
 
             return _last;
         }

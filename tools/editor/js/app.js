@@ -1951,17 +1951,12 @@ function wireAudit() {
 
             if (state.audit.problems.length > 0) {
                 showBanner(
-                    `${ack.message}
-
-`
+                    `${ack.message}\n\n`
                     + state.audit.problems.slice(0, 12)
                         .map((p) => `• ${p.blocked ? 'BLOCKED' : 'over cap'} ${p.from} -> ${p.to}`
                             + ` (${p.distance} tiles)`)
-                        .join('
-')
-                    + '
-
-A waypoint at a closed door is a false positive. Verify before editing.',
+                        .join('\n')
+                    + '\n\nA waypoint at a closed door is a false positive. Verify before editing.',
                     'warn');
             } else {
                 hideBanner();
