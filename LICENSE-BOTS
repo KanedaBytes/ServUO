@@ -1,0 +1,54 @@
+Scripts/Custom/Bots/ — licensing notice
+=======================================
+
+The code under `Scripts/Custom/Bots/` is a derived work.
+
+    Original:  the PlayerBots system ("CustomBots") from uo-offline
+               https://github.com/Klein187/uo-offline
+               Copyright (C) Klein187
+               Licensed under the GNU General Public License, version 3.
+
+    Derived:   translated from ModernUO APIs to ServUO pub57 (.NET Framework 4.8)
+               for the Goblin Gang shard, retaining the original design,
+               structure, tables and comments where they survived the move.
+
+Because the original is licensed under GPL-3.0, this derived work is also
+distributed under the **GNU General Public License, version 3**, and the full
+text of that license is reproduced below.
+
+The rest of this repository descends from RunUO/ServUO and is licensed under the
+GNU General Public License, **version 2 or (at your option) any later version**
+(see ./LICENSE). GPL-2.0-or-later is upgrade-compatible with GPL-3.0, so the two
+combine lawfully; the combined work is distributed under GPL-3.0.
+
+This notice is a statement of provenance and license, not legal advice.
+
+--------------------------------------------------------------------------------
+
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+The full text of the GNU General Public License version 3 is available at:
+
+    https://www.gnu.org/licenses/gpl-3.0.txt
+
+and is reproduced in full in the upstream project this code derives from:
+
+    https://github.com/Klein187/uo-offline/blob/main/LICENSE
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.

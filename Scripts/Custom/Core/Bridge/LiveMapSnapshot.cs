@@ -348,6 +348,15 @@ namespace Server.Custom
 
         private static string KindOf(Mobile mobile)
         {
+            // Before the Player check, deliberately. A PlayerBot sets Mobile.Player so that party
+            // invites work (AddPartyTarget.cs:30 refuses a human-bodied non-player), which would
+            // otherwise make every bot draw on the live map as a real logged-in account - the one
+            // distinction the map most needs to keep.
+            if (mobile is PlayerBot)
+            {
+                return "bot";
+            }
+
             if (mobile.Player)
             {
                 return mobile.AccessLevel > AccessLevel.Player ? "staff" : "player";

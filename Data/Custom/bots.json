@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "comment": "PlayerBots. Caps are DELIBERATELY EMPTY: with no values here a bot is built to exactly the limits Config/PlayerCaps.cfg gives players, which is this shard's authoritative source and already carries the EJ values (skill 100/700, stat 125/225). Set a value only to make bots deliberately different from players - the Bots.Population health check names every override so the divergence is never silent. Class templates, tier curves and the equipment tables live in code; see Scripts/Custom/Bots/README.md.",
+  "caps": {}
+}

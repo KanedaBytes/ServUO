@@ -80,8 +80,43 @@ lands next to `ServUO.exe` was untracked-but-not-ignored.
 **Merge note.** Appended in a clearly marked block at the end of the file, so upstream edits
 near the top will not conflict.
 
-*(No `.cs` file under `Server/` or `Scripts/` has been modified. Each future entry follows the
-format above.)*
+### 4. `Scripts/Scripts.csproj` — added `<LangVersion>latest</LangVersion>`
+
+```diff
+   <PropertyGroup>
+     <TargetFramework>net48</TargetFramework>
++    <LangVersion>latest</LangVersion>
+     <OutputType>Library</OutputType>
+```
+
+**Why.** An SDK-style project targeting `net48` defaults to **C# 7.3**, because the SDK maps the
+language version from the target framework and net48 predates the newer defaults. Nothing in
+stock ServUO uses anything newer, so this was invisible until `Scripts/Custom/Bots/` — the ported
+PlayerBots leaf set is built on **switch expressions** (C# 8) and `is not` / `or` patterns
+(C# 9): 25 switch expressions in `BotSkillTemplate.cs`, 45 in `EquipmentTable.cs`. Rewriting
+~250 syntax sites into 7.3 would have meant maintaining a permanent hand-divergence from the
+upstream this code is ported from, and every future port would pay it again.
+
+This cannot be done from `Custom/` — a language version is an MSBuild property and has to live
+in the project file.
+
+**Why `latest` rather than a pinned version.** These are all **compiler-only** features: switch
+expressions, pattern combinators and target-typed `new` emit ordinary IL against the same net48
+BCL and add no runtime dependency. The one C# 9 feature that *does* need a runtime type —
+init-only setters — is covered by `Scripts/Custom/Core/IsExternalInit.cs`, a 5-line polyfill
+supplying `System.Runtime.CompilerServices.IsExternalInit`, which the BCL only ships from
+.NET 5 onward. Nothing in the tree uses `init` yet; the polyfill lands with this change so the
+first file that wants one simply works.
+
+**Nullable reference types are deliberately NOT enabled.** `latest` raises the language version
+only; `<Nullable>` stays unset, so no existing file changes meaning and no new warnings appear.
+
+**Merge note.** Additive, on its own line, inside the first `PropertyGroup`. An upstream change
+to this file conflicts loudly rather than silently. If upstream ever sets `LangVersion` itself,
+take theirs if it is C# 9 or higher.
+
+*(No `.cs` file under `Server/` or `Scripts/` has been modified — every entry above is a project,
+config or ignore file. Each future entry follows the format above.)*
 
 ---
 
@@ -116,6 +151,8 @@ If upstream ever changes `Persistence.Serialize` to truncate, this deviation can
 | `Config/Server.cfg` | Shard name, and port `2594` (committed upstream of this work) |
 | `Config/DataPath.cfg` | Client data path (committed upstream of this work) |
 | `Config/Custom.cfg` | New config file, scope `Custom`. Auto-discovered at boot; no registration needed |
+| `LICENSE-BOTS` | New file. `Scripts/Custom/Bots/` is a derived work of `Klein187/uo-offline` (GPL-3.0), so it carries its own licence notice. The repository's own `LICENSE` (GPL-2.0-or-later) is untouched |
+| `Scripts/Custom/Core/IsExternalInit.cs` | New file, not a modification. The net48 polyfill that lets `init` accessors compile; paired with entry 4 above |
 | `Spawns/Custom/trammel/GG_OldMarta.xml` | New custom spawn definition. Imported with `[GG_Reimport`; the `GG_` name prefix is the set handle |
 
 ---

@@ -389,6 +389,7 @@ const ENTITY_COLORS = {
     staff: '#ffd479',
     vendor: '#6fb3ff',
     actor: '#7bd88f',
+    bot: '#c98bdb',
     creature: '#9a8c98'
 };
 

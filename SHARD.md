@@ -99,6 +99,12 @@ Ported from the ModernUO shard, in this order:
 | 5a | Map export + editor bridge, read-only layers | **done** |
 | 5b | Editing through the bridge | **done** |
 | 5c | Spawners in the editor | **done** |
+| 6 | `Scripts/Custom/Bots/` — PlayerBots, session 1: the bot mobile you can spawn and inspect | **done** |
+
+The bot layer is being ported in sessions, from the survey in `docs-src/uo-offline-port-survey.md`.
+Session 1 is identity only — class, tier, skills, stats, name, speech hue, outfit — with one empty
+`Idle` behaviour. Speech, movement, lifecycle and population follow. See
+`Scripts/Custom/Bots/README.md`, in particular its **Severed seams** table.
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
 
@@ -134,6 +140,10 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[DailyLifeSmoke` | Administrator | Force a full day cycle and check the town reacts |
 | `[GG_MigrateVendors` | Administrator | Hand Britain's six shopkeeper spawn points to daily life (one time, reversible) |
 | `[GG_RestoreVendors` | Administrator | Undo the migration |
+| `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet; class and tier roll when omitted (alias `[SpawnTestBot`) |
+| `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and skills against the caps in force |
+| `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
+| `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 
 ## Custom spawns
 
