@@ -262,6 +262,10 @@ namespace Server.Custom
                 return false;
             }
 
+            // The recovery counts describe a graph. After an edit they would describe two, and
+            // the whole point of the health line is to say whether the CURRENT graph is walkable.
+            NavWalker.ResetRungTotals();
+
             Log.Info(
                 "Reloaded navigation: {0} waypoint(s), {1} destination(s), {2} warning(s).",
                 _graph.NodeCount,

@@ -19,11 +19,15 @@ namespace Server.Custom
         [JsonProperty("caps")]
         public BotCapsConfig Caps { get; set; }
 
+        [JsonProperty("destinations")]
+        public BotDestinationConfig Destinations { get; set; }
+
         [JsonConstructor]
         public BotStore()
         {
             SchemaVersion = BotSystem.SchemaVersion;
             Caps = new BotCapsConfig();
+            Destinations = new BotDestinationConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -44,6 +48,13 @@ namespace Server.Custom
             }
 
             Caps.Validate(errors);
+
+            if (Destinations == null)
+            {
+                Destinations = new BotDestinationConfig();
+            }
+
+            Destinations.Validate(errors);
         }
     }
 

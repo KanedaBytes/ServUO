@@ -89,6 +89,18 @@ namespace Server.Custom
         /// <summary>Tiles a sidestep will try to travel to break a wedge.</summary>
         private const int SidestepTiles = 2;
 
+        /// <summary>Size of a rung-count array: every StuckRung value including None.</summary>
+        public const int RungCount = (int)StuckRung.Teleport + 1;
+
+        /// <summary>
+        /// Fleet-wide rung counts since the graph was last loaded.
+        ///
+        /// Reset by NavigationSystem on reload, so the health line always describes the graph
+        /// currently in memory rather than accumulating across an edit that was meant to fix the
+        /// very edges being counted.
+        /// </summary>
+        private static readonly int[] _rungTotals = new int[RungCount];
+
         /// <summary>Arrival tolerance when a waypoint does not override it.</summary>
         public const int DefaultArrivalRange = 2;
 
@@ -104,6 +116,16 @@ namespace Server.Custom
 
         private StuckRung _rung;
         private int _watchedCycles;
+
+        /// <summary>
+        /// How many times this walker has entered each rung, since it was constructed.
+        ///
+        /// Per-walker rather than only global, so a probe can attribute recovery to its own bots
+        /// instead of counting whatever else happened to be walking at the time. Indexed by
+        /// StuckRung, so index 0 (None) is always zero and exists only to keep the arithmetic
+        /// obvious.
+        /// </summary>
+        private readonly int[] _rungsFired = new int[RungCount];
 
         /// <summary>
         /// The closest this hop has ever got to its goal. Adopted from uo-offline-server, whose
@@ -190,6 +212,80 @@ namespace Server.Custom
             _watchedCycles = 0;
 
             Unregister(this);
+        }
+
+        /// <summary>
+        /// The rung this walker is currently on, or None when the hop is going fine.
+        ///
+        /// This IS the walker's own definition of stuck: anything above None means the hop timed
+        /// out without getting closer and recovery is in progress. A consumer asking "is this
+        /// mobile stuck?" should read this rather than guess from position, which cannot tell a
+        /// long route from a wedged one.
+        /// </summary>
+        public StuckRung CurrentRung
+        {
+            get { return _rung; }
+        }
+
+        /// <summary>How many times this walker has climbed to the given rung.</summary>
+        public int RungsFired(StuckRung rung)
+        {
+            int index = (int)rung;
+
+            return index >= 0 && index < RungCount ? _rungsFired[index] : 0;
+        }
+
+        /// <summary>Every rung this walker has climbed, ignoring None.</summary>
+        public int TotalRungsFired
+        {
+            get
+            {
+                int total = 0;
+
+                for (int i = (int)StuckRung.Repath; i < RungCount; i++)
+                {
+                    total += _rungsFired[i];
+                }
+
+                return total;
+            }
+        }
+
+        /// <summary>Fleet-wide count for a rung since the graph was last loaded.</summary>
+        public static int RungTotal(StuckRung rung)
+        {
+            int index = (int)rung;
+
+            return index >= 0 && index < RungCount ? _rungTotals[index] : 0;
+        }
+
+        /// <summary>
+        /// "repath 12, sidestep 3, door 0, skip 1, teleport 0" - the fleet-wide recovery line.
+        /// </summary>
+        public static string DescribeRungTotals()
+        {
+            return String.Format(
+                "repath {0}, sidestep {1}, door {2}, skip {3}, teleport {4}",
+                _rungTotals[(int)StuckRung.Repath],
+                _rungTotals[(int)StuckRung.Sidestep],
+                _rungTotals[(int)StuckRung.Door],
+                _rungTotals[(int)StuckRung.SkipWaypoint],
+                _rungTotals[(int)StuckRung.Teleport]);
+        }
+
+        /// <summary>
+        /// Clear the fleet-wide counts. Called when the navigation graph is reloaded: the counts
+        /// describe a graph, and after an edit they would otherwise describe two.
+        ///
+        /// Per-walker counts are deliberately NOT cleared - a walker outlives a reload, and its
+        /// own history is still its own.
+        /// </summary>
+        public static void ResetRungTotals()
+        {
+            for (int i = 0; i < RungCount; i++)
+            {
+                _rungTotals[i] = 0;
+            }
         }
 
         private void Tick()
@@ -310,6 +406,17 @@ namespace Server.Custom
         private void HandleStuck(NavStep step)
         {
             _rung = NextRung(_rung);
+
+            // Counted here rather than in each branch: this is the one place a rung is entered,
+            // and it is the same place LogRung reports it from, so the count and the log cannot
+            // drift apart.
+            int rungIndex = (int)_rung;
+
+            if (rungIndex >= 0 && rungIndex < RungCount)
+            {
+                _rungsFired[rungIndex]++;
+                _rungTotals[rungIndex]++;
+            }
 
             switch (_rung)
             {

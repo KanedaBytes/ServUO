@@ -64,6 +64,8 @@ namespace Server.Custom
         {
             HealthCheck.Register("Bots.Population", BuildHealthResult);
 
+            BotTickManager.Initialize();
+
             if (Config.Get("Custom.BotSmokeOnStart", false))
             {
                 // Deferred to ServerStarted: the audit spawns real mobiles, and spawning during
@@ -166,6 +168,9 @@ namespace Server.Custom
             var byClass = new Dictionary<BotClass, int>();
             var byTier = new Dictionary<BotSkillTier, int>();
             int count = 0;
+            int travelling = 0;
+            int lingering = 0;
+            Map facet = null;
 
             // The live list, not World.Mobiles. LiveRegistry already tracks exactly the mobiles
             // this shard cares about (CLAUDE.md section 15).
@@ -187,16 +192,89 @@ namespace Server.Custom
                 int tierCount;
                 byTier.TryGetValue(bot.SkillTier, out tierCount);
                 byTier[bot.SkillTier] = tierCount + 1;
+
+                if (facet == null && bot.Map != null && bot.Map != Map.Internal)
+                {
+                    facet = bot.Map;
+                }
+
+                var traveler = bot.Behavior as TravelerBehavior;
+
+                if (traveler != null)
+                {
+                    if (traveler.IsTravelling)
+                    {
+                        travelling++;
+                    }
+                    else if (traveler.IsLingering)
+                    {
+                        lingering++;
+                    }
+                }
             }
 
             string detail = String.Format(
-                "{0} bot(s) live ({1} name(s) claimed){2}{3}. {4}. Last load {5}",
+                "{0} bot(s) live ({1} travelling, {2} lingering, {3} idle; {4} name(s) claimed){5}{6}. "
+                + "recovery: {7}. {8}. Last load {9}",
                 count,
+                travelling,
+                lingering,
+                count - travelling - lingering,
                 NamePool.InUseCount,
                 Describe(byClass, BotClassHelper.DisplayName),
                 Describe(byTier, BotSkillTierHelper.DisplayName),
+                NavWalker.DescribeRungTotals(),
                 caps,
                 loaded);
+
+            if (BotTickManager.NoRouteLastTick > 0 || BotTickManager.NoDestinationLastTick > 0)
+            {
+                detail += String.Format(
+                    ". Last tick: {0} could not route, {1} found no destination",
+                    BotTickManager.NoRouteLastTick,
+                    BotTickManager.NoDestinationLastTick);
+            }
+
+            if (BotTickManager.AbandonedTotal > 0)
+            {
+                detail += String.Format(
+                    ". {0} walk(s) ended without arriving since boot",
+                    BotTickManager.AbandonedTotal);
+            }
+
+            // A class that can never travel is a config bug that looks exactly like a walker bug:
+            // the bot asks for a destination every tick, gets nothing, and stands still.
+            List<BotClass> starved = BotDestinations.StarvedClasses(facet ?? Map.Trammel);
+
+            if (starved.Count > 0)
+            {
+                var names = new List<string>();
+
+                foreach (BotClass cls in starved)
+                {
+                    names.Add(BotClassHelper.DisplayName(cls));
+                }
+
+                names.Sort(StringComparer.Ordinal);
+
+                return HealthResult.Warn(String.Format(
+                    "{0} class(es) have no destination they may visit ({1}) - check destinations weights in {2}. {3}",
+                    starved.Count,
+                    String.Join(", ", names.ToArray()),
+                    ConfigPath,
+                    detail));
+            }
+
+            List<string> unknown = _store.Destinations.UnknownKeys();
+
+            if (unknown.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} destination weight key(s) match nothing in the nav graph ({1}) - they do nothing. {2}",
+                    unknown.Count,
+                    String.Join(", ", unknown.ToArray()),
+                    detail));
+            }
 
             // A claimed name with no live bot behind it is a leak in the census the population
             // manager will later depend on, so it is worth saying out loud now.

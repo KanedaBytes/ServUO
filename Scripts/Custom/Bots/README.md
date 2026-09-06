@@ -10,11 +10,12 @@
 Fake players: a `PlayerBot` with a class, a skill tier, a personality, a name, a speech colour and
 an outfit. Config is `Data/Custom/bots.json`; namespace `Server.Custom`.
 
-**This is session 1 of the bot layer — a bot you can spawn and inspect.** It does nothing. There is
-one behaviour, `Idle`, and it has an empty `Tick`. Movement, speech, lifecycle, population and
-everything else arrive in later sessions. What this session exists to prove is that the identity
-model is right and that the two decisions underneath it hold: the era caps are configuration, and a
-bot never survives a restart.
+**Sessions 1 and 2 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
+tier, skills, stats, name, speech hue, outfit. Session 2 made them live in the world — a behaviour
+tick, a `Traveler` that walks the shard's `NavWalker` between destinations, and class-weighted
+destination choice from `bots.json`.
+
+Speech, lifecycle transitions and population management arrive in later sessions.
 
 The full port survey is `docs-src/uo-offline-port-survey.md`.
 
@@ -186,6 +187,87 @@ tree**, so nothing is broken by that; it is a flavour mismatch, not a compatibil
 Rebalancing it for EJ is a deliberate later data pass, and the right shape for that pass is to lift
 these tables out into `Data/Custom/` rather than to edit 2,000 lines of C# in place.
 
+## The behaviour tick
+
+One `Timer` at `Custom.BotTickSeconds` (2s), started from `BotSystem.Initialize`. It is the first
+caller `PlayerBotBehavior.Tick` has ever had.
+
+**It does not move anything.** `NavWalker` has driven movement on its own shared timer since step
+4a and still does. The tick makes decisions and watches for stranded walkers.
+
+**`LiveRegistry` is not a bot registry.** It also holds `DailyLifeTownsfolk`, `DailyLifePatron`,
+`DailyLifeWatchman`, the six `GG*` vendors and `OldMarta` — today those *outnumber* the bots. The
+tick filters with `as PlayerBot` and skips a null; a hard cast would throw on Perrin and take every
+bot's brain down with it.
+
+**Not `PlayerBot.OnThink`.** That is where the party check lives, and correctly — an invitation only
+arrives when somebody is standing there. But `OnThink` runs off the AI timer, and
+`PlayerRangeSensitive` stops that entirely when no player is in the sector
+(`BaseAI.cs:3072-3082`), so a bot would stop deciding the moment nobody was watching. A shared
+timer is immune, which is why `NavWalker` has one too.
+
+`Custom.BotPlansPerTick` budgets **planning**, not ticking: ticking a bot is a switch on an enum,
+while picking a destination and building a route walks the graph.
+
+## Travelling
+
+`TravelerBehavior` is a three-state machine — choose, walk, linger — and the feet are not in it.
+Upstream's is 3,216 lines because it also owns leg walking, stuck recovery, magic travel and the
+handoff to eight other behaviours; almost none of that is this class's job here.
+
+It follows `DailyLifeTownsfolk`, **not** `ShopScheduleSystem`: `PlayerBot` already clears `Home` and
+`RangeHome` in its constructor, so `KeepHomeAligned` stays false and nothing restores `Home`
+afterwards.
+
+Two details that are easy to get wrong:
+
+- **`forMobile` matters.** `Nav.TryRouteFrom(..., bot, ...)` ends the route on a *picked arrival
+  point* rather than the destination's centre tile. With five bots converging that is the
+  difference between arriving beside each other and all aiming at one tile.
+- **The walker instance is reused, not discarded.** `Follow` calls `Stop` internally so re-following
+  is safe, and a walker that survives the journey carries its recovery history with it. Discarding
+  it on every destination change threw the rung counts away — which is exactly how the first walk
+  probe reported zero rungs for bots that had visibly climbed the ladder.
+
+**Linger is always bounded.** Upstream had a `Wait` arrival style meaning "indefinitely, until the
+lifecycle moves it"; it parked 40% of arrivals for entire sessions and made their status page read
+as a stuck-bot epidemic. There is no lifecycle here yet to move anyone on, which would make an
+unbounded linger permanent.
+
+### The watchdog, and why the tick exists at all
+
+**`NavWalker` does not always call `Arrived`.** Its `Tick` calls `Stop()` — not `Finish()` — when the
+mobile is deleted or lands off-facet, and `DriveAll` stops a faulting walker the same way. A
+Traveler that waited only on the callback would sit in `Walking` for ever with `Commuting` still
+true and the stock wander suppressed: precisely the frozen-NPC failure the recovery ladder removed
+last session, reintroduced one layer up.
+
+So the tick watches for `Walking && !walker.Active` and treats it as a failed journey.
+`Bots.Population` counts them.
+
+## Class-weighted destinations
+
+```
+final = byType[type][class or "default"] * product over the destination's tags of byTag[tag][class or "default"]
+```
+
+Absent means **1.0** ("no opinion"), never 0. A weight of **0 excludes** — which is how `home`,
+`guard` and `work` are kept off the list.
+
+Two tables rather than one because of what the data looks like: our `type` is a free token with nine
+values, but **13 of the 27 destinations are `shop`**, so type alone cannot tell a forge from a
+bakery. The discrimination lives in the tags (`craft` on seven, `food` on three, `magic`, `luxury`,
+`service`), which is what lets a Smith want a craft shop without wanting every shop. Upstream keyed
+one table on a 31-member enum; ours is data.
+
+Validation, at load:
+
+| Problem | Verdict |
+| --- | --- |
+| A class name that is not one of the 17 rollable classes | **Fails the load**, keeps the live config. It is silent otherwise — the class falls through to `default` and the shard runs for ever with a weighting nobody asked for |
+| A `type` or `tag` key that names nothing in `navigation.json` | **Warns.** Not wrong on a shard that has not authored that town yet, but a key matching nothing does nothing |
+| A class that can reach zero destinations | **Warns.** It looks exactly like a walker bug from the outside: the bot asks every tick, gets nothing, stands still |
+
 ## Failure contract
 
 **A failed load keeps the live caps.** `BotSystem.TryLoad` swaps `_store` only after the config has
@@ -202,6 +284,8 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | --- | --- | --- |
 | `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet. Class and tier are rolled when omitted, and may be given in either order (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and every non-zero skill against the caps in force |
+| `[BotBehavior` | GameMaster | Target a bot; report its brain and status line |
+| `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`) without waiting for a lifecycle that does not exist yet |
 | `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 
@@ -244,6 +328,36 @@ in the count the population manager will later depend on.
 `Bots.Party` — the last party-probe result. Separate from `Bots.Smoke` because it completes several
 seconds later, and folding an asynchronous result into a synchronous one would mean either blocking
 the audit or reporting a result that had not happened yet.
+
+`Bots.Travel` — the last five-traveller walk probe. See below.
+
+The population line carries the recovery counts too:
+
+```
+6 bot(s) live (5 travelling, 0 lingering, 1 idle; 6 name(s) claimed) - 1 Archer, 1 Healer, ...
+recovery: repath 6, sidestep 1, door 0, skip 0, teleport 0. caps: from PlayerCaps.cfg ...
+```
+
+Those totals are fleet-wide and **reset on `[NavReload`**: the counts describe a graph, and after an
+edit they would otherwise describe two.
+
+## The five-traveller walk probe
+
+Runs with `[BotSmoke`, reports through `Bots.Travel`.
+
+It exists because rungs 2 to 5 of the recovery ladder went unverified when the ladder shipped — a
+lone walker recovers at rung 1 essentially every time, since A* just routes around one obstruction.
+**Contention is what reaches the deeper rungs**, so the probe manufactures it: five bots are sent to
+one destination at once so they compete for the same arrival tiles, then dispersed.
+
+**Pass is "nobody stuck, and no `Teleport` rung fired."** Rungs 2 to 4 firing is *information* — a
+sidestep that worked is the ladder doing its job. The rung line prints either way, because a run
+where nothing escalated is worth knowing about too: it means the contention did not bite.
+
+**"Stuck" is the walker's own answer**, `NavWalker.CurrentRung != None`, not a guess from outside.
+The first version of this probe called a bot stuck if it was still walking when the window closed,
+and duly reported five stuck bots that were simply getting on with it — a Traveler that arrives
+lingers and then departs again of its own accord, so "still walking" is the *normal* steady state.
 
 ## Known simplifications
 

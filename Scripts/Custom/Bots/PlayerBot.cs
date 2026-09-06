@@ -331,6 +331,14 @@ namespace Server.Custom
 
         public override void OnDelete()
         {
+            // Detach the brain first. A Traveler's OnDetached stops its walker and clears
+            // Commuting; without it, NavWalker would keep a reference to a deleted mobile until
+            // its own next tick noticed.
+            if (_behavior != null)
+            {
+                _behavior.OnDetached(this);
+            }
+
             BotParty.OnBotDeleted(this);
 
             NamePool.Release(Name);

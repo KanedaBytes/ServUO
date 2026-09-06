@@ -32,6 +32,7 @@ namespace Server.Custom
         {
             HealthCheck.Register("Bots.Smoke", BuildHealthResult);
             HealthCheck.Register("Bots.Party", BuildPartyHealthResult);
+            HealthCheck.Register("Bots.Travel", BotWalkProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -311,6 +312,11 @@ namespace Server.Custom
             // Asynchronous by nature - a bot answers an invitation on a delay, on purpose - so it
             // reports separately through Bots.Party rather than holding this result open.
             RunPartyProbe(map, location);
+
+            // Five travellers, deliberately made to contend, reporting through Bots.Travel. This
+            // is what exercises rungs 2-5 of the recovery ladder; a lone walker recovers at rung 1
+            // every time and leaves the rest unproven.
+            BotWalkProbe.Run(map, location);
 
             return _last;
         }

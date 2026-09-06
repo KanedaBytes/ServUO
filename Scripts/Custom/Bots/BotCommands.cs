@@ -14,6 +14,7 @@ namespace Server.Custom
         {
             CommandSystem.Register("SpawnBot", AccessLevel.GameMaster, SpawnBot_OnCommand);
             CommandSystem.Register("BotInfo", AccessLevel.GameMaster, BotInfo_OnCommand);
+            CommandSystem.Register("BotBehavior", AccessLevel.GameMaster, BotBehavior_OnCommand);
             CommandSystem.Register("BotsReload", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("ReloadBots", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("BotSmoke", AccessLevel.Administrator, BotSmoke_OnCommand);
@@ -156,6 +157,84 @@ namespace Server.Custom
             }
 
             from.SendMessage(bot.Personality.ToString());
+        }
+
+        [Usage("BotBehavior [name]")]
+        [Description("Target a bot to report its brain, or give a name to switch it.")]
+        private static void BotBehavior_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            if (e.Length == 0)
+            {
+                from.SendMessage("Target a bot to report its behaviour.");
+                from.BeginTarget(12, false, TargetFlags.None, BotBehaviorReport_OnTarget);
+                return;
+            }
+
+            string name = e.GetString(0);
+
+            if (!BotBehaviors.IsKnown(name))
+            {
+                from.SendMessage(0x35, String.Format("'{0}' is not a bot behaviour.", name));
+                from.SendMessage(0x35, "Known: " + String.Join(", ", BotBehaviors.Names()));
+                return;
+            }
+
+            from.SendMessage(String.Format("Target a bot to switch it to {0}.", name));
+            from.BeginTarget(12, false, TargetFlags.None,
+                (m, targeted) => BotBehaviorSet_OnTarget(m, targeted, name));
+        }
+
+        private static void BotBehaviorReport_OnTarget(Mobile from, object targeted)
+        {
+            var bot = targeted as PlayerBot;
+
+            if (bot == null)
+            {
+                from.SendMessage(0x35, "That is not a bot.");
+                return;
+            }
+
+            PlayerBotBehavior behavior = bot.Behavior;
+
+            if (behavior == null)
+            {
+                from.SendMessage(0x35, String.Format("{0} has no behaviour at all.", bot.Name));
+                return;
+            }
+
+            string status = behavior.GetStatusLine(bot);
+
+            from.SendMessage(0x3B2, String.Format(
+                "{0}: {1}{2}",
+                bot.Name,
+                behavior.SerializableName,
+                String.IsNullOrEmpty(status) ? "" : " - " + status));
+        }
+
+        private static void BotBehaviorSet_OnTarget(Mobile from, object targeted, string name)
+        {
+            var bot = targeted as PlayerBot;
+
+            if (bot == null)
+            {
+                from.SendMessage(0x35, "That is not a bot.");
+                return;
+            }
+
+            bot.Behavior = BotBehaviors.Create(name);
+
+            from.SendMessage(String.Format("{0} is now {1}.", bot.Name, bot.Behavior.SerializableName));
+
+            CommandLogging.WriteLine(
+                from,
+                String.Format(
+                    "{0} {1} setting {2}'s behaviour to {3}",
+                    from.AccessLevel,
+                    CommandLogging.Format(from),
+                    bot.Name,
+                    bot.Behavior.SerializableName));
         }
 
         [Usage("BotsReload")]
