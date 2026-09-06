@@ -21,6 +21,7 @@ const crypto = require('crypto');
 
 const compact = require('./compact.js');
 const { project, unproject } = require('./project.js');
+const spawners = require('./spawners.js');
 const whitelist = require('./whitelist.js');
 
 const DEFAULT_PORT = 8081;
@@ -35,9 +36,13 @@ const MAX_BODY = 1024 * 1024;
 // the timeout path can be tested in a fraction of a second rather than five of them.
 const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 
-// Requests whose dispatch ignores its token body, so a nonce can ride along in it. livemap-on is
-// NOT here: it parses its body, and a nonce would be an argument it did not ask for.
-const NONCED = new Set(['nav-reload', 'dailylife-reload', 'zones-reload', 'health']);
+// Requests whose token body a nonce can ride along in. Most ignore their body entirely; spawn-reload
+// reads a file name off the front of it and stops at the first space, which leaves the tail free.
+// livemap-on is NOT here: it parses its whole body, and a nonce would be an argument it did not
+// ask for.
+const NONCED = new Set([
+    'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload'
+]);
 
 // validate.js is a browser ES module and this file is CommonJS, so it arrives as a promise. That
 // is fine: every place it is awaited is already async, and awaiting a settled promise is free.
@@ -100,6 +105,78 @@ function configuredHopCap() {
         return match ? Number(match[1]) : undefined;
     } catch {
         return undefined;
+    }
+}
+
+/** `x,y,width,height` in game tiles, or null when it is absent or nonsense. */
+function parseBbox(text) {
+    if (!text) {
+        return null;
+    }
+
+    const parts = text.split(',').map(Number);
+
+    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+        return null;
+    }
+
+    const [x, y, width, height] = parts;
+
+    return width > 0 && height > 0 ? { x, y, width, height } : null;
+}
+
+/**
+ * A stock spawn file, cached until it changes.
+ *
+ * trammel.xml is 4 MB and 2,572 spawners; re-reading and re-parsing it on every pan would make the
+ * bbox pointless. Keyed on mtime and size rather than a timer, so an edit made outside the editor
+ * is picked up on the next request and nothing is served stale.
+ */
+const stockCache = new Map();
+
+function readStockFile(facet) {
+    const file = path.join(whitelist.REPO_ROOT, 'Spawns', `${facet.toLowerCase()}.xml`);
+
+    let stat;
+
+    try {
+        stat = fs.statSync(file);
+    } catch {
+        return null;
+    }
+
+    const stamp = `${stat.mtimeMs}:${stat.size}`;
+    const cached = stockCache.get(facet);
+
+    if (cached && cached.stamp === stamp) {
+        return cached.entry;
+    }
+
+    const entry = {
+        key: `stock:${facet}`,
+        relative: `${facet.toLowerCase()}.xml`,
+        stock: true,
+        text: readText(file)
+    };
+
+    stockCache.set(facet, { stamp, entry });
+
+    return entry;
+}
+
+function countBlocks(text) {
+    let count = 0;
+    let at = 0;
+
+    for (;;) {
+        at = text.indexOf('<Points>', at);
+
+        if (at === -1) {
+            return count;
+        }
+
+        count++;
+        at += 8;
     }
 }
 
@@ -210,6 +287,49 @@ const ROUTES = {
         }
 
         sendJson(response, 200, { shapes, files });
+    },
+
+    /**
+     * The spawner layers.
+     *
+     * The GG files are always returned in full - there are seven spawners in two files. The stock
+     * ones are returned only for a bbox, because there are 2,572 on Trammel alone and putting them
+     * all in the shape list would grow it tenfold and swamp the label pass for no gain: what you
+     * want is what is already spawning near the thing you are editing.
+     *
+     * `total` comes back too, so the layer count can read "N in view / 2,572 total" and the number
+     * never looks like the whole.
+     */
+    '/api/spawners': (request, response) => {
+        const url = new URL(request.url, `http://${HOST}`);
+        const bbox = parseBbox(url.searchParams.get('bbox'));
+        const facet = url.searchParams.get('facet') || 'Trammel';
+
+        const custom = whitelist.listSpawnFiles().map((key) => ({
+            key,
+            relative: whitelist.spawnRelative(key),
+            text: readText(whitelist.resolveSpawnFile(key))
+        }));
+
+        const files = {};
+
+        for (const file of custom) {
+            files[file.key] = { hash: hashOf(file.text) };
+        }
+
+        const stock = bbox ? readStockFile(facet) : null;
+
+        sendJson(response, 200, {
+            shapes: [
+                ...spawners.project(custom),
+                ...(stock ? spawners.project([stock], bbox) : [])
+            ],
+            files,
+            // Everything in the file, so "68 in view" can say what it is 68 of.
+            total: stock ? countBlocks(stock.text) : null,
+            bbox: bbox || null,
+            findings: spawners.findings(custom)
+        });
     },
 
     '/api/entities': (request, response) => {
@@ -441,8 +561,18 @@ async function dropToken(name, request, response) {
 
 /** Runs the reload for a file and shapes the half of the answer that comes from the shard. */
 async function reloadFor(name) {
-    const request = whitelist.WRITABLE[name];
-    const nonce = writeToken(request, '');
+    const request = whitelist.reloadFor(name);
+
+    if (!request) {
+        return { reloaded: false, message: 'Nothing reloads that file.', errors: [], warnings: [] };
+    }
+
+    // spawn-reload is the only request that takes an argument: the file to reload, relative to
+    // Spawns/Custom and never a path. The shard resolves it against that root and refuses anything
+    // landing outside - the same shape as the whitelist here, enforced on both sides rather than
+    // trusted from one.
+    const relative = whitelist.spawnRelative(name);
+    const nonce = writeToken(request, relative || '');
     const ack = await waitForAck(request, nonce, ACK_TIMEOUT_MS);
 
     if (!ack) {
@@ -504,17 +634,25 @@ async function handleSave(name, request, response) {
         return;
     }
 
+    const relative = whitelist.spawnRelative(name);
+
     let next;
 
     try {
-        next = unproject(name, current, payload);
+        // Two writers, because there are two file formats. Which one is decided by the name, and
+        // the name is a key rather than a path, so there is nothing to sniff.
+        next = relative
+            ? spawners.unproject(relative, current || emptySpawnFile(), payload)
+            : unproject(name, current, payload);
     } catch (error) {
         sendError(response, 400, error.message);
         return;
     }
 
     if (payload.dryRun) {
-        const problems = await validateText(name, next);
+        const problems = relative
+            ? { fatal: [], warnings: spawnFindings(relative, next) }
+            : await validateText(name, next);
 
         sendJson(response, problems.fatal.length > 0 ? 422 : 200, { dryRun: true, ...problems });
         return;
@@ -574,6 +712,25 @@ async function handleRestore(name, request, response) {
         hash: hashOf(readText(file)),
         ...outcome
     });
+}
+
+/**
+ * The skeleton a brand-new spawn file starts from.
+ *
+ * A spawn file with no <Points> is written by [XmlSave as zero bytes, which its own reader then
+ * throws on - so this is only ever a scaffold for a create to append to, and stringify refuses to
+ * write it back out empty.
+ */
+function emptySpawnFile() {
+    return '<Spawns>\r\n</Spawns>';
+}
+
+
+/** What the spawn formats can say about a file. Structural only; the shard still decides. */
+function spawnFindings(relative, text) {
+    return spawners.findings([{ relative, text }]).map((message) => ({
+        severity: 'warning', where: relative, message, shapeId: null
+    }));
 }
 
 /** The dry run: the same rules the browser previews with, over the text that would be written. */

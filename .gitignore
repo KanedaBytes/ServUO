@@ -62,6 +62,7 @@
 # Data/Custom backups. NavigationSystem.Save has always written one; the editor bridge writes
 # one before every save. They are a local undo, not shard configuration.
 /Data/Custom/*.bak
+/Spawns/Custom/**/*.bak
 
 # Editor bridge: rendered tiles and runtime snapshots are regenerable.
 /tools/editor/tiles

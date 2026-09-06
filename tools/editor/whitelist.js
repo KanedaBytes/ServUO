@@ -118,15 +118,80 @@ const WRITABLE = {
     restrictedZones: 'zones-reload'
 };
 
+const SPAWN_ROOT = path.join(REPO_ROOT, 'Spawns', 'Custom');
+
+// A spawn file is addressed as `spawn:<facet>/GG_<Thing>.xml`.
+//
+// This is the one writable thing that is a family rather than a fixed name, so it is the one place
+// a caller supplies any part of a path. The answer is the same as TOKEN_NAME's: match a strict
+// pattern and refuse, never sanitise. A name that has to be cleaned up before it is safe is a name
+// worth refusing - and every accepted name is still run back through isAllowed afterwards, so the
+// pattern is a first gate rather than the only one.
+//
+// The GG_ prefix is not decoration either: [XmlLoad and [XmlUnLoad filter on it with an ordinal
+// StartsWith, and it is what makes this shard's spawners addressable as a set without touching the
+// ~2,500 stock ones.
+const SPAWN_NAME = /^spawn:([a-z][a-z0-9_-]{0,31})\/(GG_[A-Za-z0-9_-]{1,48}\.xml)$/;
+
 /**
  * Resolves a writable file by its LOGICAL name, which is the whole sandbox.
  *
- * There is no path here to traverse, encode or escape: a name that is not one of the three keys
- * above resolves to nothing at all. Same reasoning as the read endpoints, which take no path from
- * the caller either.
+ * For the three fixed files there is no path to traverse, encode or escape: a name that is not one
+ * of those keys resolves to nothing at all. Spawn files go through SPAWN_NAME and then isAllowed.
  */
 function resolveSave(name) {
-    return Object.prototype.hasOwnProperty.call(WRITABLE, name) ? FILES[name] : null;
+    if (Object.prototype.hasOwnProperty.call(WRITABLE, name)) {
+        return FILES[name];
+    }
+
+    return resolveSpawnFile(name);
+}
+
+/** The `<facet>/<file>.xml` part of a spawn key, or null when the key is not one. */
+function spawnRelative(name) {
+    const match = typeof name === 'string' ? SPAWN_NAME.exec(name) : null;
+    return match ? `${match[1]}/${match[2]}` : null;
+}
+
+function resolveSpawnFile(name) {
+    const relative = spawnRelative(name);
+
+    if (!relative) {
+        return null;
+    }
+
+    const target = path.join(SPAWN_ROOT, ...relative.split('/'));
+
+    return isAllowed(target) ? target : null;
+}
+
+/** Every spawn file on disk, as `spawn:` keys. One directory level, matching the layout. */
+function listSpawnFiles() {
+    const keys = [];
+
+    let facets = [];
+
+    try {
+        facets = fs.readdirSync(SPAWN_ROOT, { withFileTypes: true });
+    } catch {
+        return keys;
+    }
+
+    for (const facet of facets) {
+        if (!facet.isDirectory()) {
+            continue;
+        }
+
+        for (const file of fs.readdirSync(path.join(SPAWN_ROOT, facet.name))) {
+            const key = `spawn:${facet.name}/${file}`;
+
+            if (resolveSpawnFile(key)) {
+                keys.push(key);
+            }
+        }
+    }
+
+    return keys;
 }
 
 /** The .bak kept beside a file, matching what NavigationSystem.Save has always written. */
@@ -135,7 +200,19 @@ function resolveBackup(name) {
     return target ? target + '.bak' : null;
 }
 
+/** The request that reloads whatever this name addresses. */
+function reloadFor(name) {
+    if (Object.prototype.hasOwnProperty.call(WRITABLE, name)) {
+        return WRITABLE[name];
+    }
+
+    // Per file, not the whole tree: [GG_Reimport deletes every GG_ spawner in the world and
+    // respawns them, which would make saving one file empty and refill the whole town.
+    return spawnRelative(name) ? 'spawn-reload' : null;
+}
+
 module.exports = {
-    REPO_ROOT, REQUEST_DIR, FILES, WRITABLE,
-    isAllowed, resolveStatic, resolveToken, resolveAck, resolveSave, resolveBackup
+    REPO_ROOT, REQUEST_DIR, FILES, WRITABLE, SPAWN_ROOT,
+    isAllowed, resolveStatic, resolveToken, resolveAck,
+    resolveSave, resolveBackup, resolveSpawnFile, spawnRelative, listSpawnFiles, reloadFor
 };

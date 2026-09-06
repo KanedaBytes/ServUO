@@ -85,6 +85,22 @@ namespace Server.Custom
                 return false;
             }
 
+            // VALIDATE BEFORE DELETING, which every other reload path in this shard does and this
+            // one did not.
+            //
+            // The delete used to run outside the try, and XmlLoadFromStream does not throw on a
+            // malformed file - it logs, sets a flag and returns with zero spawners
+            // (XmlSpawner2.cs:6141-6153). So a bad XML file produced a cheerful
+            // "deleted 7, imported 0" and an empty world, and the catch below caught nothing at
+            // all. Reading each file the way the loader will is a faithful dry run of exactly that
+            // failure.
+            int expected;
+
+            if (!TryCountSpawnPoints(path, out expected, out error))
+            {
+                return false;
+            }
+
             int deleted = DeleteExisting();
 
             int maps = 0;
@@ -111,6 +127,21 @@ namespace Server.Custom
                 return false;
             }
 
+            // XmlLoadFromFile does not surface its own per-row bad_spawner counters, so the only
+            // way to notice that some rows did not make it is to have counted them first.
+            if (spawners < expected)
+            {
+                error = String.Format(
+                    "Imported {0} spawner(s) but {1} are in the files - {2} were rejected. "
+                    + "See badxml.log; the world now has only the ones that loaded.",
+                    spawners,
+                    expected,
+                    expected - spawners);
+
+                Log.Error(error);
+                return false;
+            }
+
             summary = String.Format(
                 "GG_Reimport: deleted {0} existing '{1}' spawner(s), imported {2} spawner(s) across {3} map(s) from {4}.",
                 deleted,
@@ -126,6 +157,223 @@ namespace Server.Custom
             // their shops until dawn, because the only thing that ever moves them is a phase
             // transition - and they were not there for the last one.
             DailyLifeCommands.Reconcile();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Reloads ONE spawn file, which is what the editor does on every save.
+        ///
+        /// [GG_Reimport is the wrong tool for a save: it deletes every GG_ spawner in the world
+        /// and re-imports the whole tree, so editing Old Marta would make the six shopkeepers
+        /// vanish and reappear. This touches only the spawners in one file.
+        ///
+        /// UNLOAD FROM THE BACKUP, LOAD FROM THE FILE. [XmlLoad replaces by UniqueId, so loading
+        /// alone is an upsert - a spawner the editor DELETED is no longer named by the new file
+        /// and would be orphaned in the world forever. The bridge writes a .bak before every save,
+        /// and that is precisely the old GUID set, so unloading from it removes exactly what the
+        /// file used to contain. A missing .bak means a brand-new file with nothing to unload,
+        /// which is reported rather than guessed at.
+        ///
+        /// `relative` is a file NAME under Spawns/Custom, never a path. It is resolved against
+        /// that root and anything landing outside is refused - the same check the bridge's
+        /// whitelist makes, enforced here too rather than trusted from there.
+        /// </summary>
+        public static bool TryReloadFile(string relative, out string summary, out string error)
+        {
+            summary = null;
+            error = null;
+
+            string file;
+
+            if (!TryResolve(relative, out file, out error))
+            {
+                return false;
+            }
+
+            int expected;
+
+            if (!TryCountSpawnPoints(file, out expected, out error))
+            {
+                return false;
+            }
+
+            string backup = file + ".bak";
+            bool hadBackup = File.Exists(backup);
+            int removed = 0;
+
+            try
+            {
+                if (hadBackup)
+                {
+                    int unloadedMaps;
+
+                    // Mobile-free by passing null: XmlUnLoadFromStream null-checks every
+                    // SendMessage, unlike the six-argument load overload.
+                    XmlSpawner.XmlUnLoadFromFile(backup, Prefix, null, out unloadedMaps, out removed);
+                }
+
+                int maps;
+                int spawners;
+
+                XmlSpawner.XmlLoadFromFile(file, Prefix, false, out maps, out spawners);
+
+                if (spawners < expected)
+                {
+                    error = String.Format(
+                        "Imported {0} spawner(s) but {1} are in {2} - {3} were rejected. See badxml.log.",
+                        spawners, expected, relative, expected - spawners);
+
+                    Log.Error(error);
+                    return false;
+                }
+
+                summary = String.Format(
+                    "{0}: removed {1}, imported {2} spawner(s){3}",
+                    relative,
+                    removed,
+                    spawners,
+                    hadBackup ? "" : " (no .bak yet, so nothing was removed first)");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Reloading {0} failed.", relative);
+                error = String.Format("Reloading {0} failed: {1}", relative, ex.Message);
+                return false;
+            }
+
+            Log.Info(summary);
+
+            // Same reason [GG_Reimport does it: the spawners are new, so their NPCs know nothing
+            // about the phase the town is currently in.
+            DailyLifeCommands.Reconcile();
+
+            SpawnerSnapshot.Write();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Resolves a spawn file name under Spawns/Custom, refusing anything that leaves it.
+        ///
+        /// GetFullPath rather than a string test, so `a/../../x` and every other spelling of the
+        /// same idea collapse to one comparison. The trailing separator matters: without it a
+        /// sibling directory whose name merely starts with the root would pass.
+        /// </summary>
+        private static bool TryResolve(string relative, out string file, out string error)
+        {
+            file = null;
+            error = null;
+
+            if (String.IsNullOrWhiteSpace(relative))
+            {
+                error = "No spawn file named.";
+                return false;
+            }
+
+            if (relative.IndexOf("..", StringComparison.Ordinal) >= 0)
+            {
+                error = String.Format("'{0}' is not a spawn file name.", relative);
+                return false;
+            }
+
+            string root = Path.GetFullPath(Path.Combine(Core.BaseDirectory, SpawnRoot))
+                .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+            string full;
+
+            try
+            {
+                full = Path.GetFullPath(Path.Combine(root, relative));
+            }
+            catch (Exception ex)
+            {
+                error = String.Format("'{0}' is not a spawn file name: {1}", relative, ex.Message);
+                return false;
+            }
+
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                error = String.Format("'{0}' is outside {1}.", relative, SpawnRoot);
+                return false;
+            }
+
+            if (!full.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            {
+                error = String.Format("'{0}' is not an .xml file.", relative);
+                return false;
+            }
+
+            if (!File.Exists(full))
+            {
+                error = String.Format("'{0}' does not exist.", relative);
+                return false;
+            }
+
+            file = full;
+            return true;
+        }
+
+        /// <summary>
+        /// Counts the spawn points in a file or directory, the way the loader will read them.
+        ///
+        /// A DataSet read is the same thing XmlLoadFromStream does, so this fails on exactly the
+        /// files that would fail there - which is the point: it turns a silent zero-import into a
+        /// refusal that happens BEFORE anything is deleted.
+        /// </summary>
+        private static bool TryCountSpawnPoints(string path, out int count, out string error)
+        {
+            count = 0;
+            error = null;
+
+            var files = new List<string>();
+
+            if (Directory.Exists(path))
+            {
+                files.AddRange(Directory.GetFiles(path, "*.xml", SearchOption.AllDirectories));
+            }
+            else
+            {
+                files.Add(path);
+            }
+
+            foreach (string file in files)
+            {
+                try
+                {
+                    var set = new System.Data.DataSet("Spawns");
+
+                    using (var stream = File.OpenRead(file))
+                    {
+                        set.ReadXml(stream);
+                    }
+
+                    if (set.Tables["Points"] != null)
+                    {
+                        count += set.Tables["Points"].Rows.Count;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = String.Format(
+                        "{0} cannot be read, so nothing was changed: {1}",
+                        Path.GetFileName(file),
+                        ex.Message);
+
+                    Log.Error(error);
+                    return false;
+                }
+            }
+
+            if (count == 0)
+            {
+                error = String.Format(
+                    "{0} has no spawn points, so nothing was changed. An empty import would have "
+                    + "deleted the existing spawners and replaced them with nothing.",
+                    Directory.Exists(path) ? SpawnRoot : Path.GetFileName(path));
+
+                return false;
+            }
 
             return true;
         }

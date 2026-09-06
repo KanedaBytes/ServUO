@@ -39,6 +39,9 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `js/ids.js` | Auto-generated ids, mirroring `[NavMark` |
 | `js/build.js` | A finished tool to a shape - the seam between the browser and the writer |
 | `js/live.js` | The Live panel's line and snapshot age |
+| `spawnxml.js` | Source-preserving reader and writer for XmlSpawner's spawn XML |
+| `objects2.js` | The `<Objects2>` micro-format: what a spawner spawns |
+| `spawners.js` | Spawn files to shapes and back - the XML counterpart to `project.js` |
 | `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
 | `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
 | `js/`, `index.html`, `style.css` | The editor |
@@ -323,6 +326,66 @@ It ticks on its own one-second timer rather than only on a successful poll, beca
 stops answering `pollEntities` swallows the error and stops updating: an age computed only on
 success would freeze at the last good value, which is the one number that must not.
 
+## Spawners
+
+Two layers, and the difference is what you may write to. `spawners` is `Spawns/Custom/<facet>/GG_*.xml`
+- seven of them today, editable. `spawners-stock` is `Spawns/<facet>.xml` - 2,572 on Trammel alone,
+read-only, and there to answer "what else is already spawning near the thing I am editing", which
+the GG files cannot.
+
+**Stock spawners load by viewport, not by facet.** `/api/spawners?bbox=x,y,w,h` filters on
+`(Map, CentreX, CentreY)` rather than on filename, because `trammel.xml` contains 47 Felucca
+spawners and `CentreX` reaches 7093 out in the Lost Lands. The response carries `total` too, so the
+layer count can read "68 in view / 2,572 total" and the number never looks like the whole. The 4 MB
+file is parsed once and cached against its mtime and size, so panning does not re-read it.
+
+### Byte fidelity, again, for a format we did not design
+
+`spawnxml.js` is to the spawn XML what `compact.js` is to the JSON, and separate for the same
+reason: `compact.js` encodes one specific JSON layout rule, and XML has no such rule to encode.
+
+The shard's writer is `DataSet.WriteXml` (`XmlSpawner2.cs:7566`) — no declaration, no BOM, no
+schema, two-space indent, `True`/`False` capitalised, `<Elem />` for an empty string and no element
+at all for an absent one, and `>` escaped as `&gt;` where a modern writer would leave it bare. So
+nothing is reserialised: every `<Points>` block is kept as its raw source slice, along with the text
+between blocks, and a field edit rewrites one element inside one slice.
+
+**Line endings are measured, never assumed.** `Spawns/trammel.xml` is CRLF with no trailing newline;
+`Spawns/Custom/trammel/GG_OldMarta.xml` is LF with one. Both are LF in git's object store —
+`core.autocrlf` converts on checkout, and the custom files simply have not been checked out since
+they were written. A writer that picked a convention would rewrite whole files it was asked to touch
+one field of.
+
+The test is not a fixture. It is every spawn file in the repo: 6,805 blocks across 20 files, ~11 MB,
+byte-identical through parse and stringify.
+
+### The corpus is stranger than the writer
+
+Three things the real data does that the format does not:
+
+- **Forty-seven blocks in `trammel.xml` have their `<UniqueId>` commented out** — `<!--guid-->`
+  sitting exactly where the element belongs. `<UniqueId>` is what `[XmlLoad` replaces on, so those
+  spawners are **duplicated on every import** rather than replaced. Preserved, and reported.
+- **Sixteen blocks carry `<MinDelay>` twice and no `<MaxDelay>`**, a hand-edit where the second
+  should have been the other one. `DataSet` schema inference turns a repeated element into a nested
+  table, which may well mean every trammel spawner loads with default delays. Reported; whether it
+  is actually true is a live question, not a settled one.
+- **Two `<Objects2>` entries repeat a key and one stops three keys early.** Harmless — `GetParm`
+  takes the first occurrence and absent keys default — and invisible until something looked.
+
+None of these stop a file being read. `parse` reports them as findings rather than throwing, because
+a reader that refused the file would just mean nobody could be shown the problem.
+
+### `<Objects2>` has no escaping at all
+
+`GGBaker:MX=1:SB=0:…`, entries joined by the literal `:OBJ=`. No quoting, no backslash, no encoding
+— which makes two rules load-bearing, and both fail **silently** on the shard. A type name
+containing `:MX=` makes the reader discard the whole entry (`XmlSpawner2.cs:12701`); one containing
+any other key token is misparsed, because `GetParm` searches the entire entry. So a spawn list that
+would vanish is refused before it is written, naming the token that would have done it.
+
+`SpawnObject.Disabled` is not serialized to XML at all, so the editor cannot see or set it.
+
 ## The request channel
 
 The bridge drops `Data/Live/requests/<name>.token`; the shard's `RequestPoller` picks it up within
@@ -333,10 +396,33 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `nav-reload` | `NavigationSystem.TryReload` |
 | `dailylife-reload` | `DailyLifeCommands.TryReload` |
 | `zones-reload` | `RestrictedZoneSystem.TryReload` |
+| `spawn-reload` | `GGSpawnCommands.TryReloadFile`; the body is a file name relative to `Spawns/Custom` |
+| `nav-audit` | `NavAudit.TryRun`, and writes the structured findings to `Data/Live/nav-audit.json` |
 | `gg-reimport` | `GGSpawnCommands.TryReimport` |
 | `livemap-on` / `livemap-off` | The entity snapshot; the body carries `<seconds> [custom|all] [zoneId]` |
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
+
+**`spawn-reload` reloads ONE file, and that is the point.** `[GG_Reimport` deletes every `GG_`
+spawner in the world and re-imports the whole tree, and deleting an `XmlSpawner` deletes its spawned
+mobiles - so using it per save would make editing Old Marta empty and refill the whole town. Instead
+the token carries a file NAME relative to `Spawns/Custom`, never a path, resolved with
+`Path.GetFullPath` against that root and refused if it lands outside, contains `..`, or is not an
+existing `.xml`. The same check the whitelist here makes, enforced on both sides rather than trusted
+from one.
+
+It unloads from the **`.bak`** and loads the new file. `[XmlLoad` replaces by `<UniqueId>`, so
+loading alone is an upsert and a spawner the editor deleted would be orphaned in the world forever;
+the `.bak` the bridge writes before every save is precisely the old GUID set. No `.bak` means a
+brand-new file with nothing to unload, and the ack says so rather than guessing.
+
+**`[GG_Reimport` could wipe the world and report success, and now cannot.** `DeleteExisting()` ran
+outside the try, and `XmlLoadFromStream` does not throw on a malformed file - it logs, sets a flag
+and returns with zero spawners (`XmlSpawner2.cs:6141-6153`). So a bad XML file produced a cheerful
+"deleted 7, imported 0" over an emptied world, and the catch below it caught nothing at all. Both
+paths now read every file the way the loader will *before* anything is deleted, and compare the
+imported count against the row count afterwards, since `XmlLoadFromFile` does not surface its own
+per-row rejection counters.
 
 **`zones-reload` is new in 5b, and its absence was a live bug rather than a gap.** The bridge served
 `restricted-zones.json` and `shapes.js` mapped that layer to `nav-reload`, so an edit there would

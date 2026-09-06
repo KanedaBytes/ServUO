@@ -34,6 +34,36 @@ for (const name of ['navigation.json', 'britain-daily-life.json', 'restricted-zo
 fs.copyFileSync(
     path.join(SOURCE_ROOT, 'Config', 'Custom.cfg'), path.join(root, 'Config', 'Custom.cfg'));
 
+// The spawn files too, since 5c saves those. The stock file is trimmed rather than copied: the
+// real trammel.xml is 4 MB, and a bbox test only needs enough blocks to have some inside the box
+// and some outside it.
+fs.mkdirSync(path.join(root, 'Spawns', 'Custom', 'trammel'), { recursive: true });
+
+for (const name of ['GG_DailyLife.xml', 'GG_OldMarta.xml']) {
+    fs.copyFileSync(
+        path.join(SOURCE_ROOT, 'Spawns', 'Custom', 'trammel', name),
+        path.join(root, 'Spawns', 'Custom', 'trammel', name));
+}
+
+{
+    const full = fs.readFileSync(path.join(SOURCE_ROOT, 'Spawns', 'trammel.xml'), 'utf8');
+    const cut = nthIndex(full, '<Points>', 300);
+
+    fs.writeFileSync(
+        path.join(root, 'Spawns', 'trammel.xml'),
+        full.slice(0, cut) + '</Spawns>', 'utf8');
+}
+
+function nthIndex(text, needle, n) {
+    let at = -1;
+
+    for (let i = 0; i < n; i++) {
+        at = text.indexOf(needle, at + 1);
+    }
+
+    return at;
+}
+
 // Both must be set before the modules below are required: whitelist resolves its paths, and
 // bridge.js reads the timeout, at require time.
 process.env.GG_EDITOR_ROOT = root;
@@ -374,6 +404,119 @@ test('an oversized body is answered rather than dropped', async () => {
     });
 
     assert.strictEqual(response.status, 413);
+});
+
+// ---- spawners -----------------------------------------------------------------------------------
+
+const GG_KEY = 'spawn:trammel/GG_OldMarta.xml';
+const GG_FILE = whitelist.resolveSpawnFile(GG_KEY);
+
+test.beforeEach(() => {
+    fs.copyFileSync(
+        path.join(SOURCE_ROOT, 'Spawns', 'Custom', 'trammel', 'GG_OldMarta.xml'), GG_FILE);
+    fs.rmSync(GG_FILE + '.bak', { force: true });
+});
+
+test('the GG spawners come back always, and the stock ones only for a bbox', async () => {
+    const all = await call('GET', '/api/spawners');
+
+    assert.strictEqual(all.status, 200);
+    assert.strictEqual(all.body.shapes.filter((s) => s.layer === 'spawners').length, 7);
+    assert.strictEqual(all.body.shapes.filter((s) => s.layer === 'spawners-stock').length, 0,
+        'stock spawners came back without a bbox');
+    assert.ok(all.body.files[GG_KEY].hash);
+
+    const boxed = await call('GET', '/api/spawners?bbox=1400,1580,360,300');
+    const stock = boxed.body.shapes.filter((s) => s.layer === 'spawners-stock');
+
+    assert.ok(stock.length > 0 && stock.length < boxed.body.total,
+        `${stock.length} of ${boxed.body.total} is not a subset`);
+
+    // Every one of them really is in the box - the whole point of asking for one.
+    for (const shape of stock) {
+        const [x, y] = shape.points[0];
+
+        assert.ok(x >= 1400 && x < 1760 && y >= 1580 && y < 1880, `${shape.id} at ${x},${y}`);
+    }
+});
+
+test('a nonsense bbox withholds the stock layer rather than serving the whole facet', async () => {
+    const { body } = await call('GET', '/api/spawners?bbox=not,a,box,at-all');
+
+    assert.strictEqual(body.shapes.filter((s) => s.layer === 'spawners-stock').length, 0);
+    assert.strictEqual(body.bbox, null);
+});
+
+test('saving a spawn file writes a .bak and asks for that file by name, not the whole tree', async () => {
+    const before = fs.readFileSync(GG_FILE, 'utf8');
+    const { body: listed } = await call('GET', '/api/spawners');
+    const shape = listed.shapes.find((s) => s.id.includes('GG_OldMarta'));
+
+    runShard(() => ({ ok: true, message: 'trammel/GG_OldMarta.xml: removed 1, imported 1 spawner(s)' }));
+
+    const { status, body } = await call('POST', `/api/save/${GG_KEY}`, {
+        baseHash: listed.files[GG_KEY].hash,
+        updates: [{ ...shape, points: [[1480, 1650, 20]] }]
+    });
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.reloaded, true);
+    assert.strictEqual(fs.readFileSync(GG_FILE + '.bak', 'utf8'), before);
+
+    const after = fs.readFileSync(GG_FILE, 'utf8');
+
+    assert.match(after, /<CentreX>1480<\/CentreX>/);
+    assert.match(after, /<CentreY>1650<\/CentreY>/);
+
+    // One field per line changed, and nothing else in the file moved.
+    assert.strictEqual(after.split('\n').length, before.split('\n').length);
+
+    // Per file, and the token says which - not gg-reimport, which would delete and respawn every
+    // GG mobile in the world on every save.
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['spawn-reload']);
+    assert.match(shard.seen[0].body, /^trammel\/GG_OldMarta\.xml #[0-9a-f]{8}$/);
+});
+
+test('a stale spawn save is refused, and a stock file cannot be saved at all', async () => {
+    const before = fs.readFileSync(GG_FILE, 'utf8');
+    const stale = await call('POST', `/api/save/${GG_KEY}`, { baseHash: 'deadbeef', updates: [] });
+
+    assert.strictEqual(stale.status, 409);
+    assert.strictEqual(fs.readFileSync(GG_FILE, 'utf8'), before);
+
+    for (const name of ['spawn:trammel/notgg.xml', 'spawn:../../etc/passwd.xml', 'stock:trammel']) {
+        const { status } = await call('POST', `/api/save/${encodeURIComponent(name)}`, { updates: [] });
+
+        assert.strictEqual(status, 400, name);
+    }
+});
+
+test('a stock spawner shape is refused by name even when addressed at a writable file', async () => {
+    const { body: listed } = await call('GET', '/api/spawners');
+    const { status, body } = await call('POST', `/api/save/${GG_KEY}`, {
+        baseHash: listed.files[GG_KEY].hash,
+        updates: [{
+            id: 'stock:trammel.xml#3', kind: 'point', map: 'Trammel', points: [[1, 2, 3]], props: {}
+        }]
+    });
+
+    assert.strictEqual(status, 400);
+    assert.match(body.error, /read-only/);
+});
+
+test('a spawn entry the shard would silently drop is refused before it is written', async () => {
+    // A type name containing ':MX=' makes XmlSpawner discard the whole entry, so the spawner just
+    // stops spawning with nothing said anywhere.
+    const { body: listed } = await call('GET', '/api/spawners');
+    const shape = listed.shapes.find((s) => s.id.includes('GG_OldMarta'));
+
+    const { status, body } = await call('POST', `/api/save/${GG_KEY}`, {
+        baseHash: listed.files[GG_KEY].hash,
+        updates: [{ ...shape, props: { ...shape.props, Objects2: 'Bad:MX=1:MX=2' } }]
+    });
+
+    assert.strictEqual(status, 400);
+    assert.match(body.error, /does not have exactly one/);
 });
 
 // ---- the two languages agree --------------------------------------------------------------------

@@ -238,6 +238,7 @@ walk `[NavRecord` just wrote.
 | `[LiveMap on\|off [seconds] [custom\|all] [zoneId]` | Administrator | Write the live entity snapshot. Defaults to custom actors and players every 2s; `all` needs a nav zone to bound it |
 | `[NavExportGolden` | Administrator | Write the golden JSON fixtures the bridge's writer is tested against |
 | `[RestrictedZonesReload` | GameMaster | Now also reachable from the bridge as the `zones-reload` token |
+| `[GG_Reimport` | Administrator | Now refuses with the world intact when a spawn file cannot be read, instead of emptying it and reporting success |
 
 Map tiles are derived data, gitignored, and safe to render while the shard is up - MapExport
 builds its `Server.csproj` reference into its own folder rather than the repo root. A second facet
@@ -245,6 +246,14 @@ is another run: `export-tiles.ps1 -Facet Felucca`.
 
 A reload ack now carries the shard's validator strings themselves (`errors` and `warnings`), not
 just a count of them, so the editor can say which problem to fix rather than that there are three.
+
+**Spawners (5c).** `Spawns/Custom/<facet>/GG_*.xml` is editable through the same save path; the
+~2,500 stock spawners are read-only context, loaded by viewport rather than by facet. A save
+reloads **one file** - `spawn-reload`, which unloads from the `.bak` and loads the new file - rather
+than `[GG_Reimport`, which deletes every `GG_` spawner in the world along with its spawned mobiles.
+`Data/Live/spawners.json` carries what each spawner is actually doing: running, current count, next
+spawn, its source file, and whether the vendor migration switched it off. Written on a slow timer
+and immediately after any spawner reload.
 
 See `tools/editor/README.md` for the save contract, the two tiers of validation failure - a dangling
 edge id is a warning here, not a rejection - and what is still to bring back from the ModernUO

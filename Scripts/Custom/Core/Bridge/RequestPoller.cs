@@ -200,6 +200,50 @@ namespace Server.Custom
                     message = String.Format("{0} restricted zone(s)", RestrictedZoneSystem.Zones.Count);
                     return true;
 
+                // The editor's per-save reload. The body is a file NAME relative to Spawns/Custom -
+                // never a path - and everything after the first space is the bridge's nonce.
+                //
+                // Resolved and range-checked on this side as well as in the bridge's whitelist. A
+                // sandbox enforced only by the caller is a sandbox enforced by whoever calls next.
+                case "spawn-reload":
+                {
+                    string relative = (body ?? "").Trim();
+                    int space = relative.IndexOf(' ');
+
+                    if (space >= 0)
+                    {
+                        relative = relative.Substring(0, space);
+                    }
+
+                    string spawnSummary;
+
+                    if (!GGSpawnCommands.TryReloadFile(relative, out spawnSummary, out error))
+                    {
+                        message = error;
+                        return false;
+                    }
+
+                    message = spawnSummary;
+                    return true;
+                }
+
+                case "nav-audit":
+                {
+                    string auditSummary;
+                    IList<string> auditReport;
+                    IList<NavAuditProblem> problems;
+
+                    NavAudit.TryRun(out auditSummary, out auditReport, out problems);
+                    NavAudit.WriteSnapshot(problems);
+
+                    // Never a failure: an audit that finds blocked edges has done its job. The
+                    // findings go in warnings, and the full structured set is in nav-audit.json
+                    // because the ack caps its arrays at forty.
+                    warnings = auditReport;
+                    message = auditSummary;
+                    return true;
+                }
+
                 case "gg-reimport":
                     string summary;
 

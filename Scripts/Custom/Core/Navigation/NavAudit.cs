@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Server.Custom
 {
@@ -18,15 +19,91 @@ namespace Server.Custom
     /// CAVEAT, carried over from their experience: a waypoint at a closed door is a false
     /// positive. Read the report before believing it.
     /// </summary>
+    /// <summary>
+    /// One thing the audit found, structured rather than as prose.
+    ///
+    /// The editor draws these as a layer over the edges, which a formatted line cannot be turned
+    /// into without parsing it back - and a format parsed by the same codebase that wrote it is a
+    /// format defined twice.
+    /// </summary>
+    public sealed class NavAuditProblem
+    {
+        public NavAuditProblem(string from, string to, string map, bool blocked, int distance)
+        {
+            From = from;
+            To = to;
+            Map = map;
+            Blocked = blocked;
+            Distance = distance;
+        }
+
+        public string From { get; private set; }
+
+        public string To { get; private set; }
+
+        public string Map { get; private set; }
+
+        /// <summary>True when the engine could not path it; false when it is merely over the cap.</summary>
+        public bool Blocked { get; private set; }
+
+        public int Distance { get; private set; }
+    }
+
     public static class NavAudit
     {
         private static readonly CustomLogger Log = CustomLogger.For("Nav");
 
+        /// <summary>Where the structured findings go, for the editor to draw as a layer.</summary>
+        public const string SnapshotPath = "Data/Live/nav-audit.json";
+
+        /// <summary>
+        /// Runs the audit and reports it to whoever asked.
+        ///
+        /// A thin wrapper over TryRun, which is where the work is. Split so the editor bridge can
+        /// have the same report the command prints rather than a second, subtly different one -
+        /// and so the blocked pairs can be written somewhere a map layer can read them.
+        /// </summary>
         public static void Run(Mobile from)
         {
-            var report = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string summary;
+            IList<string> report;
+            IList<NavAuditProblem> problems;
 
+            TryRun(out summary, out report, out problems);
+
+            Emit(from, summary, problems.Count > 0);
+
+            foreach (string line in report)
+            {
+                Emit(from, "  " + line, true);
+            }
+
+            foreach (NavAuditProblem problem in problems)
+            {
+                if (problem.Blocked)
+                {
+                    Emit(
+                        from,
+                        "  Note: a waypoint at a closed door is a false positive. Verify before editing.",
+                        true);
+
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The audit itself, callable without a Mobile.
+        ///
+        /// `problems` is the same findings as `report`, structured. Prose cannot be turned into a
+        /// map layer, and parsing it back would mean inventing the format twice.
+        /// </summary>
+        public static bool TryRun(
+            out string summary, out IList<string> report, out IList<NavAuditProblem> problems)
+        {
+            var lines = new List<string>();
+            var found = new List<NavAuditProblem>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int checkedEdges = 0;
             int blocked = 0;
             int far = 0;
@@ -66,8 +143,9 @@ namespace Server.Custom
                 if (distance > cap)
                 {
                     far++;
-                    report.Add(String.Format(
+                    lines.Add(String.Format(
                         "FAR      '{0}' -> '{1}' is {2} tiles (cap {3})", a.Id, b.Id, distance, cap));
+                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, false, distance));
                     continue;
                 }
 
@@ -85,7 +163,8 @@ namespace Server.Custom
                 if (!CanWalk(a.Map, start, goal))
                 {
                     blocked++;
-                    report.Add(String.Format(
+                    found.Add(new NavAuditProblem(a.Id, b.Id, a.Map.Name, true, distance));
+                    lines.Add(String.Format(
                         "BLOCKED  '{0}' {1}{2} -> '{3}' {4}{5}",
                         a.Id,
                         start,
@@ -96,26 +175,59 @@ namespace Server.Custom
                 }
             }
 
-            string summary = String.Format(
+            summary = String.Format(
                 "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} adjacent (skipped).",
                 checkedEdges,
                 blocked,
                 far,
                 adjacent);
 
-            Emit(from, summary, blocked > 0 || far > 0);
+            report = lines;
+            problems = found;
 
-            foreach (string line in report)
+            return blocked == 0;
+        }
+
+        /// <summary>
+        /// Writes the findings where a map layer can read them.
+        ///
+        /// The ack caps its arrays at forty and carries prose; this carries every finding as a
+        /// record. A layer needs the edge, not a sentence about the edge.
+        /// </summary>
+        public static void WriteSnapshot(IList<NavAuditProblem> problems)
+        {
+            var builder = new StringBuilder(512);
+
+            builder.Append("{\n");
+            builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
+            builder.Append("  \"problems\": [\n");
+
+            for (int i = 0; i < problems.Count; i++)
             {
-                Emit(from, "  " + line, true);
+                NavAuditProblem problem = problems[i];
+
+                builder.Append("    {\"from\":").Append(Json.Quote(problem.From));
+                builder.Append(",\"to\":").Append(Json.Quote(problem.To));
+                builder.Append(",\"map\":").Append(Json.Quote(problem.Map));
+                builder.Append(",\"blocked\":").Append(problem.Blocked ? "true" : "false");
+                builder.Append(",\"distance\":").Append(problem.Distance);
+                builder.Append("}");
+
+                if (i < problems.Count - 1)
+                {
+                    builder.Append(",");
+                }
+
+                builder.Append("\n");
             }
 
-            if (blocked > 0)
+            builder.Append("  ]\n}\n");
+
+            string error;
+
+            if (!AtomicFile.Write(SnapshotPath, builder.ToString(), out error))
             {
-                Emit(
-                    from,
-                    "  Note: a waypoint at a closed door is a false positive. Verify before editing.",
-                    true);
+                Log.Error("Could not write {0}: {1}", SnapshotPath, error);
             }
         }
 
