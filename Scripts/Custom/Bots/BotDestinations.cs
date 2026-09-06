@@ -43,7 +43,23 @@ namespace Server.Custom
             {
                 NavDestination candidate = candidates[i];
 
-                double weight = config.WeightFor(candidate, bot.Class);
+                // A gatherer walking a load home is on an errand, and its weights come from
+                // somewhere else entirely - see HaulWeightFor.
+                double weight = HaulWeightFor(bot, candidate);
+                bool hauling = weight >= 0.0;
+
+                if (!hauling)
+                {
+                    weight = config.WeightFor(candidate, bot.Class);
+                }
+
+                // A work site that failed validation at load is not a destination at all. Left
+                // in, a Miner would pick the unreachable face every tick, fail to route, and
+                // stand still - which from the outside is a broken walker, not a bad coordinate.
+                if (BotWorkSites.IsExcluded(candidate.Id))
+                {
+                    weight = 0.0;
+                }
 
                 // Just-left gets a heavy discount rather than an exclusion: on a graph with one
                 // eligible destination, excluding it would strand the bot entirely.
@@ -55,13 +71,30 @@ namespace Server.Custom
                 // A destination short of its standing crowd pulls harder. CAPPED at four times,
                 // because an uncapped multiplier on a large floor makes one bank the only place
                 // anybody goes - the shard would empty into it.
-                if (weight > 0.0)
+                //
+                // NOT WHILE HAULING, and this one cost two probe runs to find. The floor exists to
+                // draw LOITERERS, so that a bank looks busy; a miner with a pack full of ore is not
+                // a loiterer. Applied to it, an empty bank's fourfold boost turned 2.0 into 8.0 and
+                // pulled roughly a third of all deliveries away from a forge with a dry smith
+                // standing at it - which reads, from outside, as a hand-over that does not work.
+                if (weight > 0.0 && !hauling)
                 {
                     int shortfall = BotCrowds.Shortfall(candidate);
 
                     if (shortfall > 0)
                     {
                         weight *= 1.0 + Math.Min(shortfall, 3);
+                    }
+                }
+
+                if (weight > 0.0)
+                {
+                    // And the mirror: a work site that is filling up pulls less, reaching zero at
+                    // capacity. Linear rather than a cliff, so a half-full face is half as
+                    // attractive rather than equally attractive right up to the last slot.
+                    if (BotWorkSites.IsWorkType(candidate.Type))
+                    {
+                        weight *= BotWorkSites.VacancyFactor(candidate);
                     }
                 }
 
@@ -96,6 +129,82 @@ namespace Server.Custom
             }
 
             return candidates[candidates.Count - 1];
+        }
+
+        /// <summary>
+        /// The weights a gatherer uses while it is carrying a load home, or -1 for "not hauling".
+        ///
+        /// Upstream's override, kept including its numbers. A miner with a pack full of ore wants
+        /// a smith, a lumberjack wants a carpenter, either will settle for a bank, and neither is
+        /// interested in a tavern until the load is off its back. Without this the bot walks out
+        /// of the mine and picks the mine again, because the mine is what its class weights love.
+        ///
+        /// It deliberately does NOT consult byType/byTag at all: hauling is a different errand
+        /// from living in the town, and blending the two tables would let a Miner's 10.0 site
+        /// weight outvote the delivery it is actually on.
+        /// </summary>
+        private static double HaulWeightFor(PlayerBot bot, NavDestination candidate)
+        {
+            if (!bot.HaulPending || !BotClassHelper.IsGatherer(bot.Class))
+            {
+                return -1.0;
+            }
+
+            Type raw = BotHarvest.YieldFor(bot.Class);
+
+            // A station whose trade buys what this bot is carrying. Exclusion is not tested here:
+            // the caller zeroes an excluded destination whatever this returns.
+            foreach (CrafterProfile profile in CrafterProfiles.All)
+            {
+                if (raw == null || profile.RawGood != raw)
+                {
+                    continue;
+                }
+
+                if (!Insensitive.Equals(candidate.Type, profile.StationType))
+                {
+                    continue;
+                }
+
+                if (profile.StationTag != null && !candidate.HasTag(profile.StationTag))
+                {
+                    continue;
+                }
+
+                // Upstream's 9.0 against the bank's 2.0 is a station this trade COULD sell to.
+                // Whether anybody is actually there was not a question their weights asked, and
+                // it is the question that decides whether the haul turns into anything: a load
+                // left at an empty forge is a load in a bank box with extra steps.
+                //
+                // So a station with a crafter of the right trade standing at it outbids the bank
+                // outright rather than by four to one. This is a deliberate improvement on
+                // upstream, and a small one - it changes which of two sensible destinations a
+                // laden miner picks, and nothing else. It also makes the difference between the
+                // work probe proving the hand-over and proving it four times in five.
+                return IsStaffed(candidate, profile) ? 20.0 : 9.0;
+            }
+
+            if (Insensitive.Equals(candidate.Type, "bank"))
+            {
+                return 2.0;
+            }
+
+            return 0.02;
+        }
+
+        /// <summary>Is a crafter of this trade actually working at this station right now?</summary>
+        private static bool IsStaffed(NavDestination destination, CrafterProfile profile)
+        {
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (crafter.RawGood == profile.RawGood
+                    && Insensitive.Equals(crafter.DestinationId, destination.Id))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

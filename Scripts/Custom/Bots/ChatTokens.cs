@@ -49,6 +49,9 @@ namespace Server.Custom
         /// <summary>BotShop, BotBanking, BotWantAd. Not ported.</summary>
         Economy,
 
+        /// <summary>CrafterProfiles and the Crafter behaviour. Live since step 7e.</summary>
+        Crafting,
+
         /// <summary>BotTaming. Not ported.</summary>
         Taming,
 
@@ -139,13 +142,23 @@ namespace Server.Custom
             // "Tessa Ravenwood" is greeted as "Tessa" - nobody hails a surname.
             Register("name", ChatTokenOwner.Identity, ResolveName);
 
+            // What an artisan calls its materials: "iron ingots", "cloth", "boards".
+            //
+            // Wired by step 7e, and it was Economy-owned and reserved before that - the census
+            // above still counts it in the economy's nine because that is what the corpus scan
+            // found. It moved because the session that could answer it turned out to be the
+            // crafting one: craft_need.txt reads "need {mat}", and a Crafter knows its own
+            // profile. A bot of any other class resolves it to nothing, and the runtime guard in
+            // TryResolve then refuses the line - which is correct, because a Warrior has no
+            // materials to be short of.
+            Register("mat", ChatTokenOwner.Crafting, ResolveMaterial);
+
             // ---- reserved: the token is real, the session that fills it is not here ----
 
             // Economy. {short} is COIN, not a short name: trade_short.txt reads "need {short}
             // more", the gap between an offer and a price, and it always travels with {price}.
             Register("price", ChatTokenOwner.Economy, null);
             Register("item", ChatTokenOwner.Economy, null);
-            Register("mat", ChatTokenOwner.Economy, null);
             Register("short", ChatTokenOwner.Economy, null);
 
             Register("pet", ChatTokenOwner.Taming, null);
@@ -157,6 +170,19 @@ namespace Server.Custom
             Register("actor", ChatTokenOwner.Journal, null);
             Register("other", ChatTokenOwner.Journal, null);
             Register("when", ChatTokenOwner.Journal, null);
+        }
+
+        /// <summary>The bot's trade materials, or null when it has no trade.</summary>
+        private static string ResolveMaterial(ChatTokenContext context)
+        {
+            if (context == null || context.Bot == null)
+            {
+                return null;
+            }
+
+            CrafterProfile profile = CrafterProfiles.For(context.Bot.Class);
+
+            return profile == null ? null : profile.MaterialNoun;
         }
 
         private static void Register(string name, ChatTokenOwner owner, Func<ChatTokenContext, string> resolver)

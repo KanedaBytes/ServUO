@@ -352,7 +352,27 @@ namespace Server.Custom
                 return;
             }
 
+            // Re-check the work sites against whatever graph is loaded now. Validate runs once at
+            // Initialize, so without this a site fixed by an edit to navigation.json stays
+            // excluded until a restart - and the exclusion is invisible except in Bots.Work,
+            // which makes it exactly the kind of thing somebody rediscovers an hour later.
+            //
+            // It lives here rather than in [NavReload on purpose: the navigation layer is Core
+            // and knows nothing about bots, and inverting that to save a keystroke would be a
+            // poor trade. Edit the graph, [NavReload, then [BotsReload.
+            BotWorkSites.Validate(Map.Trammel);
+
             from.SendMessage("Bot config reloaded. " + BotSystem.Caps.Describe());
+
+            foreach (var entry in BotWorkSites.Excluded)
+            {
+                from.SendMessage(0x35, String.Format("  work site '{0}' excluded: {1}", entry.Key, entry.Value));
+            }
+
+            foreach (string line in BotWorkSites.Stationless)
+            {
+                from.SendMessage(0x35, "  " + line);
+            }
 
             CommandLogging.WriteLine(
                 from,

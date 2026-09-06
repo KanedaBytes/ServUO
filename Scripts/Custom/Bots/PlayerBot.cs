@@ -90,6 +90,25 @@ namespace Server.Custom
         public bool Commuting { get; set; }
 
         /// <summary>
+        /// This gatherer has a load on its back and is walking it to town. Transient.
+        ///
+        /// Upstream's flag, and it lives on the mobile for the same reason PartyAcceptPending
+        /// does: the behaviour that sets it (Gatherer, at the end of a shift) is not the one that
+        /// reads it (Traveler, on arriving somewhere that will take the load), and a deleted bot
+        /// takes the flag with it rather than leaving an entry in a table to sweep.
+        /// </summary>
+        public bool HaulPending { get; set; }
+
+        /// <summary>
+        /// The pack beast trailing this gatherer, or null. Transient.
+        ///
+        /// Deliberately not serialized, and it would be wrong if it were: both bot and beast are
+        /// ephemeral and delete themselves on load, so a persisted reference could only ever be
+        /// to something already gone.
+        /// </summary>
+        public BaseCreature PackAnimal { get; set; }
+
+        /// <summary>
         /// True between noticing a party invitation and answering it. Transient, and deliberately
         /// a flag on the bot rather than a static table in BotParty: a deleted bot takes it with
         /// it, so there is nothing to leak or sweep.
@@ -416,6 +435,11 @@ namespace Server.Custom
             }
 
             BotParty.OnBotDeleted(this);
+
+            // The beast goes with its owner. Its own OnThink reaper would get there within ten
+            // seconds anyway, but leaving a llama standing in a field for ten seconds after the
+            // miner vanished is exactly the kind of loose end that becomes a stray.
+            BotPackAnimals.Release(this);
 
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);

@@ -8,7 +8,9 @@ namespace Server.Custom
     ///
     /// The lifecycle model is "the state IS the behaviour name" - a bot stores a string and is
     /// reconstituted from it - so this registry is the seam the lifecycle session grows into.
-    /// Deliberately tiny for now: two behaviours and a fallback.
+    /// Six behaviours and a fallback. Crafter and Gatherer are registered here so [BotBehavior
+    /// can switch a bot into one by hand, but neither is a LIFECYCLE ROLL TARGET - both are
+    /// reached only by arriving somewhere they make sense, exactly as upstream had it.
     ///
     /// An unknown name falls back to Idle with a warning rather than throwing. Upstream's reason
     /// is the right one: the name comes from a save, and a behaviour removed in a later build must
@@ -25,6 +27,8 @@ namespace Server.Custom
                 { "Traveler", () => new TravelerBehavior() },
                 { "BankSitter", () => new BankSitterBehavior() },
                 { "Shopper", () => new ShopperBehavior() },
+                { "Crafter", () => new CrafterBehavior() },
+                { "Gatherer", () => new GathererBehavior() },
             };
 
         public static PlayerBotBehavior Create(string name)

@@ -105,12 +105,41 @@ namespace Server.Custom
         [JsonProperty("handoff")]
         public Dictionary<string, double> Handoff { get; set; }
 
+        /// <summary>
+        /// How many bots a work site holds before it stops pulling, keyed by DESTINATION ID.
+        ///
+        /// The mirror image of Crowds, and deliberately the same shape read the other way: a
+        /// floor says "fewer than this and the place pulls harder", a capacity says "more than
+        /// this and it stops pulling at all". Keyed by id rather than by type because two faces
+        /// of the same rock can hold different numbers of people, which is exactly the case the
+        /// west mine presents.
+        ///
+        /// Absent is the production case: with no entry a site's capacity is its authored
+        /// arrival-point count, which is how many bots can physically stand there.
+        /// </summary>
+        [JsonProperty("capacity")]
+        public Dictionary<string, int> Capacity { get; set; }
+
+        /// <summary>
+        /// The handoff chance used when a bot arrives at the station its OWN class works,
+        /// whatever the destination's type is.
+        ///
+        /// Upstream used 0.95 for both an artisan reaching its forge and a gatherer reaching its
+        /// site, and it needs to override the per-type number rather than sit beside it: a Tailor
+        /// arriving at the tailor shop is not a shopper browsing, and the 0.8 shop handoff would
+        /// send it away one visit in five for no reason.
+        /// </summary>
+        [JsonProperty("station")]
+        public double Station { get; set; }
+
         [JsonConstructor]
         public BotLifeConfig()
         {
             Phases = new Dictionary<string, BotPhaseClamp>(StringComparer.OrdinalIgnoreCase);
             Crowds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             Handoff = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            Capacity = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            Station = 0.95;
         }
 
         public void Validate(ConfigErrors errors)
@@ -128,6 +157,24 @@ namespace Server.Custom
             if (Handoff == null)
             {
                 Handoff = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            if (Capacity == null)
+            {
+                Capacity = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            if (Station < 0.0 || Station > 1.0)
+            {
+                errors.Add("station is {0}; it is a probability and must be between 0 and 1.", Station);
+            }
+
+            foreach (var entry in Capacity)
+            {
+                if (entry.Value <= 0)
+                {
+                    errors.Add("capacity.{0} is {1}; it must be positive.", entry.Key, entry.Value);
+                }
             }
 
             foreach (var entry in Phases)
@@ -191,6 +238,38 @@ namespace Server.Custom
             double chance;
 
             return type != null && Handoff.TryGetValue(type, out chance) ? chance : 0.0;
+        }
+
+        /// <summary>How many bots this site holds, or 0 when it is not configured.</summary>
+        public int CapacityFor(string destinationId)
+        {
+            int capacity;
+
+            return destinationId != null && Capacity.TryGetValue(destinationId, out capacity) ? capacity : 0;
+        }
+
+        /// <summary>
+        /// Capacity entries naming a destination that is not on the graph.
+        ///
+        /// Same reasoning as UnknownPhaseKeys: it is not wrong to carry a number for a site a
+        /// later session will author, but it does nothing today, and a silent no-op in a tuning
+        /// table is worth saying out loud.
+        /// </summary>
+        public List<string> UnknownCapacityKeys()
+        {
+            var unknown = new List<string>();
+
+            foreach (string key in Capacity.Keys)
+            {
+                if (Nav.Destination(key) == null)
+                {
+                    unknown.Add(key);
+                }
+            }
+
+            unknown.Sort(StringComparer.Ordinal);
+
+            return unknown;
         }
 
         /// <summary>

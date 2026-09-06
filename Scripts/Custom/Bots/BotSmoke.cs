@@ -35,6 +35,7 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Travel", BotWalkProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Life", BotLifeProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Speech", BotChatProbe.BuildHealthResult);
+            HealthCheck.Register("Bots.Shift", BotWorkProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -332,9 +333,17 @@ namespace Server.Custom
             // standing in the middle of the walk or lifecycle probes would set every one of their
             // bots talking - harmless, but it makes three overlapping console logs unreadable.
             // Its own silence stage also needs the room genuinely empty to mean anything.
+            TimeSpan afterLife = afterWalk + BotLifeProbe.Window + TimeSpan.FromSeconds(10.0);
+
+            Timer.DelayCall(afterLife, () => BotChatProbe.Run(map, location));
+
+            // The work probe goes last of all, and it is the only one that does not spawn at
+            // `location`: its bots start at a mine face and a forge, which are the two places the
+            // other probes never go. It still waits its turn, because a Miner walking a haul back
+            // into town would collide with the chat probe's deliberately empty room.
             Timer.DelayCall(
-                afterWalk + BotLifeProbe.Window + TimeSpan.FromSeconds(10.0),
-                () => BotChatProbe.Run(map, location));
+                afterLife + BotChatProbe.SpeakWindow + BotChatProbe.SilenceWindow + TimeSpan.FromSeconds(10.0),
+                () => BotWorkProbe.Run(map, location));
 
             return _last;
         }

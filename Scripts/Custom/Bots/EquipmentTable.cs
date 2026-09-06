@@ -932,13 +932,48 @@ namespace Server.Custom
             bot.AddToBackpack(spare);
         }
 
-        // SEAM 3 of 5 (see README.md): upstream seeded a few finished goods into a fresh
-        // artisan's pack from CrafterProfiles, so a smith was not empty-handed. CrafterProfiles
-        // is a crafting-layer file and lands with the economy session; this becomes its caller
-        // again then. An artisan bot is otherwise fully dressed and skilled - it just has nothing
-        // it has made yet, which is true of one that has not worked a shift.
+        // SEAM 3, PAID OFF (step 7e, which brought CrafterProfiles). A fresh artisan starts with
+        // a few finished pieces of its own trade and enough stock to work from, so it is not
+        // standing at a bench with empty hands on the day it appears.
+        //
+        // Upstream's StarterProps also carried GOLD - 120 to 400 by trade - which is deliberately
+        // NOT ported here: nothing in this session spends or earns coin, and seeding a purse for
+        // a purse system that does not exist would be inventing an economy one item at a time.
+        // That part returns with 7f.
         private static void SeedCrafterStarterProps(PlayerBot bot)
         {
+            CrafterProfile profile = CrafterProfiles.For(bot.Class);
+
+            if (profile == null)
+            {
+                // A Fisherman reaches here and has no profile: its trade is a later session. It
+                // keeps the look its RollCrafterLook gave it and simply carries nothing.
+                return;
+            }
+
+            foreach (var make in profile.StarterProps)
+            {
+                Item item = null;
+
+                try
+                {
+                    item = make();
+                }
+                catch
+                {
+                    item = null;
+                }
+
+                if (item == null)
+                {
+                    continue;
+                }
+
+                if (!bot.AddToBackpack(item))
+                {
+                    item.Delete();
+                }
+            }
         }
 
         // -------------------------------------------------------------------
@@ -1249,10 +1284,48 @@ namespace Server.Custom
             EquipCrafterTool(bot);
         }
 
-        // SEAM 3 of 5 (see README.md): the smith's hammer and the fisherman's pole came from
-        // CrafterProfiles.Tool, which lands with the economy session. Restored there.
+        // SEAM 3, PAID OFF (step 7e). The smith's hammer goes in a hand; the tailor's kit and the
+        // carpenter's saw ride in the pack, which is where their trades keep them and which
+        // BaseTool.CheckAccessible is perfectly happy with - it tests RootParent, not a layer.
+        //
+        // Without this a Smith stands at a forge and cannot work: DefBlacksmithy.CanCraft answers
+        // 1044038 for a missing tool, and CraftItem.CompleteCraft dereferences the tool
+        // unconditionally, so an untooled crafter is not merely idle but a crash waiting on a
+        // caller that forgot to check.
         private static void EquipCrafterTool(PlayerBot bot)
         {
+            CrafterProfile profile = CrafterProfiles.For(bot.Class);
+
+            if (profile == null || profile.ToolType == null)
+            {
+                return;
+            }
+
+            Item tool;
+
+            try
+            {
+                tool = Activator.CreateInstance(profile.ToolType) as Item;
+            }
+            catch
+            {
+                tool = null;
+            }
+
+            if (tool == null)
+            {
+                return;
+            }
+
+            if (profile.ToolIsEquipped && bot.EquipItem(tool))
+            {
+                return;
+            }
+
+            if (!bot.AddToBackpack(tool))
+            {
+                tool.Delete();
+            }
         }
 
         private static void RollHealerLook(PlayerBot bot, BotSkillTier tier)

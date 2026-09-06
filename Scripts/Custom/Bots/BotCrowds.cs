@@ -6,6 +6,14 @@ namespace Server.Custom
     /// <summary>
     /// Who is standing where, and where is short.
     ///
+    /// Two numbers, read in opposite directions, off ONE census:
+    ///
+    ///   FLOOR     (crowds)   fewer than this and the place pulls harder - a bank looks busy.
+    ///   CAPACITY  (capacity) more than this and it stops pulling at all - a work site fills up.
+    ///
+    /// Session 7e added the second, and deliberately on the same code path rather than beside it:
+    /// they are the same question about the same count, and two counts would eventually disagree.
+    ///
     /// The standing-crowd floor is a design ADDITION, not a translation. Upstream kept its bank
     /// crowds with permanent spawner-held, lifecycle-exempt bots, and its lifecycle teleported
     /// extra sitters to a uniformly random bank with no occupancy check at all. This shard walks,
@@ -45,6 +53,22 @@ namespace Server.Custom
                 var sitter = bot.Behavior as BankSitterBehavior;
 
                 if (sitter != null && Insensitive.Equals(sitter.DestinationId, destinationId))
+                {
+                    count++;
+                    continue;
+                }
+
+                var crafter = bot.Behavior as CrafterBehavior;
+
+                if (crafter != null && Insensitive.Equals(crafter.DestinationId, destinationId))
+                {
+                    count++;
+                    continue;
+                }
+
+                var gatherer = bot.Behavior as GathererBehavior;
+
+                if (gatherer != null && Insensitive.Equals(gatherer.DestinationId, destinationId))
                 {
                     count++;
                     continue;

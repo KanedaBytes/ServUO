@@ -84,10 +84,10 @@ namespace Server.Custom
             };
         }
 
-        // SEAM 1 of 5 (see Scripts/Custom/Bots/README.md): StationFor is not ported,
-        // for the same reason as BotClassHelper.StationFor - it returned the upstream
-        // DestinationType enum. It returns with the Crafter behaviour, as a nav
-        // destination type string.
+        // SEAM 1 is paid off, but NOT here: BotClassHelper.StationFor is the one that came back,
+        // because the subtypes were promoted to real BotClass values and the station belongs to
+        // the class now. Upstream kept both and theirs were duplicates of each other. Nothing
+        // should ask a CrafterType where it works - ask the class.
 
         /// <summary>The BotClass a given subtype corresponds to, now that they are real classes.</summary>
         public static BotClass ToBotClass(CrafterType type)

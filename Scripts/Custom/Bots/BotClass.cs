@@ -125,10 +125,38 @@ namespace Server.Custom
             };
         }
 
-        // SEAM 1 of 5 (see Scripts/Custom/Bots/README.md): StationFor is not ported.
-        // It returned the upstream DestinationType enum, which is their travel layer's;
-        // ours is the free-token `type` string on a NavDestination. It returns with the
-        // Traveler/Crafter behaviours, as a nav destination type string.
+        /// <summary>
+        /// The station an artisan class works, as a nav destination type and an optional tag.
+        ///
+        /// SEAM 1, PAID OFF. Upstream returned its 31-member DestinationType enum
+        /// (Smith -> Forge, Tailor -> VendorTailor, Fisherman -> Dock, Carpenter ->
+        /// VendorCarpenter), which is the enum this shard deliberately did not port. Ours returns
+        /// the free `type` token, narrowed by a tag where the type alone is not enough — and it
+        /// is not enough for two of the four, because thirteen of our destinations are `shop` and
+        /// type alone cannot tell a loom from a bakery. That is the same discrimination the
+        /// destination weighting already makes, in the same place: tags.
+        ///
+        /// FISHERMAN ANSWERS `dock` AND THERE IS NO DOCK. That is deliberate and is the second of
+        /// this session's two failure surfaces: BotWorkSites.Validate reports the class as
+        /// stationless at load rather than the fishing half being quietly missing. See the seam
+        /// note at the foot of CrafterProfiles.
+        /// </summary>
+        public static BotStation StationFor(BotClass cls)
+        {
+            CrafterProfile profile = CrafterProfiles.For(cls);
+
+            if (profile != null)
+            {
+                return new BotStation(profile.StationType, profile.StationTag);
+            }
+
+            if (cls == BotClass.Fisherman)
+            {
+                return new BotStation("dock", null);
+            }
+
+            return new BotStation(null, null);
+        }
 
         /// <summary>
         /// Artisans station at a town fixture and work it. Distinct from gatherers, who

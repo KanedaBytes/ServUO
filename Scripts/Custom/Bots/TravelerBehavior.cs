@@ -117,6 +117,19 @@ namespace Server.Custom
                     return new[] { ChatLibrary.Wtb, ChatLibrary.Shopping, ChatLibrary.SmallTalk };
                 }
 
+                case "forge":
+                {
+                    return new[] { "craft_talk", ChatLibrary.SmallTalk };
+                }
+
+                case "mine":
+                case "lumber":
+                {
+                    // Nobody is passing through a rock face. A traveller standing at one is a
+                    // gatherer between shifts, so it talks about the work.
+                    return new[] { "gather_talk", ChatLibrary.SmallTalk };
+                }
+
                 default:
                 {
                     return new[] { ChatLibrary.SmallTalk };
@@ -376,8 +389,22 @@ namespace Server.Custom
                 return false;
             }
 
+            // THE HAUL COMES OFF FIRST, before anything decides whether to stay. Upstream orders
+            // it the same way, and the order matters: a miner that arrived at a smithy has done
+            // what it came to do whether or not it then loiters, and a handoff roll that declined
+            // would otherwise send it away still carrying the ore.
+            BotWorkDelivery.TryDeliver(bot, destination);
+
             string type = destination.Type;
-            double chance = BotLifecycle.Config_.HandoffChance(type);
+
+            // A bot at its own station is not a passer-by, and the per-type number is wrong for
+            // it: the 0.8 shop handoff would send a Tailor away from the tailor shop one visit in
+            // five for no reason. Upstream used a flat 0.95 for a station and so do we.
+            bool ownStation = BotWorkSites.IsOwnStation(bot, destination);
+
+            double chance = ownStation
+                ? BotLifecycle.Config_.Station
+                : BotLifecycle.Config_.HandoffChance(type);
 
             if (chance <= 0.0)
             {
@@ -402,14 +429,20 @@ namespace Server.Custom
                 return false;
             }
 
-            PlayerBotBehavior visit = BuildVisit(type, destination);
+            PlayerBotBehavior visit = BuildVisit(bot, type, destination);
 
             if (visit == null)
             {
                 return false;
             }
 
-            int minutes = Utility.RandomMinMax(2, 6);
+            // Upstream's windows, and they are three very different lengths on purpose. A
+            // browsing visit is minutes; a SHIFT at a rock face is four to eight; an artisan
+            // settles at its bench for three to six HOURS, which is what makes a town's smith a
+            // fixture you can go back to rather than somebody who happened to be there once.
+            int minutes = visit is CrafterBehavior ? Utility.RandomMinMax(180, 360)
+                        : visit is GathererBehavior ? Utility.RandomMinMax(4, 8)
+                        : Utility.RandomMinMax(2, 6);
 
             visit.VisitExpiresAt = CustomTime.Now + TimeSpan.FromMinutes(minutes);
 
@@ -425,8 +458,32 @@ namespace Server.Custom
             return true;
         }
 
-        private static PlayerBotBehavior BuildVisit(string type, NavDestination destination)
+        /// <summary>
+        /// The one dispatch point from "arrived somewhere" to "became something".
+        ///
+        /// Work is checked FIRST, and by the bot's own class rather than by the destination's
+        /// type, because the same tailor shop is a station to a Tailor and a shop to everybody
+        /// else. Getting that order wrong would put a Tailor to work browsing its own counter.
+        /// </summary>
+        private static PlayerBotBehavior BuildVisit(PlayerBot bot, string type, NavDestination destination)
         {
+            if (BotWorkSites.IsOwnStation(bot, destination))
+            {
+                if (BotClassHelper.IsGatherer(bot.Class))
+                {
+                    var gatherer = new GathererBehavior();
+                    gatherer.DestinationId = destination.Id;
+                    return gatherer;
+                }
+
+                if (CrafterProfiles.For(bot.Class) != null)
+                {
+                    var crafter = new CrafterBehavior();
+                    crafter.DestinationId = destination.Id;
+                    return crafter;
+                }
+            }
+
             if (Insensitive.Equals(type, "bank"))
             {
                 var sitter = new BankSitterBehavior();

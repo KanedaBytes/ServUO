@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Server.Custom
 {
@@ -68,8 +69,21 @@ namespace Server.Custom
 
         public static void Initialize()
         {
+            // Bind the crafting profiles to ServUO's CraftSystem singletons. It has to happen
+            // here and not in a static constructor: CraftContext.Configure is what builds those
+            // eleven singletons, and reaching for one earlier would construct a second, parallel
+            // copy that nothing else in the shard shares.
+            CrafterProfiles.Bind();
+
+            // Validate the work sites against the loaded graph and the real map. Initialize
+            // rather than Configure, because this asks questions about world items - the forge
+            // and anvil are addons the decoration system places - and there is no world during
+            // Configure.
+            BotWorkSites.Validate(Map.Trammel);
+
             HealthCheck.Register("Bots.Population", BuildHealthResult);
             HealthCheck.Register("Bots.Chat", ChatLibrary.BuildHealthResult);
+            HealthCheck.Register("Bots.Work", BuildWorkHealthResult);
 
             BotTickManager.Initialize();
 
@@ -365,6 +379,159 @@ namespace Server.Custom
             }
 
             return HealthResult.Ok(detail);
+        }
+
+        /// <summary>
+        /// Bots.Work - the working-class census.
+        ///
+        /// Separate from Bots.Population for the same reason Bots.Chat is: it answers a different
+        /// question with a different failure mode. Population asks "are there bots and are they
+        /// built correctly"; this asks "is there anywhere for them to work, and are they working".
+        ///
+        /// The verdict ladder, strictest first:
+        ///
+        ///   FAIL   a class has a station and the graph has none of it. That class can never
+        ///          work at all, and nothing else in the system would say so.
+        ///   WARN   a site was excluded at load (no route, or nothing harvestable there), or a
+        ///          crafter is blocked at its bench, or a capacity entry names a site that does
+        ///          not exist.
+        ///   OK     everything else, including a shard with no gatherers alive right now.
+        /// </summary>
+        public static HealthResult BuildWorkHealthResult()
+        {
+            var crafters = CrafterBehavior.Live();
+            var gatherers = GathererBehavior.Live();
+
+            int atStation = 0;
+            int dry = 0;
+            int full = 0;
+            int made = 0;
+            var blocked = new List<string>();
+
+            foreach (CrafterBehavior crafter in crafters)
+            {
+                atStation++;
+                made += crafter.Made;
+
+                if (crafter.IsDry)
+                {
+                    dry++;
+                }
+
+                if (crafter.IsFull)
+                {
+                    full++;
+                }
+
+                if (crafter.Blocked != null)
+                {
+                    blocked.Add(crafter.Blocked);
+                }
+            }
+
+            int working = 0;
+            int walkingIn = 0;
+
+            foreach (GathererBehavior gatherer in gatherers)
+            {
+                if (gatherer.IsWorking)
+                {
+                    working++;
+                }
+                else
+                {
+                    walkingIn++;
+                }
+            }
+
+            int hauling = 0;
+
+            foreach (Mobile mobile in LiveRegistry.Snapshot())
+            {
+                var bot = mobile as PlayerBot;
+
+                if (bot != null && bot.HaulPending)
+                {
+                    hauling++;
+                }
+            }
+
+            var text = new StringBuilder(320);
+
+            List<string> sites = BotWorkSites.Census(Map.Trammel);
+
+            text.Append(sites.Count == 0 ? "no work sites on the graph" : "sites: " + String.Join(", ", ToArray(sites)));
+
+            text.AppendFormat(
+                ". {0} crafter(s) at station ({1} dry, {2} bench-full, {3} made since attaching), "
+                + "{4} gatherer(s) out ({5} working, {6} walking in), {7} hauling.",
+                atStation,
+                dry,
+                full,
+                made,
+                gatherers.Count,
+                working,
+                walkingIn,
+                hauling);
+
+            text.AppendFormat(
+                " {0} load(s) delivered, {1} unit(s). {2} pack animal(s) live, {3} reaped, {4} released.",
+                BotWorkSites.Deliveries,
+                BotWorkSites.Delivered,
+                BotPackAnimals.LiveCount(),
+                BotPackAnimals.Reaped,
+                BotPackAnimals.Released);
+
+            IList<string> stationless = BotWorkSites.Stationless;
+
+            if (stationless.Count > 0)
+            {
+                return HealthResult.Fail(String.Format(
+                    "{0} class(es) have nowhere to work: {1}. {2}",
+                    stationless.Count,
+                    String.Join("; ", ToArray(stationless)),
+                    text));
+            }
+
+            var excluded = new List<string>();
+
+            foreach (var entry in BotWorkSites.Excluded)
+            {
+                excluded.Add(entry.Key + " (" + entry.Value + ")");
+            }
+
+            if (excluded.Count > 0)
+            {
+                excluded.Sort(StringComparer.Ordinal);
+
+                return HealthResult.Warn(String.Format(
+                    "{0} work site(s) excluded at load: {1}. {2}",
+                    excluded.Count,
+                    String.Join("; ", ToArray(excluded)),
+                    text));
+            }
+
+            List<string> unknownCapacity = _store.Life.UnknownCapacityKeys();
+
+            if (unknownCapacity.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "capacity names {0} destination(s) that are not on the graph: {1}. {2}",
+                    unknownCapacity.Count,
+                    String.Join(", ", ToArray(unknownCapacity)),
+                    text));
+            }
+
+            if (blocked.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} crafter(s) cannot work: {1}. {2}",
+                    blocked.Count,
+                    String.Join("; ", ToArray(blocked)),
+                    text));
+            }
+
+            return HealthResult.Ok(text.ToString());
         }
 
         private static string Describe<T>(Dictionary<T, int> counts, Func<T, string> name)

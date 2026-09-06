@@ -174,10 +174,11 @@ namespace Server.Custom
                 if (bot.BehaviorChanges <= 1)
                 {
                     string line = String.Format(
-                        "{0} never changed behaviour ({1} as {2})",
+                        "{0} never changed behaviour ({1} as {2}, a {3})",
                         bot.Name,
                         bot.BehaviorChanges,
-                        bot.Behavior == null ? "nothing" : bot.Behavior.SerializableName);
+                        bot.Behavior == null ? "nothing" : bot.Behavior.SerializableName,
+                        BotClassHelper.DisplayName(bot.Class));
 
                     // A bot that spent the window wedged had no chance to change: a Traveler
                     // declines to transition mid-walk, and it never finished the walk. That is the
@@ -185,11 +186,31 @@ namespace Server.Custom
                     if (wedged)
                     {
                         notes.Add(line + ", but it was wedged the whole time");
+                        continue;
                     }
-                    else
+
+                    // Nor has a bot stalled when it is three minutes into a four-minute walk.
+                    //
+                    // Step 7e put work sites out in the wilderness, and the round trip to one is
+                    // longer than this probe's entire window - by design, because a mine is
+                    // supposed to be a journey. A Miner that spent the window walking to one has
+                    // done exactly what was asked of it and simply has not arrived yet.
+                    //
+                    // This is the SECOND time this probe's proxy for "did something" has had to be
+                    // corrected, and in the same direction both times. It first asked the phase
+                    // clock, which does not move on an arrival handoff, and reported busy bots as
+                    // idle. Brain changes fixed that and are still the right measure for a bot
+                    // living in town; they are the wrong one for a bot on a long errand, because
+                    // the errand IS the behaviour.
+                    string errand = LongErrand(traveler);
+
+                    if (errand != null)
                     {
-                        unchanged.Add(line);
+                        notes.Add(line + ", but it was walking to " + errand);
+                        continue;
                     }
+
+                    unchanged.Add(line);
                 }
             }
 
@@ -289,6 +310,33 @@ namespace Server.Custom
             }
 
             Finish(bots, result);
+        }
+
+        /// <summary>
+        /// The name of the work site this Traveler is walking to, or null.
+        ///
+        /// Deliberately narrow: only a WORK destination counts, not any long walk. "Still walking"
+        /// is the normal steady state for a Traveler and excusing it wholesale would blunt the
+        /// probe to nothing - the walk probe learned that one already. Work sites are the specific
+        /// thing this shard added that takes longer to reach than the probe runs for.
+        /// </summary>
+        private static string LongErrand(TravelerBehavior traveler)
+        {
+            if (traveler == null || !traveler.IsTravelling)
+            {
+                return null;
+            }
+
+            NavDestination destination = traveler.DestinationId == null
+                ? null
+                : Nav.Destination(traveler.DestinationId);
+
+            if (destination == null || !BotWorkSites.IsWorkType(destination.Type))
+            {
+                return null;
+            }
+
+            return destination.Name;
         }
 
         private static void Finish(List<PlayerBot> bots, HealthResult result)
