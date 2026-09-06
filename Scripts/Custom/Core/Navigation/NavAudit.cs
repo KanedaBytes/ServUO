@@ -18,6 +18,26 @@ namespace Server.Custom
     ///
     /// CAVEAT, carried over from their experience: a waypoint at a closed door is a false
     /// positive. Read the report before believing it.
+    ///
+    /// CAVEAT, the other way, and the dangerous one because it is silent: **a clean audit does
+    /// not mean a walker can walk it.** This probes with a Point3D; NavWalker probes with the
+    /// mobile itself, and the engine treats the two differently in ways that go in BOTH
+    /// directions:
+    ///
+    ///   - MOBILES. `Movement.cs:411` sets `checkMobs` only when the probe is an uncontrolled
+    ///     BaseCreature, so a Point3D walks through anything standing in the way and a walker
+    ///     does not. Every tile on the route except the goal is blocked by whoever is on it.
+    ///     Verified: `brit-prov-1` (1469,1668) has a stock vendor parked on it permanently, and
+    ///     the audit reports the edge clean.
+    ///   - DOORS. Conversely `FastAStarAlgorithm.cs:92` only ignores doors for a BaseCreature,
+    ///     so the audit is STRICTER here - which is the closed-door false positive above.
+    ///   - START TILE. The audit paths waypoint-tile to waypoint-tile. A walker starts the next
+    ///     hop from wherever it stopped, which is anywhere within `ArrivalRangeFor` (2 tiles by
+    ///     default) of the waypoint - a 5x5 box the audit never validated.
+    ///
+    /// So the audit checks the GEOMETRY of an edge, once, on the canonical tiles. It cannot
+    /// check occupancy, and it does not check the approaches. Treat a pass as "the road exists",
+    /// not "everyone will get through".
     /// </summary>
     /// <summary>
     /// One thing the audit found, structured rather than as prose.

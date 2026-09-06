@@ -525,3 +525,12 @@ pets stabled for the length of the sentence.
   `World.Items` / `World.Mobiles`, justify it in a comment at the call site.
 - Tick math must be wraparound-safe: compare by subtraction
   (`Core.TickCount - deadline >= 0`), never `a < b`.
+- **Never use `node --check` to validate files under `tools/editor/js/`** — it passes ES modules
+  that contain syntax errors, because `--check` parses a `.js` file as CommonJS and its fallback to
+  module detection swallows the error. Run the `modules.test.js` suite instead
+  (`node --test tools/editor/*.test.js`), which checks each file as a real `.mjs` and imports the
+  browser module graph. This shipped a blank editor past 161 green tests once already.
+- **Never use PowerShell `Get-Content` / `Set-Content` on source or config files.** They add UTF-8
+  BOMs, `-NoNewline` flattens a whole file onto one line, and the round-trip corrupts non-ASCII
+  (an em dash becomes `â€"`). Use the editor tools or Python for anything textual; keep PowerShell
+  for running processes.

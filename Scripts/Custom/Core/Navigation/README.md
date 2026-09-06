@@ -152,6 +152,36 @@ through a patrol. Too costly for a health check, so it is a command plus
 
 **A waypoint at a closed door is a false positive.** Read the report before editing.
 
+### What a clean audit does not tell you
+
+**A pass means the road exists, not that everyone will get through.** The audit probes with a
+`Point3D`; `NavWalker` probes with the mobile. The engine treats those differently, and not only
+in the forgiving direction:
+
+| | Audit probe (`Point3D`) | Walker probe (uncontrolled `BaseCreature`) |
+| --- | --- | --- |
+| Mobiles in the way | invisible — `checkMobs` is false | **every tile but the goal is blocked by whoever stands on it** (`Movement.cs:411`) |
+| Closed doors | solid | walked through, if `CanOpenDoors` (`FastAStarAlgorithm.cs:92`) |
+| Start tile | the authored waypoint, exactly | wherever the last hop stopped — anywhere in the `ArrivalRangeFor` box, 2 tiles by default |
+
+The door row is the known false positive above. **The other two rows are false negatives, and
+those are the dangerous ones, because a clean report is silent about them.**
+
+Seen in practice: `Perrin could not walk brit-prov-1 -> brit-cour-2` while the audit reported all
+86 edges clean. `brit-prov-1` (1469,1668) has a stock vendor standing on it permanently — the
+audit cannot see her, and every walker can.
+
+This matters more as the graph gets busier. One courier meets an obstruction rarely; a dozen
+walkers plus a bank crowd meet one constantly, and they also block each other. `NavWalker` already
+degrades sensibly — two repaths, then hold if a player is watching, else teleport and log the edge
+— so nothing breaks. But **the log line is the symptom, not the bug**: check occupancy and the
+approach tiles before believing the data is wrong, because the audit has already told you the
+geometry is fine.
+
+One consequence worth knowing at scale: while a player is within `PlayerNearTiles` the walker
+holds instead of teleporting, and it resets the deadline each time without repathing — so a
+walker obstructed in view of a player stays put until the player leaves.
+
 ## Seed data, and what is still missing
 
 Britain, Trammel: 75 waypoints, 86 walk edges, 27 destinations, 65 arrival points, 6 zones,
