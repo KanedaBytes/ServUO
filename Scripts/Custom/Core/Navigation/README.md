@@ -322,7 +322,14 @@ Known gaps, in the order worth fixing:
    real data in one pass.
 2. **Only the west gate is seeded.** The north Chaos guard posts (1521/1525, 1457) and the
    northern approach are outside the seeded box.
-3. **Arrival points are audited less strictly than edges** — `[NavAudit` checks edges, and the
+3. **`[NavAudit` is a full re-path every time, and gets slower with the graph.** It pathfinds
+   every walk edge with the real engine, which is the whole point of it - 132 edges take about 25
+   seconds today. Adopting uo-offline's overworld would take the graph into the thousands, and the
+   audit into minutes, at which point it reads as a hang rather than a check. **Later: an
+   incremental mode that re-checks only edges changed since the last full run** - the snapshot at
+   `Data/Live/nav-audit.json` already carries a timestamp, so the missing half is a per-edge
+   fingerprint and a `[NavAudit full` to force the whole sweep.
+4. **Arrival points are audited less strictly than edges** — `[NavAudit` checks edges, and the
    arrival picker validates a scattered tile with `CanSpawnMobile` at pick time, but an arrival
    point sitting in a wall will simply always scatter. `[NavDebug` is how you spot those.
 

@@ -45,7 +45,8 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `objects2.js` | The `<Objects2>` micro-format: what a spawner spawns |
 | `spawners.js` | Spawn files to shapes and back - the XML counterpart to `project.js` |
 | `fake-shard.js` | A stand-in `RequestPoller` for the tests: watches the request directory, answers acks |
-| `*.test.js` | `node --test tools/editor/*.test.js` (the directory form fails on Node 22) |
+| `*.test.js` | `node --test tools/*/*.test.js` - the whole of `tools/`, including the nav importer (the directory form fails on Node 22) |
+| `../nav-import/` | Converts uo-offline's navigation data into `Data/Custom/reference/` |
 | `modules.test.js` | That the browser code loads at all - see **Why `node --check` is not enough** |
 | `js/`, `index.html`, `style.css` | The editor |
 | `tiles/` | Rendered map, gitignored |
