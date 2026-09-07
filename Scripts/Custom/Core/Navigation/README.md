@@ -297,6 +297,41 @@ sake of a report. It re-walks `MovementPath.Directions` and matches the engine's
 — `CanMoveOver` lets a walker pass the dead, dead bonded pets and hidden staff, and the goal tile
 is exempt — so it does not invent obstructions the walker would not meet.
 
+## Adopting uo-offline's data
+
+`Data/Custom/reference/uo-offline-nav.trammel.json` holds 3952 waypoints and 4291 edges converted
+from uo-offline (see that directory's README). `NavAdopt` proposes a region of it.
+
+**It cannot write navigation data.** It reads the reference, walks what it selected, and writes
+`Data/Live/nav-adopt.json`. The editor draws that as unsaved records and the author accepts through
+the ordinary save path. That is the safety property, and it is structural rather than a rule: there
+is no code path from this file to `navigation.json`.
+
+**Every edge is re-walked, not copied.** Theirs were authored against a 38-tile leg cap and 56% of
+them are longer than `Custom.NavHopMaxTiles`, so each is flood-filled with `NavCorridor.TryPath` and
+subdivided under the cap. That is a real pathfind per edge, which is why the work runs in
+`LoopQueue` passes and writes progress rather than finishing inside one tick.
+
+**Ground we have already authored is skipped** - the union of our nav-zone rects and a hop cap's
+radius around every existing waypoint, derived rather than a Britain rectangle, so it keeps holding
+for the next town authored by hand. 158 of their waypoints sit inside Britain where we have 121.
+
+**But an edge reaching into that ground becomes a JOIN.** Skipping authored ground on its own
+guarantees the adopted region is an island - the road to Trinsic is exactly the edge whose Britain
+end was refused. So the endpoint inside the authored region is mapped to our nearest waypoint
+within the hop cap, the edge is walked like any other, and the hop that touches our waypoint is
+marked `join`. **Adding an edge onto an existing waypoint is additive**: the waypoint's own record
+is not touched, it gains a neighbour.
+
+**A failed edge is reported, never written.** Its waypoints still land; the edge goes to `failures`
+with the walker's reason. A waypoint left with no surviving edge at all is listed in `stranded`, and
+Accept drops it - writing a point with no road is the shape of the fault the west road shipped with.
+
+Every adopted record carries `source: "uo-offline"`, and every id is namespaced `uo-` including the
+waypoints minted to subdivide a hop. Both exist so an adopted record stays tellable from one
+measured against this shard's map: ours were flood-filled and audited here, an adopted one had its
+edges walked at adopt time and nothing else.
+
 ## Seed data, and what is still missing
 
 Britain, Trammel: 75 waypoints, 86 walk edges, 27 destinations, 65 arrival points, 6 zones,

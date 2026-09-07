@@ -61,6 +61,17 @@ namespace Server.Custom
             get { return NavigationSystem.HopMaxTiles; }
         }
 
+        /// <summary>
+        /// How far a join may reach to find one of our waypoints to land on.
+        ///
+        /// The hop cap: a join is an ordinary edge once it is written, so it has to be one the
+        /// walker can plan. Beyond this there is nothing to join to and the edge is not proposed.
+        /// </summary>
+        public static int JoinReach
+        {
+            get { return NavigationSystem.HopMaxTiles; }
+        }
+
         /// <summary>Edges walked per LoopQueue pass. Each is a flood-fill; this is the budget.</summary>
         private const int EdgesPerPass = 4;
 
@@ -183,8 +194,15 @@ namespace Server.Custom
             public readonly List<NavDestination> Destinations = new List<NavDestination>();
             public readonly List<NavArrival> Arrivals = new List<NavArrival>();
 
-            public readonly List<NavEdge> Pending = new List<NavEdge>();
+            public readonly List<PendingEdge> Pending = new List<PendingEdge>();
             public readonly List<string> Failures = new List<string>();
+
+            /// <summary>Proposed edges that land on an existing waypoint, as "from&gt;to".</summary>
+            public readonly HashSet<string> Joins =
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>Proposed waypoints no surviving edge reaches. Accept drops these.</summary>
+            public readonly List<string> Stranded = new List<string>();
             public readonly List<string> Islands = new List<string>();
 
             public int Next;
@@ -269,24 +287,52 @@ namespace Server.Custom
                         continue;
                     }
 
-                    // An edge with one end outside the selection still matters: if the far end is
-                    // one of OURS it becomes a link, which is how an adopted road joins the graph
-                    // instead of becoming the island the west road already was once.
+                    var pending = new PendingEdge { Edge = edge, FromId = edge.From, ToId = edge.To };
+
+                    // AN EDGE WITH ONE END IN GROUND WE HAVE AUTHORED BECOMES A JOIN.
+                    //
+                    // Skipping authored ground keeps our records safe, but on its own it also
+                    // guarantees the adopted region is an island - the road to Trinsic is exactly
+                    // the edge whose Britain end we refused. Adding an edge ONTO an existing
+                    // waypoint is additive: Britain's own record is not touched, it simply gains
+                    // a neighbour. So the endpoint is mapped to our nearest waypoint and the edge
+                    // is walked like any other.
                     if (from != to)
                     {
-                        NavWaypoint outside = byId.ContainsKey(from ? edge.To : edge.From)
-                            ? byId[from ? edge.To : edge.From]
-                            : null;
+                        string outsideId = from ? edge.To : edge.From;
+                        NavWaypoint outside = byId.ContainsKey(outsideId) ? byId[outsideId] : null;
 
                         if (outside == null || !authored.Contains(outside.X, outside.Y))
                         {
                             continue;
                         }
 
+                        NavWaypoint ours = NavigationSystem.Graph.Nearest(
+                            new Point3D(outside.X, outside.Y, outside.Z), Map, JoinReach);
+
+                        if (ours == null)
+                        {
+                            // Inside a zone we authored but with no waypoint near enough to hang
+                            // an edge on. Nothing to join to, so there is nothing to propose.
+                            SkippedAuthored++;
+                            continue;
+                        }
+
+                        if (from)
+                        {
+                            pending.ToId = ours.Id;
+                        }
+                        else
+                        {
+                            pending.FromId = ours.Id;
+                        }
+
+                        pending.IsJoin = true;
+                        pending.OurId = ours.Id;
                         Links++;
                     }
 
-                    Pending.Add(edge);
+                    Pending.Add(pending);
                 }
 
                 foreach (NavDestination destination in reference.Destinations ?? new List<NavDestination>())
@@ -363,15 +409,15 @@ namespace Server.Custom
             /// cap. So the edge is re-walked with the same flood the corridor tool uses, and the
             /// walked path is subdivided at the cap rather than trusted at its authored length.
             /// </summary>
-            public void Walk(NavEdge edge)
+            public void Walk(PendingEdge pending)
             {
-                NavWaypoint from = Resolve(edge.From);
-                NavWaypoint to = Resolve(edge.To);
+                NavWaypoint from = Resolve(pending.FromId);
+                NavWaypoint to = Resolve(pending.ToId);
 
                 if (from == null || to == null)
                 {
                     Failures.Add(String.Format(
-                        "{0} -> {1}: one end is not in the proposal", edge.From, edge.To));
+                        "{0} -> {1}: one end is not in the proposal", pending.FromId, pending.ToId));
                     return;
                 }
 
@@ -384,15 +430,15 @@ namespace Server.Custom
                 if (!NavCorridor.TryPath(Map, start, goal, out path, out error) || path.Count < 2)
                 {
                     Failures.Add(String.Format(
-                        "{0} -> {1}: {2}", edge.From, edge.To, error ?? "no route"));
+                        "{0} -> {1}: {2}", pending.FromId, pending.ToId, error ?? "no route"));
                     return;
                 }
 
-                Subdivide(edge, from, to, path);
+                Subdivide(pending, from, to, path);
             }
 
             /// <summary>Cut a walked path into hops no longer than the cap, minting waypoints.</summary>
-            private void Subdivide(NavEdge edge, NavWaypoint from, NavWaypoint to, List<Point3D> path)
+            private void Subdivide(PendingEdge pending, NavWaypoint from, NavWaypoint to, List<Point3D> path)
             {
                 int cap = NavigationSystem.HopMaxTiles;
 
@@ -441,9 +487,19 @@ namespace Server.Custom
                         From = previous,
                         To = next,
                         KindName = "walk",
-                        Tags = edge.Tags ?? "",
+                        Tags = pending.Edge.Tags ?? "",
                         Source = SourceTag
                     });
+
+                    // The join is the hop that touches OUR waypoint - which may be either end,
+                    // depending on which way the reference authored the edge. Marking the far end
+                    // instead would point the author at the one hop that changes nothing of ours.
+                    if (pending.IsJoin
+                        && (Insensitive.Equals(previous, pending.OurId)
+                            || Insensitive.Equals(next, pending.OurId)))
+                    {
+                        Joins.Add(String.Format("{0}>{1}", previous, next));
+                    }
 
                     previous = next;
                     anchor = at;
@@ -464,9 +520,16 @@ namespace Server.Custom
              */
             private string MintId(string parent)
             {
+                // Namespaced even when the parent is one of OURS. A subdivision minted while
+                // walking a join hangs off `brit-gate-w`, and `brit-gate-w-s2` reads as a record
+                // somebody authored here - which is the one thing the uo- prefix exists to stop.
+                string stem = parent.StartsWith("uo-", StringComparison.OrdinalIgnoreCase)
+                    ? parent
+                    : "uo-" + parent;
+
                 for (int n = 1; ; n++)
                 {
-                    string candidate = String.Format("{0}-s{1}", parent, n);
+                    string candidate = String.Format("{0}-s{1}", stem, n);
 
                     if (!_taken.Contains(candidate))
                     {
@@ -530,35 +593,68 @@ namespace Server.Custom
                     }
                 }
 
-                var stranded = new List<string>();
-
+                // A waypoint no surviving edge even mentions is worse than merely cut off: every
+                // edge it had failed to walk, so it is a point in space with no road at all.
+                // Accept drops these rather than writing a record nothing can reach - which is the
+                // shape of the fault the west road shipped with.
                 foreach (string id in Waypoints.Keys)
                 {
-                    if (!reached.Contains(id))
+                    if (!links.ContainsKey(id))
                     {
-                        stranded.Add(id);
+                        Stranded.Add(id);
                     }
                 }
 
                 for (int i = 0; i < Subdivisions.Count; i++)
                 {
-                    if (!reached.Contains(Subdivisions[i].Id))
+                    if (!links.ContainsKey(Subdivisions[i].Id))
                     {
-                        stranded.Add(Subdivisions[i].Id);
+                        Stranded.Add(Subdivisions[i].Id);
                     }
                 }
 
-                if (stranded.Count == 0)
+                if (Stranded.Count > 0)
+                {
+                    Islands.Add(String.Format(
+                        "{0} proposed waypoint(s) have no surviving edge at all - every edge they "
+                        + "had failed to walk. Accept drops them: {1}",
+                        Stranded.Count, Name(Stranded)));
+                }
+
+                // And the softer case: connected to each other, but not to anything we already
+                // have. Legitimate for a far town adopted before the road to it, so it is
+                // reported rather than refused.
+                var cutOff = new List<string>();
+
+                foreach (string id in Waypoints.Keys)
+                {
+                    if (!reached.Contains(id) && !Stranded.Contains(id))
+                    {
+                        cutOff.Add(id);
+                    }
+                }
+
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    string id = Subdivisions[i].Id;
+
+                    if (!reached.Contains(id) && !Stranded.Contains(id))
+                    {
+                        cutOff.Add(id);
+                    }
+                }
+
+                if (cutOff.Count == 0)
                 {
                     return;
                 }
 
                 Islands.Add(String.Format(
                     "{0} of {1} proposed waypoint(s) cannot reach the existing graph{2}: {3}",
-                    stranded.Count,
+                    cutOff.Count,
                     Waypoints.Count + Subdivisions.Count,
                     Links == 0 ? " (this region touches nothing already authored)" : "",
-                    Name(stranded)));
+                    Name(cutOff)));
             }
 
             private static void Add(Dictionary<string, List<string>> links, string from, string to)
@@ -605,6 +701,29 @@ namespace Server.Custom
 
                 return existing;
             }
+        }
+
+        /// <summary>
+        /// One reference edge, with the ids it will actually be walked between.
+        ///
+        /// The two are not always the reference's own. Where an edge reaches into ground we have
+        /// authored, the endpoint inside it is replaced by OUR nearest waypoint - that substitution
+        /// is what makes a join possible, and keeping it here rather than re-deriving it at walk
+        /// time means the decision is made once, while the authored region is still in hand.
+        /// </summary>
+        private sealed class PendingEdge
+        {
+            public NavEdge Edge;
+
+            /// <summary>Resolved ids: a reference waypoint, or one of ours at a join.</summary>
+            public string FromId;
+            public string ToId;
+
+            /// <summary>True when one end is an existing authored waypoint.</summary>
+            public bool IsJoin;
+
+            /// <summary>That waypoint's id, when there is one. The join hop is the one touching it.</summary>
+            public string OurId;
         }
 
         /// <summary>
@@ -692,6 +811,7 @@ namespace Server.Custom
             WriteDestinations(builder, job);
             WriteArrivals(builder, job);
             WriteStrings(builder, "failures", job.Failures, true);
+            WriteStrings(builder, "stranded", job.Stranded, true);
             WriteStrings(builder, "islands", job.Islands, false);
 
             builder.Append("}\n");
@@ -761,8 +881,16 @@ namespace Server.Custom
                 builder.Append("    {\"from\":").Append(Json.Quote(edge.From))
                     .Append(",\"to\":").Append(Json.Quote(edge.To))
                     .Append(",\"kind\":\"walk\",\"tags\":").Append(Json.Quote(edge.Tags ?? ""))
-                    .Append(",\"source\":").Append(Json.Quote(SourceTag))
-                    .Append("}");
+                    .Append(",\"source\":").Append(Json.Quote(SourceTag));
+
+                // Marked, because a join is the one proposed edge that touches a record we did
+                // not write - the author should be able to see which those are before accepting.
+                if (job.Joins.Contains(String.Format("{0}>{1}", edge.From, edge.To)))
+                {
+                    builder.Append(",\"join\":true");
+                }
+
+                builder.Append("}");
             }
 
             builder.Append(job.Edges.Count > 0 ? "\n" : "").Append("  ],\n");
