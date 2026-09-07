@@ -369,6 +369,16 @@ const ROUTES = {
                 || { utc: null, map: null, ok: false, points: [], hops: [] });
     },
 
+    /**
+     * The last fifty events per bot, as the shard recorded them.
+     *
+     * Written beside entities.json and on the same timer, so a bot the map is drawing always has
+     * a history to show. Read-only, like every Data/Live file.
+     */
+    '/api/botlog': (request, response) => {
+        sendJson(response, 200, readJson(whitelist.FILES.botLog) || { utc: null, bots: [] });
+    },
+
     '/api/reach': (request, response) => {
         sendJson(response, 200,
             readJson(whitelist.FILES.siteReach) || { utc: null, map: null, arrivals: [], probe: [] });

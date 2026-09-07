@@ -344,6 +344,57 @@ button:disabled { opacity: .45; cursor: default; }
 #layers .count { opacity: .55; font-variant-numeric: tabular-nums; }
 
 #health { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+/* The Bots panel reuses the layer-row shape: swatch, name, trailing status. */
+#bots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+#bots li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0;
+    cursor: pointer;
+}
+
+#bots li.selected {
+    background: rgba(255, 255, 255, .08);
+}
+
+#bots label {
+    flex: 1 1 auto;
+    cursor: pointer;
+}
+
+#bot-filter {
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+#bot-detail {
+    margin-top: 6px;
+    border-top: 1px solid var(--line);
+    padding-top: 6px;
+}
+
+#bot-detail .events {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 11px;
+    opacity: .8;
+}
+
+#bot-detail .events li {
+    padding: 1px 0;
+}
+
 #health li { padding: 2px 0; cursor: help; }
 #health .ok { opacity: .5; }
 #health .warn { color: #ffd479; }

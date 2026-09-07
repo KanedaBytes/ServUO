@@ -131,6 +131,12 @@ namespace Server.Custom
             MaxChatCooldown = TimeSpan.FromSeconds(120.0);
         }
 
+        /// <summary>The walker steering this bot mid-journey, or null. See PlayerBotBehavior.</summary>
+        public override NavWalker Walker
+        {
+            get { return _walker; }
+        }
+
         public override string SerializableName
         {
             get { return "Gatherer"; }
@@ -710,10 +716,22 @@ namespace Server.Custom
             }
 
             // That step would leave the site. Drift back toward its middle instead.
-            var centre = new Point3D(
-                _site.X + (_site.Width / 2),
-                _site.Y + (_site.Height / 2),
-                bot.Z);
+            //
+            // A polygon's bounding-box centre can lie OUTSIDE the polygon - an L-shaped wood is
+            // the obvious case - so aiming at it would point the bot at ground it may not enter.
+            // The guard below would refuse the step and the bot would stop drifting, which is a
+            // stuck bot rather than a wrong one; the first vertex is known to be on the shape and
+            // costs nothing to prefer.
+            int cx = _site.X + (_site.Width / 2);
+            int cy = _site.Y + (_site.Height / 2);
+
+            if (!_site.Contains(cx, cy) && _site.Vertices.Length >= 2)
+            {
+                cx = _site.Vertices[0];
+                cy = _site.Vertices[1];
+            }
+
+            var centre = new Point3D(cx, cy, bot.Z);
 
             Direction inward = bot.GetDirectionTo(centre);
 

@@ -47,7 +47,8 @@ const FILES = {
     spawnerState: path.join(REPO_ROOT, 'Data', 'Live', 'spawners.json'),
     navAudit: path.join(REPO_ROOT, 'Data', 'Live', 'nav-audit.json'),
     siteReach: path.join(REPO_ROOT, 'Data', 'Live', 'site-reach.json'),
-    navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json')
+    navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json'),
+    botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json')
 };
 
 /**

@@ -71,6 +71,12 @@ namespace Server.Custom
             MaxChatCooldown = TimeSpan.FromSeconds(50.0);
         }
 
+        /// <summary>The walker steering this bot mid-journey, or null. See PlayerBotBehavior.</summary>
+        public override NavWalker Walker
+        {
+            get { return _walker; }
+        }
+
         public override string SerializableName
         {
             get { return "Shopper"; }

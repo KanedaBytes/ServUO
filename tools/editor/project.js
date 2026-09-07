@@ -154,10 +154,13 @@ function projectNavigation(nav) {
         shapes.push({
             layer: 'nav-zones',
             id: `zone:${zone.id}`,
-            kind: 'rect',
+            // A poly draws and hit-tests as a polygon; x/y/width/height stay its bounding box,
+            // which is what the shard uses to reject a point before casting a ray.
+            kind: zone.shape === 'poly' ? 'poly' : 'rect',
             map: zone.map,
             label: zone.id,
             rect: [zone.x, zone.y, zone.width, zone.height],
+            ...(zone.shape === 'poly' ? { points: parsePoints(zone.points) } : {}),
             props: { id: zone.id, ...extraProps(zone, MODELLED.zone) },
             fields: [{ key: 'tags', label: 'Tags', type: 'string' }]
         });
@@ -427,10 +430,13 @@ const TEMPLATES = {
         omitWhenBlank: ['note']
     },
     zone: {
-        keys: ['id', 'map', 'x', 'y', 'width', 'height', 'tags', 'note'],
+        keys: ['id', 'map', 'x', 'y', 'width', 'height', 'shape', 'points', 'tags', 'note'],
         geometry: ['map', 'x', 'y', 'width', 'height'],
         defaults: { tags: '' },
-        omitWhenBlank: ['note']
+        // shape and points are absent on a rectangle, which is every zone written before polys
+        // existed and most written after. Absent means "rect" on the shard side too, so an
+        // ordinary zone never grows two keys it does not need.
+        omitWhenBlank: ['shape', 'points', 'note']
     },
     route: {
         // 'waypoints' is the geometry. The drawn polyline is derived from it, never the reverse.
@@ -654,6 +660,25 @@ function resolve(root, file, shapeId) {
     }
 
     return { spec, section, node };
+}
+
+/**
+ * "x,y x,y ..." to [[x, y, 0], ...].
+ *
+ * Space tokens rather than a JSON array because SerializeCompact only collapses a record whose
+ * children are all scalars - a nested array would expand every zone over eight lines and break
+ * the one-record-per-line layout the file depends on. Same reason tags are a string.
+ */
+function parsePoints(points) {
+    if (!points) {
+        return [];
+    }
+
+    return String(points).trim().split(/\s+/)
+        .map((token) => token.split(','))
+        .filter((pair) => pair.length === 2)
+        .map(([x, y]) => [Number(x), Number(y), 0])
+        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
 }
 
 function isBlank(value) {

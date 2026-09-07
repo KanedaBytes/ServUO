@@ -397,6 +397,49 @@ namespace Server.Custom
                         record.Width,
                         record.Height);
                 }
+
+                // A shape this build does not understand is FATAL rather than a warning. An
+                // unknown discriminator silently treated as a rectangle would make a zone contain
+                // its whole bounding box - quietly wrong over a much larger area than intended,
+                // which for a restricted zone or a guard region is the worst possible failure.
+                if (record.Shape != null
+                    && !Insensitive.Equals(record.Shape, "rect")
+                    && !Insensitive.Equals(record.Shape, "poly"))
+                {
+                    errors.Add("{0} has an unknown shape '{1}'; expected 'rect' or 'poly'",
+                        where, record.Shape);
+                }
+
+                if (record.IsPoly)
+                {
+                    if (record.Vertices.Length < 6)
+                    {
+                        errors.Add(
+                            "{0} is a poly with {1} vertex/vertices; a polygon needs at least three",
+                            where,
+                            record.Vertices.Length / 2);
+                    }
+
+                    // The box is the poly's index, so a vertex outside it would be unreachable:
+                    // Contains rejects on the box before it ever casts a ray.
+                    int[] v = record.Vertices;
+
+                    for (int p = 0; p + 1 < v.Length; p += 2)
+                    {
+                        if (v[p] < record.X || v[p] >= record.X + record.Width
+                            || v[p + 1] < record.Y || v[p + 1] >= record.Y + record.Height)
+                        {
+                            errors.Add(
+                                "{0} has a vertex at {1},{2} outside its own bounds",
+                                where, v[p], v[p + 1]);
+                            break;
+                        }
+                    }
+                }
+                else if (!String.IsNullOrEmpty(record.Points))
+                {
+                    errors.Add("{0} has points but is not shape 'poly'", where);
+                }
             }
         }
 
@@ -946,6 +989,28 @@ namespace Server.Custom
         [JsonProperty("height")]
         public int Height { get; set; }
 
+        /// <summary>
+        /// "rect" (the default) or "poly". The discriminator this schema was designed around.
+        ///
+        /// Every zone written before this existed stays valid: absent means "rect", and x/y/width
+        /// /height keep their meaning. A poly reads its shape from Points and uses x/y/width
+        /// /height as the BOUNDING BOX, which Contains checks first because rejecting a point
+        /// outside the box costs four comparisons and rejects almost everything.
+        /// </summary>
+        [JsonProperty("shape", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string Shape { get; set; }
+
+        /// <summary>
+        /// A polygon's vertices as "x,y x,y ..." - a space-token string, not a JSON array.
+        ///
+        /// The house rule from the schema's first day: JsonConfig.SerializeCompact only collapses
+        /// a container whose children are all scalars, so a nested array here would expand every
+        /// zone over eight lines and break the one-record-per-line layout the whole file depends
+        /// on. Same reason tags and waypoint lists are space-separated.
+        /// </summary>
+        [JsonProperty("points", NullValueHandling = NullValueHandling.Ignore)]
+        public string Points { get; set; }
+
         [JsonProperty("tags")]
         public string Tags { get; set; }
 
@@ -956,6 +1021,63 @@ namespace Server.Custom
         public NavZone()
         {
             MapName = "Trammel";
+        }
+
+        /// <summary>True when this zone is a polygon rather than a rectangle.</summary>
+        [JsonIgnore]
+        public bool IsPoly
+        {
+            get { return Shape != null && Insensitive.Equals(Shape, "poly"); }
+        }
+
+        private int[] _vertices;
+
+        /// <summary>
+        /// The polygon's vertices, flattened to x,y pairs, or null.
+        ///
+        /// Parsed once and cached: Contains is called from the bot tick for every zone at a bot's
+        /// feet, and re-splitting a string there would be the kind of allocation that only shows
+        /// up under a hundred bots.
+        /// </summary>
+        [JsonIgnore]
+        public int[] Vertices
+        {
+            get
+            {
+                if (_vertices != null)
+                {
+                    return _vertices;
+                }
+
+                if (String.IsNullOrEmpty(Points))
+                {
+                    return _vertices = new int[0];
+                }
+
+                string[] tokens = Points.Split(new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+                var parsed = new List<int>(tokens.Length * 2);
+
+                foreach (string token in tokens)
+                {
+                    int comma = token.IndexOf(',');
+
+                    if (comma <= 0)
+                    {
+                        continue;
+                    }
+
+                    int x, y;
+
+                    if (Int32.TryParse(token.Substring(0, comma), out x)
+                        && Int32.TryParse(token.Substring(comma + 1), out y))
+                    {
+                        parsed.Add(x);
+                        parsed.Add(y);
+                    }
+                }
+
+                return _vertices = parsed.ToArray();
+            }
         }
 
         [JsonIgnore]
@@ -997,7 +1119,83 @@ namespace Server.Custom
 
         public bool Contains(int x, int y)
         {
-            return x >= X && x < X + Width && y >= Y && y < Y + Height;
+            // The bounding box first, for a rect because it IS the answer and for a poly because
+            // it rejects almost every point for four comparisons instead of a whole ray cast.
+            if (x < X || x >= X + Width || y < Y || y >= Y + Height)
+            {
+                return false;
+            }
+
+            if (!IsPoly)
+            {
+                return true;
+            }
+
+            int[] v = Vertices;
+
+            if (v.Length < 6)
+            {
+                // Fewer than three vertices is not a polygon. Falling back to the bounding box
+                // rather than to "contains nothing", because a zone that silently stopped
+                // containing anything would look exactly like a bot ignoring its work area.
+                return true;
+            }
+
+            // Ray casting, counting crossings of a ray going east from the point. The tile's
+            // CENTRE is tested rather than its corner, so a vertex landing exactly on a tile
+            // boundary cannot make containment depend on which way a floating-point comparison
+            // happens to fall.
+            double px = x + 0.5;
+            double py = y + 0.5;
+            bool inside = false;
+
+            for (int i = 0, j = v.Length - 2; i < v.Length; j = i, i += 2)
+            {
+                double ix = v[i], iy = v[i + 1];
+                double jx = v[j], jy = v[j + 1];
+
+                if ((iy > py) != (jy > py)
+                    && px < (jx - ix) * (py - iy) / (jy - iy) + ix)
+                {
+                    inside = !inside;
+                }
+            }
+
+            return inside;
+        }
+
+        /// <summary>
+        /// The zone's area in tiles, for "which zone is smallest at this point".
+        ///
+        /// A polygon's bounding box is not its area, and using the box would let a large diagonal
+        /// zone beat a small rectangle it overlaps. The shoelace formula, halved and absolute.
+        /// </summary>
+        [JsonIgnore]
+        public int Area
+        {
+            get
+            {
+                if (!IsPoly)
+                {
+                    return Width * Height;
+                }
+
+                int[] v = Vertices;
+
+                if (v.Length < 6)
+                {
+                    return Width * Height;
+                }
+
+                long sum = 0;
+
+                for (int i = 0, j = v.Length - 2; i < v.Length; j = i, i += 2)
+                {
+                    sum += (long)v[j] * v[i + 1] - (long)v[i] * v[j + 1];
+                }
+
+                return (int)(Math.Abs(sum) / 2);
+            }
         }
 
         public bool HasTag(string tag)

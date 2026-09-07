@@ -25,7 +25,7 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, drawRoute,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, drawRoute, BEHAVIOR_COLORS,
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
 } from './shapes.js';
 import * as coverage from './coverage.js';
@@ -68,6 +68,10 @@ const state = {
 
     // The last [NavAudit result, drawn over the edges.
     audit: null,
+
+    // The Bots panel: which bot is open, and the last log the shard wrote.
+    botLog: null,
+    selectedBot: null,
 
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
@@ -115,7 +119,8 @@ async function boot() {
         bannerDiscard: $('banner-discard'), bannerDismiss: $('banner-dismiss'),
         bannerReapply: $('banner-reapply'),
         createButtons: $('create-buttons'), layers: $('layers'), health: $('health'),
-        liveStatus: $('live-status')
+        liveStatus: $('live-status'), bots: $('bots'), botFilter: $('bot-filter'),
+        botDetail: $('bot-detail')
     });
 
     initTools();
@@ -341,6 +346,16 @@ async function pollEntities() {
             state.entities = response.entities || [];
             state.live = response;
 
+            // The log is fetched alongside, not on its own timer: it is written by the same
+            // snapshot pass, so a second cadence could only ever show a bot's history from a
+            // different moment than its position.
+            try {
+                state.botLog = await api.botlog();
+            } catch {
+                state.botLog = state.botLog || null;
+            }
+
+            renderBots();
             updateCounts();
             requestRender();
         } catch {
@@ -659,6 +674,151 @@ async function refreshReach(probeType, probePoints) {
         // placing a point - it only means the dots are not there to help while they do it.
         setStatus(`Could not measure reach: ${error.message}`, 'warn');
     }
+}
+
+/**
+ * The Bots panel: every live bot, what it is doing, and why.
+ *
+ * Fed by the same entity snapshot the map draws, so a row and a dot can never disagree - they are
+ * the same record. The event log behind a selected bot comes from Data/Live/botlog.json, which the
+ * shard writes on the same timer for the same reason.
+ *
+ * This is the panel the Gatherer walk-in fault needed and did not have. Three separate faults
+ * shared one symptom - a bot standing still - and telling them apart meant reading a console that
+ * logged almost none of it. A list that says "walking in to The Northern Outcrop" next to one that
+ * says "standing outside a work site" separates two of them at a glance.
+ */
+function renderBots() {
+    const filter = (dom.botFilter.value || '').trim().toLowerCase();
+
+    const bots = state.entities
+        .filter((entity) => entity.kind === 'bot')
+        .filter((entity) => !filter
+            || `${entity.name} ${entity.class || ''} ${entity.behavior || ''}`
+                .toLowerCase().includes(filter))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    dom.bots.innerHTML = '';
+
+    if (bots.length === 0) {
+        const empty = document.createElement('li');
+
+        empty.className = 'muted';
+        empty.textContent = state.entities.length === 0
+            ? 'live is off - turn it on under Shard'
+            : (filter ? 'no bot matches' : 'no bots');
+
+        dom.bots.append(empty);
+        renderBotDetail(null);
+        return;
+    }
+
+    for (const bot of bots) {
+        const row = document.createElement('li');
+        const swatch = document.createElement('span');
+
+        swatch.className = 'swatch';
+        swatch.style.background = BEHAVIOR_COLORS[bot.behavior] || '#c98bdb';
+
+        const label = document.createElement('label');
+
+        label.textContent = bot.name;
+        label.title = bot.status || '';
+
+        const count = document.createElement('span');
+
+        count.className = 'count';
+
+        // The stuck rung, when there is one, beats the behaviour name for the trailing slot: a
+        // wedged bot is the thing somebody opened this panel to find.
+        count.textContent = bot.stuck ? `stuck: ${bot.stuck}` : (bot.behavior || '');
+
+        if (bot.stuck) {
+            count.classList.add('warn');
+        }
+
+        row.append(swatch, label, count);
+
+        row.addEventListener('click', () => {
+            state.selectedBot = bot.serial;
+
+            // Centre rather than select: a bot is not a shape, so it cannot enter the normal
+            // selection - and centring is what somebody clicking a name in a list wants anyway.
+            view.centerOn(bot.x, bot.y);
+            renderBots();
+            requestRender();
+        });
+
+        if (bot.serial === state.selectedBot) {
+            row.classList.add('selected');
+        }
+
+        dom.bots.append(row);
+    }
+
+    renderBotDetail(bots.find((bot) => bot.serial === state.selectedBot) || null);
+}
+
+/** The selected bot's detail and its recent events. */
+function renderBotDetail(bot) {
+    dom.botDetail.innerHTML = '';
+    dom.botDetail.hidden = !bot;
+
+    if (!bot) {
+        return;
+    }
+
+    const name = document.createElement('div');
+
+    name.className = 'name';
+    name.textContent = bot.name;
+
+    const kind = document.createElement('div');
+
+    kind.className = 'kind';
+    kind.textContent = [bot.class, bot.tier, bot.behavior].filter(Boolean).join(' / ');
+
+    const status = document.createElement('div');
+
+    status.className = 'muted';
+    status.textContent = bot.status || '';
+
+    dom.botDetail.append(name, kind, status);
+
+    if (bot.dest) {
+        const dest = document.createElement('div');
+
+        dest.className = 'muted';
+        dest.textContent = `heading for ${bot.dest}`;
+        dom.botDetail.append(dest);
+    }
+
+    const entry = (state.botLog && state.botLog.bots || [])
+        .find((row) => row.serial === bot.serial);
+
+    const events = document.createElement('ul');
+
+    events.className = 'events';
+
+    if (!entry || entry.events.length === 0) {
+        const none = document.createElement('li');
+
+        none.className = 'muted';
+        none.textContent = 'no events recorded';
+        events.append(none);
+    } else {
+        // Newest first here, though the shard writes them oldest first: the file is a log to read
+        // forwards, the panel is a question about what just happened.
+        for (const event of entry.events.slice().reverse()) {
+            const item = document.createElement('li');
+
+            item.textContent = `${event.kind}: ${event.text}`;
+            item.title = event.utc;
+            events.append(item);
+        }
+    }
+
+    dom.botDetail.append(events);
 }
 
 function requestRender() {
@@ -1814,6 +1974,10 @@ function wireInput() {
         applyFilter();
         requestRender();
     });
+
+    // Its own box rather than the shape filter: a bot is not a shape, and searching one should
+    // never dim the other.
+    dom.botFilter.addEventListener('input', renderBots);
 
     $('go-britain').addEventListener('click', () => {
         view.goTo(BRITAIN.x, BRITAIN.y, 2);

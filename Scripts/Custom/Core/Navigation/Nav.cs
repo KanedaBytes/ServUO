@@ -146,7 +146,9 @@ namespace Server.Custom
                     continue;
                 }
 
-                int area = zone.Width * zone.Height;
+                // Area, not bounding-box area: a polygon's box is bigger than the polygon, and
+                // using it would let a large diagonal zone beat a small rectangle inside it.
+                int area = zone.Area;
 
                 if (area < bestArea)
                 {

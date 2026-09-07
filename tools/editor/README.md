@@ -384,6 +384,28 @@ Both passes are tested against a stub canvas that records calls rather than pixe
 the two failures that actually happened: a pass that never ran, and a pass that ran and rejected
 every box.
 
+## The Bots panel
+
+Every live bot, what it is doing, and its recent history — fed by the same `entities.json` the map
+draws, so a row and a dot are the same record and cannot disagree. Rows are coloured by
+**behaviour** rather than by kind: a town of identically-coloured dots answers "where are they" and
+nothing else, and cannot show that the miners never come back or that everybody is sitting at the
+bank. `BEHAVIOR_COLORS` is checked against `BotBehaviors.cs` by a test, because a behaviour added on
+the shard and forgotten here would draw as an ordinary bot and look deliberate.
+
+The trailing slot shows the stuck rung when there is one, in preference to the behaviour name: a
+wedged bot is the thing somebody opened this panel to find.
+
+Selecting a bot shows its detail and its **event log**, read from `Data/Live/botlog.json` through
+`GET /api/botlog` — fetched on the same poll as the entities, because the shard writes both on one
+snapshot pass and two cadences could only ever show a bot's history from a different moment than
+its position.
+
+**This is the panel the Gatherer walk-in fault needed and did not have.** Three separate faults
+shared one symptom — a bot standing still — and telling them apart meant reading a console that
+logged almost none of it. A list where one bot reads *"walking in to The Northern Outcrop"* and
+another reads *"standing outside a work site"* separates two of them at a glance.
+
 ## The Live panel
 
 `live: 10 @ seq 147, 2s ago`, and the age is the point of it. A sequence number that has stopped

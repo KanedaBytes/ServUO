@@ -304,6 +304,42 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
         return;
     }
 
+    // A filled, closed shape - the same fill and stroke a rect gets, so a poly zone and a rect
+    // zone read as the same KIND of thing on the map and only their outline differs.
+    if (shape.kind === 'poly') {
+        const points = shape.points || [];
+
+        if (points.length < 3) {
+            return;
+        }
+
+        ctx.beginPath();
+
+        points.forEach(([x, y], i) => {
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+            i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+        });
+
+        ctx.closePath();
+
+        const opacity = ctx.globalAlpha;
+
+        ctx.globalAlpha = opacity * (isHovered && !isSelected ? 0.3 : 0.18);
+        ctx.fill();
+        ctx.globalAlpha = opacity;
+        ctx.stroke();
+
+        if (isSelected) {
+            for (const [hx, hy] of points) {
+                const [px, py] = view.toScreen(hx + 0.5, hy + 0.5);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(px - HANDLE / 2, py - HANDLE / 2, HANDLE, HANDLE);
+            }
+        }
+
+        return;
+    }
+
     if (shape.kind === 'polyline') {
         ctx.beginPath();
 
@@ -394,6 +430,26 @@ const ENTITY_COLORS = {
 };
 
 /**
+ * A bot's colour is what it is DOING, not what it is.
+ *
+ * Every bot the same shade answers "where are they" and nothing else; a town full of identical
+ * dots cannot show that the miners never come back or that everyone is sitting at the bank. The
+ * kind colour above is the fallback, so an unrecognised behaviour still draws as a bot.
+ *
+ * BEHAVIOR_COLORS must cover every name BotBehaviors registers - modules.test.js asserts it
+ * against the C# registry, because a behaviour added on the shard and forgotten here would draw
+ * as an ordinary bot and look deliberate.
+ */
+export const BEHAVIOR_COLORS = {
+    Traveler: '#c98bdb',
+    BankSitter: '#ffd479',
+    Shopper: '#6fb3ff',
+    Crafter: '#ff9d5c',
+    Gatherer: '#7bd88f',
+    Idle: '#9a8c98'
+};
+
+/**
  * The road nav-route last walked: the tiles as a thin line, the proposed hops as dots.
  *
  * Drawn whether or not the road completed. A partial road is the most useful thing on the screen
@@ -477,7 +533,8 @@ export function drawEntities(ctx, view, entities) {
 
         ctx.beginPath();
         ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-        ctx.fillStyle = ENTITY_COLORS[entity.kind] || '#ffffff';
+        ctx.fillStyle = (entity.behavior && BEHAVIOR_COLORS[entity.behavior])
+            || ENTITY_COLORS[entity.kind] || '#ffffff';
         ctx.fill();
         ctx.strokeStyle = 'rgba(0, 0, 0, .7)';
         ctx.lineWidth = 1;
@@ -489,6 +546,34 @@ export function drawEntities(ctx, view, entities) {
             ctx.fillText(entity.name, sx + 7, sy + 3);
         }
     }
+}
+
+/**
+ * Ray casting, mirroring NavZone.Contains so the editor and the shard agree about a tile.
+ *
+ * The tile CENTRE is tested, not its corner - a vertex landing exactly on a tile boundary would
+ * otherwise make containment depend on which way a floating-point comparison happened to fall,
+ * and it would fall differently in C# and JavaScript.
+ */
+function insidePolygon(points, worldX, worldY) {
+    if (!points || points.length < 3) {
+        return true;
+    }
+
+    const px = Math.floor(worldX) + 0.5;
+    const py = Math.floor(worldY) + 0.5;
+    let inside = false;
+
+    for (let i = 0, j = points.length - 1; i < points.length; j = i, i++) {
+        const [ix, iy] = points[i];
+        const [jx, jy] = points[j];
+
+        if ((iy > py) !== (jy > py) && px < ((jx - ix) * (py - iy)) / (jy - iy) + ix) {
+            inside = !inside;
+        }
+    }
+
+    return inside;
 }
 
 function rectHandles([x, y, w, h]) {
@@ -553,7 +638,18 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
 
         const [x, y, w, h] = shape.rect;
 
-        if (worldX >= x && worldX <= x + w && worldY >= y && worldY <= y + h && w * h < bestArea) {
+        if (worldX < x || worldX > x + w || worldY < y || worldY > y + h) {
+            continue;
+        }
+
+        // The bounding box first for both kinds, then the real test for a poly - the same order
+        // NavZone.Contains uses, and for the same reason: the box rejects almost everything for
+        // four comparisons instead of a ray cast.
+        if (shape.kind === 'poly' && !insidePolygon(shape.points, worldX, worldY)) {
+            continue;
+        }
+
+        if (w * h < bestArea) {
             best = { shape, mode: 'move' };
             bestArea = w * h;
         }

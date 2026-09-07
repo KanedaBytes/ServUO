@@ -164,6 +164,20 @@ namespace Server.Custom
                 () => ClearMarkers(from));
         }
 
+        /// <summary>A polygon zone's vertices as points, for [NavDebug to mark.</summary>
+        private static Point3D[] VerticesOf(NavZone zone)
+        {
+            int[] v = zone.Vertices;
+            var points = new Point3D[v.Length / 2];
+
+            for (int i = 0; i < points.Length; i++)
+            {
+                points[i] = new Point3D(v[i * 2], v[(i * 2) + 1], 0);
+            }
+
+            return points;
+        }
+
         private static void PlaceMarkers(Mobile from, int radius, List<Item> placed)
         {
             Map map = from.Map;
@@ -226,7 +240,11 @@ namespace Server.Custom
                     return;
                 }
 
-                Point3D[] corners = new[]
+                // A polygon is marked at its VERTICES; only a rectangle is described by its
+                // corners, and marking a poly's bounding box would draw a shape it is not.
+                Point3D[] corners = zone.IsPoly && zone.Vertices.Length >= 6
+                    ? VerticesOf(zone)
+                    : new[]
                 {
                     new Point3D(zone.X, zone.Y, 0),
                     new Point3D(zone.X + zone.Width - 1, zone.Y, 0),

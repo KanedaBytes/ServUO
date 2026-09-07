@@ -172,3 +172,30 @@ test('shapes.js colours every entity kind the shard can emit', () => {
         );
     }
 });
+
+test('every bot behaviour the shard registers has a colour', () => {
+    // Read from the C# registry rather than from a list kept here, which would be the same drift
+    // with an extra step. A behaviour added on the shard and forgotten in the editor draws as an
+    // ordinary bot - indistinguishable from a deliberate choice, and so never noticed.
+    const source = fs.readFileSync(path.join(JS_DIR, 'shapes.js'), 'utf8');
+    const registry = fs.readFileSync(
+        path.join(EDITOR_ROOT, '..', '..', 'Scripts', 'Custom', 'Bots', 'BotBehaviors.cs'), 'utf8');
+
+    const block = /export const BEHAVIOR_COLORS = \{([\s\S]*?)\};/.exec(source);
+
+    assert.ok(block, 'BEHAVIOR_COLORS not found in shapes.js');
+
+    // The registry is a dictionary initialiser - `{ "Traveler", () => new TravelerBehavior() }` -
+    // so the name is matched against that shape rather than against a Register() call.
+    const names = [...registry.matchAll(/\{\s*"([A-Za-z]+)"\s*,\s*\(\)\s*=>/g)].map((match) => match[1]);
+
+    assert.ok(names.length >= 4, `only found ${names.length} behaviours in BotBehaviors.cs`);
+
+    for (const name of names) {
+        assert.match(
+            block[1],
+            new RegExp(`\\b${name}\\s*:`),
+            `BEHAVIOR_COLORS has no colour for '${name}', which BotBehaviors registers`
+        );
+    }
+});

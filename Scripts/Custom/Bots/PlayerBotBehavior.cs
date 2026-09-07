@@ -115,6 +115,19 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// The walker steering this bot, or null when it is not walking.
+        ///
+        /// Exposed on the base so anything outside can ask "is this bot wedged?" without knowing
+        /// which of the four walking behaviours it happens to be. The live map needs exactly that
+        /// and nothing more; the alternative was a stuck flag maintained by each behaviour, which
+        /// is the same fact written down four times and eventually four different ways.
+        /// </summary>
+        public virtual NavWalker Walker
+        {
+            get { return null; }
+        }
+
+        /// <summary>
         /// Subscribe a freshly built walker to this bot's event log.
         ///
         /// Every walking behaviour here creates its walker the same way and would otherwise

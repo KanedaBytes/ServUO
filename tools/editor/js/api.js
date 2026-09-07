@@ -58,6 +58,7 @@ export const api = {
     audit: () => request('GET', '/api/audit'),
     reach: () => request('GET', '/api/reach'),
     route: () => request('GET', '/api/route'),
+    botlog: () => request('GET', '/api/botlog'),
     spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
 

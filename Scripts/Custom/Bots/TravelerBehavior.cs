@@ -179,7 +179,7 @@ namespace Server.Custom
         }
 
         /// <summary>The walker steering this bot, or null. The smoke reads its rung counts.</summary>
-        public NavWalker Walker
+        public override NavWalker Walker
         {
             get { return _walker; }
         }

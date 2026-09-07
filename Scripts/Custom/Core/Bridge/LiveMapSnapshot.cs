@@ -351,8 +351,88 @@ namespace Server.Custom
             builder.Append(",\"z\":").Append(mobile.Z);
 
             AppendRoute(builder, mobile);
+            AppendBot(builder, mobile as PlayerBot);
 
             builder.Append("}");
+        }
+
+        /// <summary>
+        /// What a bot is actually doing, for the editor's Bots panel.
+        ///
+        /// Only for a PlayerBot, and only fields the panel draws: colouring a dot by behaviour and
+        /// answering "which one is stuck" are the two things a map can do that a console cannot.
+        /// The status line is the behaviour's own words rather than a re-derivation out here -
+        /// GetStatusLine already says "working The Northern Outcrop - 21 swing(s), carrying 17",
+        /// and a second phrasing of the same fact would drift from the first.
+        ///
+        /// The beast is nested inside its gatherer rather than emitted as its own entity.
+        /// BotPackAnimal.cs:265 says plainly that "LiveRegistry holds bots, not their animals" -
+        /// a deliberate decision - and nesting keeps the attachment explicit instead of asking the
+        /// editor to infer it from proximity.
+        /// </summary>
+        private static void AppendBot(StringBuilder builder, PlayerBot bot)
+        {
+            if (bot == null)
+            {
+                return;
+            }
+
+            PlayerBotBehavior behaviour = bot.Behavior;
+
+            builder.Append(",\"behavior\":").Append(
+                Json.Quote(behaviour == null ? "none" : behaviour.SerializableName));
+            builder.Append(",\"class\":").Append(Json.Quote(BotClassHelper.DisplayName(bot.TradeClass)));
+            builder.Append(",\"tier\":").Append(Json.Quote(bot.SkillTier.ToString()));
+
+            if (behaviour != null)
+            {
+                builder.Append(",\"status\":").Append(Json.Quote(Safe(behaviour, bot)));
+
+                if (!String.IsNullOrEmpty(behaviour.CurrentDestinationId))
+                {
+                    builder.Append(",\"dest\":").Append(Json.Quote(behaviour.CurrentDestinationId));
+                }
+
+                NavWalker walker = behaviour.Walker;
+
+                // Stuck is the WALKER'S own answer, not a guess from out here - the same source
+                // the walk probe asserts on, so the map and the probe can never disagree.
+                if (walker != null && walker.Active && walker.CurrentRung != StuckRung.None)
+                {
+                    builder.Append(",\"stuck\":").Append(Json.Quote(walker.CurrentRung.ToString()));
+                }
+            }
+
+            BaseCreature beast = bot.PackAnimal;
+
+            if (beast != null && !beast.Deleted && beast.Map == bot.Map)
+            {
+                builder.Append(",\"pack\":{");
+                builder.Append("\"serial\":").Append(beast.Serial.Value);
+                builder.Append(",\"name\":").Append(Json.Quote(beast.Name ?? beast.GetType().Name));
+                builder.Append(",\"x\":").Append(beast.X);
+                builder.Append(",\"y\":").Append(beast.Y);
+                builder.Append("}");
+            }
+        }
+
+        /// <summary>
+        /// A behaviour's status line, never allowed to break the snapshot.
+        ///
+        /// GetStatusLine is behaviour code reached from a file-writing timer, and a throw here
+        /// would take the whole entity feed down - the editor would go blind because one bot was
+        /// mid-transition. The same reasoning as the per-bot try/catch in BotTickManager.
+        /// </summary>
+        private static string Safe(PlayerBotBehavior behaviour, PlayerBot bot)
+        {
+            try
+            {
+                return behaviour.GetStatusLine(bot) ?? "";
+            }
+            catch
+            {
+                return "";
+            }
         }
 
         /// <summary>

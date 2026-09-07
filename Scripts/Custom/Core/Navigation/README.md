@@ -60,9 +60,25 @@ too so the two always agree. So a slightly wrong Z self-corrects, but an authore
 an upper floor or a raised entrance reachable at all, since `GetAverageZ` only sees land and
 would aim at the ground beneath it.
 
-**Polygons later, without a migration:** add `"shape":"poly"` plus a `points` token list
-alongside `x`/`y`/`width`/`height`, default `shape` to `"rect"`, and make `NavZone.Contains` a
-switch. Every record written today stays valid.
+**Polygons, and the promised migration was free.** A zone may carry `"shape":"poly"` plus a
+`points` token list (`"1443,1508 1456,1512 …"`) alongside `x`/`y`/`width`/`height`. Absent `shape`
+means `rect`, so every record written before this stays valid and untouched.
+
+Three details that are not decoration:
+
+- **`x`/`y`/`width`/`height` remain, as the polygon's BOUNDING BOX.** `Contains` checks it first and
+  rejects almost every point for four comparisons rather than a ray cast, and validation refuses a
+  vertex outside it — one the box excludes could never be reached.
+- **`Area` is the shoelace formula, not `width × height`.** `Nav.SmallestZoneAt` picks the smallest
+  zone at a point, and a polygon's box is larger than the polygon; using the box would let a big
+  diagonal zone beat a small rectangle inside it.
+- **An unknown `shape` is FATAL, not a warning.** Treated as a rectangle it would silently make the
+  zone contain its whole bounding box — wrong over a far larger area than intended, which for a
+  restricted zone or a guarded region is the worst way to be wrong.
+
+The editor mirrors the containment test tile-centre for tile-centre (`insidePolygon` in
+`shapes.js`), because a vertex landing exactly on a tile boundary must not make containment depend
+on which way a floating-point comparison happens to fall in one language and not the other.
 
 ## API
 
