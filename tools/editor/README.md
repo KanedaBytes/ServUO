@@ -260,6 +260,50 @@ between `town-9` and `town-10` gives `town-10a`, even in the middle of the bank 
 carries the neighbour's display name if there is one. Only where neither neighbour is numbered does
 it fall back to the zone scheme.
 
+### Adopting a region
+
+The **Adopt region** tool copies a box of uo-offline's roads into `navigation.json`, after the
+shard has walked every edge in it. See `Data/Custom/reference/README.md` for what that data is and
+`Scripts/Custom/Core/Navigation/README.md` for what Adopt refuses to do.
+
+The shard must be running: every edge is re-walked with the engine's own pathfinder, and 56% of
+them are longer than the hop cap and have to be subdivided.
+
+1. **Turn on `uo-offline reference`** in the layer list and zoom in until the dashed roads appear.
+   Below the zoom floor the layer draws nothing — 3952 waypoints at facet scale is a grey smear.
+   Leave `...dungeons` and `...Lost Lands` off; Adopt refuses both until those steps exist.
+2. **Click `Adopt region`, then drag a box** over the roads you want. The box is a question, not a
+   record: nothing is created by drawing it.
+3. **Watch the progress line.** It counts `walked N of M edge(s)` — each one is a real flood-fill,
+   so a large box is minutes rather than seconds. That count is the only thing distinguishing
+   working from hung.
+4. **Read what came back.** The banner reports how many records were proposed, how many joins were
+   made onto existing waypoints, and what was skipped and why. Two things need your eye:
+   - **Red dashed edges** are roads the shard could not walk. They are **not** proposed and will
+     not be written. Hover one for the walker's own reason.
+   - **Stranded waypoints** — any whose every edge failed — are listed and **dropped by Accept**.
+     A waypoint with no road is the fault the west road shipped with.
+5. **Accept by saving.** The proposal is ordinary unsaved records, so `Save` writes them and
+   `Discard` throws them away. Nothing reaches `navigation.json` before that.
+6. **Run `[NavAudit`.** It paths every walk edge, so it is the check that the adopted road is real
+   rather than merely present.
+
+**Adopt outward from Britain, one box at a time.** A box that touches nothing already saved is an
+island: the load warning will say so, and a bot cannot walk to it. Each box should overlap ground
+you have already accepted, so its edges can **join** onto records that exist — a join is an edge
+onto one of our waypoints, which is additive and never changes the waypoint itself. Working
+outward from the town in short hops means every box lands connected; adopting a distant town first
+and hoping to bridge it later means carrying an island until you do.
+
+To send a bot along a newly adopted road and watch it arrive:
+
+```
+[BotSendTo <destination> [bot name]     # in game; target the bot, or name it
+[BotInfo                                 # its behaviour, destination and leg progress
+```
+
+The editor's **Bots** panel shows the same thing live, with a per-bot event log.
+
 ### Editing a proposal
 
 A proposal is ordinary waypoint and edge records, so dragging works because dragging works. Three

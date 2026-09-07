@@ -15,6 +15,7 @@ namespace Server.Custom
             CommandSystem.Register("SpawnBot", AccessLevel.GameMaster, SpawnBot_OnCommand);
             CommandSystem.Register("BotInfo", AccessLevel.GameMaster, BotInfo_OnCommand);
             CommandSystem.Register("BotBehavior", AccessLevel.GameMaster, BotBehavior_OnCommand);
+            CommandSystem.Register("BotSendTo", AccessLevel.GameMaster, BotSendTo_OnCommand);
             CommandSystem.Register("BotLifecycle", AccessLevel.GameMaster, BotLifecycle_OnCommand);
             CommandSystem.Register("BotsReload", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("ReloadBots", AccessLevel.GameMaster, BotsReload_OnCommand);
@@ -435,6 +436,111 @@ namespace Server.Custom
                     from.AccessLevel,
                     CommandLogging.Format(from),
                     BotLifecycle.Enabled ? "on" : "off"));
+        }
+
+        /// <summary>
+        /// Send one bot to one named destination, and watch it walk there.
+        ///
+        /// `[BotBehavior Traveler` was the nearest thing before this, and it is not the same: a
+        /// Traveler picks its OWN destination by weight, so it answers "make this bot travel"
+        /// rather than "make this bot go there". Verifying that a newly adopted road is walkable
+        /// needs the second question - the whole point is to send a bot somewhere specific and see
+        /// whether it arrives.
+        ///
+        /// It routes through TravelerBehavior.SendTo, which is the same path the lifecycle uses,
+        /// so a bot sent by hand walks exactly as one sent by the roller does. Nothing here is a
+        /// test harness with its own movement.
+        /// </summary>
+        [Usage("BotSendTo <destination> [bot name]")]
+        [Description("Sends a bot to a named destination as a Traveler. Target the bot, or name it.")]
+        private static void BotSendTo_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            if (e.Length == 0)
+            {
+                from.SendMessage(0x35, "Usage: [BotSendTo <destination> [bot name]");
+                return;
+            }
+
+            string id = e.GetString(0);
+            NavDestination destination = Nav.Destination(id);
+
+            if (destination == null)
+            {
+                from.SendMessage(0x35, String.Format("'{0}' is not a destination.", id));
+                return;
+            }
+
+            // Named, when the bot is nowhere near the caller - which is the usual case for the
+            // far end of a newly adopted road.
+            if (e.Length > 1)
+            {
+                string name = e.GetString(1);
+                PlayerBot found = null;
+
+                foreach (Mobile mobile in LiveRegistry.Snapshot())
+                {
+                    var bot = mobile as PlayerBot;
+
+                    if (bot != null && !bot.Deleted && Insensitive.Equals(bot.Name, name))
+                    {
+                        found = bot;
+                        break;
+                    }
+                }
+
+                if (found == null)
+                {
+                    from.SendMessage(0x35, String.Format("No live bot is called '{0}'.", name));
+                    return;
+                }
+
+                SendBot(from, found, destination);
+                return;
+            }
+
+            from.SendMessage(String.Format("Target a bot to send to {0}.", destination.Id));
+            from.BeginTarget(12, false, TargetFlags.None,
+                (m, targeted) => SendBot(m, targeted as PlayerBot, destination));
+        }
+
+        private static void SendBot(Mobile from, PlayerBot bot, NavDestination destination)
+        {
+            if (bot == null || bot.Deleted)
+            {
+                from.SendMessage(0x35, "That is not a bot.");
+                return;
+            }
+
+            // Swapped to a Traveler first when it is not one. A Gatherer mid-shift has its own
+            // walker and its own opinion about where it is going; sending it without the swap
+            // would put two things in charge of one mobile.
+            var traveler = bot.Behavior as TravelerBehavior;
+
+            if (traveler == null)
+            {
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "sent by [BotSendTo");
+                traveler = bot.Behavior as TravelerBehavior;
+            }
+
+            if (traveler == null)
+            {
+                from.SendMessage(0x35, "That bot could not be made a Traveler.");
+                return;
+            }
+
+            if (!traveler.SendTo(bot, destination))
+            {
+                from.SendMessage(0x35, String.Format(
+                    "{0} cannot route to {1} - no road from where it is standing.",
+                    bot.Name, destination.Id));
+                return;
+            }
+
+            from.SendMessage(0x40, String.Format(
+                "{0} is walking to {1} ({2}). [BotInfo it, or watch it on the live map.",
+                bot.Name, destination.Id, destination.Name ?? destination.Id));
         }
 
         [Usage("BotBehavior [name]")]
