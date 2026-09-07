@@ -420,6 +420,62 @@ namespace Server.Custom
                     return true;
                 }
 
+                // "<x>,<y>,<w>,<h>" - a region of the uo-offline reference to propose.
+                //
+                // Answers as soon as the work is SET UP, not when it is finished: an adopt is a
+                // flood-fill per edge and a large region is minutes of them, so it runs in
+                // LoopQueue passes and reports progress through Data/Live/nav-adopt.json. The ack
+                // saying "started" is the honest answer to a request that cannot complete inside
+                // a poll.
+                case "nav-adopt":
+                {
+                    string[] parts = (body ?? "").Split(
+                        new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    Rectangle2D region = default(Rectangle2D);
+                    bool haveRegion = false;
+
+                    for (int i = 0; i < parts.Length; i++)
+                    {
+                        if (parts[i].StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        string[] numbers = parts[i].Split(',');
+                        int x, y, width, height;
+
+                        if (numbers.Length == 4
+                            && Int32.TryParse(numbers[0], out x)
+                            && Int32.TryParse(numbers[1], out y)
+                            && Int32.TryParse(numbers[2], out width)
+                            && Int32.TryParse(numbers[3], out height))
+                        {
+                            region = new Rectangle2D(x, y, width, height);
+                            haveRegion = true;
+                        }
+                    }
+
+                    if (!haveRegion)
+                    {
+                        message = "nav-adopt needs a region: 'x,y,width,height'";
+                        return false;
+                    }
+
+                    string adoptError;
+
+                    if (!NavAdopt.TryStart(Map.Trammel, region, out adoptError))
+                    {
+                        message = String.Format("adopt not started: {0}", adoptError);
+                        return false;
+                    }
+
+                    message = String.Format(
+                        "adopt started over {0}x{1} at {2},{3}; watch Data/Live/nav-adopt.json",
+                        region.Width, region.Height, region.X, region.Y);
+                    return true;
+                }
+
                 case "site-reach":
                 {
                     string[] parts = (body ?? "").Split(

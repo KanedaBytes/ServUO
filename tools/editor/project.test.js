@@ -398,3 +398,37 @@ test('the first restricted zone flips its empty array to the expanded form', () 
         after,
         '{\n  "zones": [\n    {"name":"no-mining","map":"Trammel","x":10,"y":20,"width":30,"height":40}\n  ]\n}\n');
 });
+
+// --- source: where an adopted record came from -----------------------------------------------
+
+test('an adopted record carries its source, and a hand-authored one carries nothing', () => {
+    // `source` is what keeps a record accepted from uo-offline tellable from one measured against
+    // this shard's map. The two have different warranties: ours were flood-filled and audited
+    // here, an adopted one had its edges re-walked at adopt time and nothing else.
+    const base = JSON.parse(fs.readFileSync(FILES.navigation, 'utf8'));
+
+    const adopted = {
+        layer: 'nav', id: 'wp:uo-trinsic-gate', kind: 'point', map: 'Trammel',
+        points: [[1900, 2700, 0]],
+        props: { id: 'uo-trinsic-gate', tags: 'road', arrivalRange: 0, source: 'uo-offline' },
+        fields: []
+    };
+
+    const written = unproject('navigation', JSON.stringify(base, null, 2), { creates: [adopted] });
+
+    assert.match(written, /"id":"uo-trinsic-gate"[^}]*"source":"uo-offline"/);
+
+    // And absent - not empty - on anything authored here, or the first save would stamp
+    // `"source":""` onto every existing record and turn a one-line edit into a whole-file diff.
+    const authored = {
+        layer: 'nav', id: 'wp:hand-made', kind: 'point', map: 'Trammel',
+        points: [[1400, 1600, 0]],
+        props: { id: 'hand-made', tags: 'road', arrivalRange: 0 },
+        fields: []
+    };
+
+    const plain = unproject('navigation', JSON.stringify(base, null, 2), { creates: [authored] });
+
+    assert.match(plain, /"id":"hand-made"/);
+    assert.ok(!/"id":"hand-made"[^}]*"source"/.test(plain), 'source was written on an authored record');
+});

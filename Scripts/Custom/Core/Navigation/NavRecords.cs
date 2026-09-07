@@ -622,6 +622,21 @@ namespace Server.Custom
         [JsonProperty("note", NullValueHandling = NullValueHandling.Ignore)]
         public string Note { get; set; }
 
+        /// <summary>
+        /// Where this record came from, when it was not authored here. Absent means hand-authored.
+        ///
+        /// Set to `uo-offline` by the Adopt step. It exists so that a record somebody accepted
+        /// from somebody else's data stays TELLABLE from one measured against this shard's map -
+        /// the two have different warranties. Ours were flood-filled and audited here; an adopted
+        /// one had its edges re-walked at adopt time and nothing else.
+        ///
+        /// Optional, and NullValueHandling.Ignore for the reason `name` has it: JsonConfig
+        /// serializes nulls, so without it the first save would stamp `"source": ""` onto every
+        /// existing record and turn a one-line edit into a whole-file diff.
+        /// </summary>
+        [JsonProperty("source", NullValueHandling = NullValueHandling.Ignore)]
+        public string Source { get; set; }
+
         [JsonConstructor]
         public NavWaypoint()
         {
@@ -699,6 +714,12 @@ namespace Server.Custom
 
         [JsonProperty("note", NullValueHandling = NullValueHandling.Ignore)]
         public string Note { get; set; }
+
+        /// <summary>
+        /// Where this record came from, when it was not authored here. See NavWaypoint.Source.
+        /// </summary>
+        [JsonProperty("source", NullValueHandling = NullValueHandling.Ignore)]
+        public string Source { get; set; }
 
         [JsonConstructor]
         public NavEdge()
@@ -792,6 +813,12 @@ namespace Server.Custom
 
         [JsonProperty("note", NullValueHandling = NullValueHandling.Ignore)]
         public string Note { get; set; }
+
+        /// <summary>
+        /// Where this record came from, when it was not authored here. See NavWaypoint.Source.
+        /// </summary>
+        [JsonProperty("source", NullValueHandling = NullValueHandling.Ignore)]
+        public string Source { get; set; }
 
         [JsonConstructor]
         public NavDestination()
@@ -924,6 +951,12 @@ namespace Server.Custom
 
         [JsonProperty("note", NullValueHandling = NullValueHandling.Ignore)]
         public string Note { get; set; }
+
+        /// <summary>
+        /// Where this record came from, when it was not authored here. See NavWaypoint.Source.
+        /// </summary>
+        [JsonProperty("source", NullValueHandling = NullValueHandling.Ignore)]
+        public string Source { get; set; }
 
         [JsonConstructor]
         public NavArrival()

@@ -404,30 +404,30 @@ function project(files) {
 
 const TEMPLATES = {
     waypoint: {
-        keys: ['id', 'name', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note'],
+        keys: ['id', 'name', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note', 'source'],
         geometry: ['map', 'x', 'y', 'z'],
         defaults: { arrivalRange: 0, tags: '' },
-        omitWhenBlank: ['name', 'note']
+        omitWhenBlank: ['name', 'note', 'source']
     },
     edge: {
-        keys: ['from', 'to', 'kind', 'tags', 'note'],
+        keys: ['from', 'to', 'kind', 'tags', 'note', 'source'],
         geometry: [],
         defaults: { kind: 'walk', tags: '' },
-        omitWhenBlank: ['note']
+        omitWhenBlank: ['note', 'source']
     },
     destination: {
-        keys: ['id', 'name', 'type', 'map', 'x', 'y', 'z', 'tags', 'waypoints', 'note'],
+        keys: ['id', 'name', 'type', 'map', 'x', 'y', 'z', 'tags', 'waypoints', 'note', 'source'],
         geometry: ['map', 'x', 'y', 'z'],
         defaults: { tags: '', waypoints: '' },
-        omitWhenBlank: ['note']
+        omitWhenBlank: ['note', 'source']
     },
     arrival: {
         // No 'map': an arrival belongs to its destination, which has one.
-        keys: ['destination', 'x', 'y', 'z', 'exclusive', 'exact', 'waypoints', 'note'],
+        keys: ['destination', 'x', 'y', 'z', 'exclusive', 'exact', 'waypoints', 'note', 'source'],
         geometry: ['x', 'y', 'z'],
         defaults: { exclusive: false, waypoints: '' },
         omitWhenFalse: ['exact'],
-        omitWhenBlank: ['note']
+        omitWhenBlank: ['note', 'source']
     },
     zone: {
         keys: ['id', 'map', 'x', 'y', 'width', 'height', 'shape', 'points', 'tags', 'note'],
