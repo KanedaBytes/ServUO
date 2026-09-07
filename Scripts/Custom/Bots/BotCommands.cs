@@ -174,6 +174,20 @@ namespace Server.Custom
             e.Mobile.BeginTarget(12, false, TargetFlags.None, BotInfo_OnTarget);
         }
 
+        /// <summary>
+        /// One bot, laid out to be read.
+        ///
+        /// Same data as before, in the shape uo-offline's BotInfoCommand uses: a header, what the
+        /// bot is doing, its stats, its notoriety, then its skills in an aligned column. The old
+        /// output ran the class, the tier and the status line together on one wrapped line and
+        /// printed skills as "Mining 87.4" with no alignment, which is legible for three skills
+        /// and not for twelve.
+        ///
+        /// The shard's own extras are kept and folded in rather than dropped: the caps each total
+        /// is measured against, the Crafter sub-type, the personality, and the phase clock. The
+        /// caps in particular are the reason this command exists - a bot four classes over the
+        /// skill budget is only actionable if you can see which number broke it.
+        /// </summary>
         private static void BotInfo_OnTarget(Mobile from, object targeted)
         {
             var bot = targeted as PlayerBot;
@@ -186,25 +200,102 @@ namespace Server.Custom
 
             BotCaps caps = BotSystem.Caps;
 
-            from.SendMessage(0x3B2, String.Format("{0} {1}", bot.Name, bot.Title));
-            from.SendMessage(String.Format(
-                "Class {0}, tier {1}. {2}",
-                BotClassHelper.DisplayName(bot.Class),
-                BotSkillTierHelper.DisplayName(bot.SkillTier),
-                bot.Behavior != null ? bot.Behavior.GetStatusLine(bot) ?? bot.Behavior.SerializableName : "no brain"));
+            // --- header ---------------------------------------------------------------------
+            from.SendMessage(0x35, String.Format("--- {0} ---", bot.Name));
 
+            if (!String.IsNullOrEmpty(bot.Title))
+            {
+                from.SendMessage(0x3B2, String.Format("  {0}", bot.Title));
+            }
+
+            from.SendMessage(0x3B2, String.Format(
+                "Class: {0}   Tier: {1}",
+                BotClassHelper.DisplayName(bot.Class),
+                BotSkillTierHelper.DisplayName(bot.SkillTier)));
+
+            if (bot.Class == BotClass.Crafter)
+            {
+                // The legacy one-class-many-subtypes shape. Without this the report says only
+                // "Class Crafter", and the station it works - forge, tailor shop, dock - is
+                // invisible, which is how a Crafter at the forge came to be told it had no
+                // station.
+                from.SendMessage(0x3B2, String.Format(
+                    "Sub-type: {0}   Works as: {1}",
+                    CrafterTypeHelper.DisplayName(bot.CrafterSpec),
+                    BotClassHelper.DisplayName(bot.TradeClass)));
+            }
+
+            // --- what it is doing -----------------------------------------------------------
+            PlayerBotBehavior behaviour = bot.Behavior;
+
+            from.SendMessage(0x3B2, String.Format(
+                "Behavior: {0}",
+                behaviour != null ? behaviour.SerializableName : "no brain"));
+
+            if (behaviour != null)
+            {
+                string status = behaviour.GetStatusLine(bot);
+
+                if (!String.IsNullOrEmpty(status))
+                {
+                    from.SendMessage(0x3B2, String.Format("  {0}", status));
+                }
+
+                string destination = behaviour.CurrentDestinationId;
+
+                from.SendMessage(0x3B2, String.Format(
+                    "Destination: {0}", String.IsNullOrEmpty(destination) ? "-" : destination));
+
+                // Leg progress, which is the number that says whether a walker is moving or
+                // wedged. A bot standing still on step 4 of 19 for a minute is the shape of every
+                // stuck-walker fault this system has had.
+                NavWalker walker = behaviour.Walker;
+
+                if (walker != null && walker.Active && walker.Route != null)
+                {
+                    from.SendMessage(0x3B2, String.Format(
+                        "Leg: step {0} of {1}{2}",
+                        walker.StepIndex,
+                        walker.Route.Count,
+                        walker.TotalRungsFired > 0
+                            ? String.Format("   stuck-recovery fired {0}x", walker.TotalRungsFired)
+                            : ""));
+                }
+            }
+
+            // --- stats ----------------------------------------------------------------------
             int statTotal = bot.RawStr + bot.RawDex + bot.RawInt;
 
-            from.SendMessage(String.Format(
-                "Str {0}  Dex {1}  Int {2}  (total {3} of {4})",
+            from.SendMessage(0x3B2, String.Format(
+                "Str/Dex/Int: {0} / {1} / {2}   (total {3} of {4})",
                 bot.RawStr,
                 bot.RawDex,
                 bot.RawInt,
                 statTotal,
                 caps.StatTotal));
 
+            from.SendMessage(0x3B2, String.Format(
+                "HP: {0}/{1}   Stam: {2}/{3}   Mana: {4}/{5}",
+                bot.Hits, bot.HitsMax,
+                bot.Stam, bot.StamMax,
+                bot.Mana, bot.ManaMax));
+
+            // --- notoriety ------------------------------------------------------------------
+            //
+            // What the guards read when they decide whether to attack. Criminal or Murderer true
+            // on a freshly spawned bot is a bug, and this block is where you see it.
+            from.SendMessage(0x35, "Notoriety:");
+            from.SendMessage(0x3B2, String.Format(
+                "  Criminal: {0}   Murderer: {1}   Kills: {2}",
+                bot.Criminal, bot.Murderer, bot.Kills));
+            from.SendMessage(0x3B2, String.Format(
+                "  Karma: {0}   Fame: {1}", bot.Karma, bot.Fame));
+            from.SendMessage(0x3B2, String.Format(
+                "  AccessLevel: {0}   Player: {1}", bot.AccessLevel, bot.Player));
+
+            // --- skills ---------------------------------------------------------------------
             double skillTotal = 0.0;
-            var lines = new List<string>();
+            var named = new List<Skill>();
 
             for (int i = 0; i < bot.Skills.Length; i++)
             {
@@ -216,33 +307,34 @@ namespace Server.Custom
                 }
 
                 skillTotal += skill.Base;
-                lines.Add(String.Format("{0} {1:0.0}", skill.SkillName, skill.Base));
+                named.Add(skill);
             }
 
-            from.SendMessage(String.Format(
-                "Skills, total {0:0.0} of {1:0.0}:",
-                skillTotal,
-                caps.SkillTotal));
-
-            foreach (string line in lines)
+            if (named.Count == 0)
             {
-                from.SendMessage("  " + line);
+                from.SendMessage(0x35, "Skills: none above zero.");
             }
-
-            if (bot.Class == BotClass.Crafter)
+            else
             {
-                // The legacy one-class-many-subtypes shape. Without this the report says only
-                // "Class Crafter", and the station it works - forge, tailor shop, dock - is
-                // invisible, which is how a Crafter at the forge came to be told it had no station.
-                from.SendMessage(String.Format(
-                    "Sub-type {0} (works as {1}).",
-                    CrafterTypeHelper.DisplayName(bot.CrafterSpec),
-                    BotClassHelper.DisplayName(bot.TradeClass)));
+                // Highest first. A bot's identity is its top two or three skills, and sorting by
+                // the enum order buries them wherever the alphabet put them.
+                named.Sort(
+                    delegate(Skill a, Skill b) { return b.Base.CompareTo(a.Base); });
+
+                from.SendMessage(0x35, String.Format(
+                    "Skills, total {0:0.0} of {1:0.0}:", skillTotal, caps.SkillTotal));
+
+                foreach (Skill skill in named)
+                {
+                    from.SendMessage(0x3B2, String.Format(
+                        "  {0}{1:0.0}",
+                        (skill.SkillName.ToString() + ":").PadRight(16),
+                        skill.Base));
+                }
             }
 
-            from.SendMessage(bot.Personality.ToString());
-
-            PlayerBotBehavior behaviour = bot.Behavior;
+            // --- personality and the phase clock ---------------------------------------------
+            from.SendMessage(0x3B2, bot.Personality.ToString());
 
             if (behaviour != null && bot.Personality.IsAssigned)
             {

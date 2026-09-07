@@ -56,7 +56,10 @@ const CONTENT_TYPES = {
     '.json': 'application/json; charset=utf-8',
     '.png': 'image/png',
     '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon'
+    '.ico': 'image/x-icon',
+
+    // Plain text, not text/markdown: a browser offers the latter as a download.
+    '.md': 'text/plain; charset=utf-8'
 };
 
 function readJson(file) {

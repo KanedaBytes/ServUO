@@ -32,7 +32,10 @@ const READ_ROOTS = [
 // name the caller supplies.
 const REQUEST_DIR = path.join(REPO_ROOT, 'Data', 'Live', 'requests');
 
-const READ_EXTENSIONS = new Set(['.json', '.xml', '.html', '.css', '.js', '.png', '.ico', '.svg']);
+// '.md' is here so the Help panel can link the README's own step lists rather than keeping a
+// second copy of them in the sidebar. Served as text/plain, so it reads in a tab.
+const READ_EXTENSIONS = new Set(
+    ['.json', '.xml', '.html', '.css', '.js', '.png', '.ico', '.svg', '.md']);
 
 // Token names are matched against this rather than sanitised. A name that has to be cleaned up
 // before it is safe is a name we should be rejecting.

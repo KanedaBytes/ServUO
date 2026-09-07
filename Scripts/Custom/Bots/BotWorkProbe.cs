@@ -492,6 +492,26 @@ namespace Server.Custom
                         _walkIn.Mined));
                 }
 
+                // ONE CLOCK-IN PER SHIFT. The probe used to sample a boolean twelve seconds in
+                // and call that the answer, which cannot tell one clock-in from eight - and eight
+                // is what was happening. A gatherer steps itself off the face by design, loses
+                // reach, walks back, and every round trip re-announced a shift that had never
+                // ended. The README recorded this as fixed while the log in the same session
+                // showed a bot clocking in four times.
+                // Only the "more than once" half is reported here. Never clocking in at all is
+                // already the branch above's fault to name, and one fault should not be two
+                // problems in the report.
+                if (_walkIn != null && _walkIn.ClockIns > 1)
+                {
+                    problems.Add(String.Format(
+                        "the walking miner clocked in {0} times in one shift - a shift is one clock-in",
+                        _walkIn.ClockIns));
+                }
+                else if (_walkIn != null && _walkIn.ClockIns == 1)
+                {
+                    notes.Add("clocked in once, as a shift should");
+                }
+
                 if (BotWorkSites.Deliveries == 0)
                 {
                     problems.Add("no load was delivered");

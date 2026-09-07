@@ -95,6 +95,28 @@ namespace Server.Custom
         private int _carriedSeen;
         private int _mined;
 
+        /// <summary>
+        /// Whether THIS SHIFT has already been clocked into, and which shift that was.
+        ///
+        /// `_clockedIn` is not this. It means "has harvestable tiles in reach right now", and
+        /// Tick clears it the moment reach is lost and sets it again the moment reach is
+        /// regained - which is correct for what it is used for and useless as a shift record.
+        /// The bot loses reach constantly by design: StepAlongTheFace picks a uniformly random
+        /// direction and validates only zone containment and the route home, so it walks itself
+        /// onto zero-reach tiles, SeekReach walks it back, and every round trip re-announced a
+        /// clock-in. One miner logged four in a single shift (reach 3, 12, 4, 3), another eight,
+        /// some two seconds apart, and none of them had left the site.
+        ///
+        /// Keyed on the shift window rather than held as a plain bool because a new
+        /// GathererBehavior is usually a new shift but not always: the arrival handoff can carry
+        /// an existing VisitExpiresAt onto a fresh instance, and a stuck-recovery teleport or a
+        /// skipped waypoint can re-arrive mid-shift. An instance bool would call those new shifts.
+        /// </summary>
+        private bool _shiftClockIn;
+        private DateTime? _shiftClockInFor;
+
+        private int _clockIns;
+
         /// <summary>Which site it was sent to, as a nav destination id. Set by the arrival handoff.</summary>
         public string DestinationId { get; set; }
 
@@ -106,6 +128,15 @@ namespace Server.Custom
         public int Swings
         {
             get { return _swings; }
+        }
+
+        /// <summary>
+        /// How many times this bot has clocked in. A shift is one clock-in; the work probe
+        /// asserts it, because the boolean it used to sample could not tell one from eight.
+        /// </summary>
+        public int ClockIns
+        {
+            get { return _clockIns; }
         }
 
         /// <summary>
@@ -176,6 +207,18 @@ namespace Server.Custom
                 return;
             }
 
+            // A gatherer attached directly - by [BotBehavior, or by the probe - stamps its own
+            // shift. One reached by an arrival handoff already has the window the handoff gave it.
+            //
+            // Stamped BEFORE the clock-in below, not after. The clock-in latch is keyed on the
+            // shift window, so clocking in against a null window and then stamping one would look
+            // from the latch's side like two different shifts and let the same arrival be clocked
+            // into twice.
+            if (VisitExpiresAt == null)
+            {
+                VisitExpiresAt = CustomTime.Now + TimeSpan.FromMinutes(Utility.RandomMinMax(4, 8));
+            }
+
             if (CanClockIn(bot))
             {
                 ClockIn(bot);
@@ -183,13 +226,6 @@ namespace Server.Custom
             else
             {
                 _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
-            }
-
-            // A gatherer attached directly - by [BotBehavior, or by the probe - stamps its own
-            // shift. One reached by an arrival handoff already has the window the handoff gave it.
-            if (VisitExpiresAt == null)
-            {
-                VisitExpiresAt = CustomTime.Now + TimeSpan.FromMinutes(Utility.RandomMinMax(4, 8));
             }
         }
 
@@ -262,9 +298,12 @@ namespace Server.Custom
                 if (_clockedIn)
                 {
                     // Shoved out, or worked the last tile within reach out. Walk back in; the
-                    // shift clock keeps running.
+                    // shift clock keeps running, and so does the clock-in latch - coming back is
+                    // not a new shift.
                     _clockedIn = false;
                     _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
+
+                    BotLog.Note(bot, BotLogKind.Clock, "lost reach at {0},{1}", bot.X, bot.Y);
                 }
 
                 TickWalkIn(bot);
@@ -379,15 +418,32 @@ namespace Server.Custom
             HarvestDefinition definition = BotHarvest.DefinitionFor(bot.Class);
             int reach = definition == null ? 0 : BotWorkSites.ReachFrom(bot.Map, bot.Location, definition);
 
-            Log.Debug(
-                "{0} clocked in at {1} - inside zone '{2}', {3} harvestable tile(s) in reach.",
-                bot.Name,
-                bot.Location,
-                _site.Id,
-                reach);
+            // Same shift, back within reach of the face. Worth a line - losing and regaining
+            // reach is real and the log should show it - but it is not a second shift, and
+            // saying "clocked in" four times is what made a bot doing its job look broken.
+            bool sameShift = _shiftClockIn && _shiftClockInFor == VisitExpiresAt;
 
-            BotLog.Note(bot, BotLogKind.Clock, "clocked in at {0},{1} in '{2}', reach {3}",
-                bot.X, bot.Y, _site.Id, reach);
+            if (sameShift)
+            {
+                BotLog.Note(bot, BotLogKind.Clock, "back on the face at {0},{1}, reach {2}",
+                    bot.X, bot.Y, reach);
+            }
+            else
+            {
+                _shiftClockIn = true;
+                _shiftClockInFor = VisitExpiresAt;
+                _clockIns++;
+
+                Log.Debug(
+                    "{0} clocked in at {1} - inside zone '{2}', {3} harvestable tile(s) in reach.",
+                    bot.Name,
+                    bot.Location,
+                    _site.Id,
+                    reach);
+
+                BotLog.Note(bot, BotLogKind.Clock, "clocked in at {0},{1} in '{2}', reach {3}",
+                    bot.X, bot.Y, _site.Id, reach);
+            }
 
             _clockedIn = true;
             _seeking = false;

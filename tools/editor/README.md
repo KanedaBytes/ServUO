@@ -38,6 +38,8 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `js/tools.js` | The create tools and the modal that finishes each one |
 | `js/ids.js` | Auto-generated ids, mirroring `[NavMark` |
 | `js/build.js` | A finished tool to a shape - the seam between the browser and the writer |
+| `js/worksites.js` | The work-site overlay: reach, candidates and which tiles are taken |
+| `js/audit.js` | What `[NavAudit` found, in words |
 | `js/live.js` | The Live panel's line and snapshot age |
 | `spawnxml.js` | Source-preserving reader and writer for XmlSpawner's spawn XML |
 | `objects2.js` | The `<Objects2>` micro-format: what a spawner spawns |
@@ -108,19 +110,42 @@ A mine or a wood is **three records** — a destination to send bots to, a zone 
 within, and the arrival tiles they stand on. Authoring them separately is how one gets forgotten,
 and each omission fails differently: no zone and `GathererBehavior.ResolveSite` finds no work area
 and walks the bot away; no arrivals and it has nowhere to stand. The **Site** tool collects all
-three in one flow — click the centre, drag the zone, click each arrival, Enter to finish — and
-writes them together or not at all.
+three in one flow — click the centre, drag the zone, accept the tiles the shard offers, Enter to
+finish — and writes them together or not at all.
+
+**All three records carry their own layer.** That reads as housekeeping and is not: `fileOf` looks
+a shape's file up by its layer, `filesWithEdits` drops a shape whose file comes back null, and a
+record with no layer is therefore never drawn, never selectable, and **silently never saved while
+Save still reports success**. The Site tool is the only tool building for three layers at once, it
+inherited the single `LAYER_FOR[key]` lookup like every other tool, there is no `site` key in that
+table, and a whole authored work site went to nothing because of it. `editor.test.js` now asserts
+every built record names a real layer and that all of one build's records share one file.
 
 **It asks for its fields first**, alone among the tools. The site type decides which harvest
 definition the reach probe measures against, and the probe runs while the arrivals are going down,
 several steps before a tool would normally ask anything. The first moment there are coordinates to
 auto-generate an id from is the centre click, so that is where the form goes.
 
-**The numbers come from the shard, never from here.** As each arrival lands, the editor drops a
-`site-reach` token carrying the tiles it has placed; `BotWorkSites.ReachFrom` runs the identical
-5x5 sweep `BotHarvest.FindTarget` performs, against real map data, and the answer comes back
-through `GET /api/reach`. A browser cannot answer this — it has no tiledata — and the last time
-this shard guessed at harvestability from outside the engine it authored a mine on grass.
+**The numbers come from the shard, never from here.** When the zone is drawn the editor drops a
+`site-reach` token carrying the rect; `BotWorkSites.SweepZone` walks every tile in it with the
+identical 5x5 sweep `BotHarvest.FindTarget` performs, against real map data, and the answer comes
+back through `GET /api/reach`. A browser cannot answer this — it has no tiledata — and the last
+time this shard guessed at harvestability from outside the engine it authored a mine on grass.
+
+**The shard proposes; the author accepts.** It used to be the other way round: the author clicked
+a tile, the shard said how much was in reach, and finding a good arrival on a cliff face meant
+guessing one click at a time. Worse, the answer was drawn without its `canFit`, so the tiles with
+the *highest* reach on the map — buried in rock, unstandable — drew green and were exactly what
+the overlay recommended. Now only tiles that pass both tests are offered at all, the best four are
+taken by default, and clicking a circle takes or drops it.
+
+A rect costs nineteen bytes where the tiles inside it would cost thousands, which is the other
+reason the zone form exists: `RequestPoller.MaxTokenBytes` is 4096 and a point list runs about ten
+bytes a tile, so `brit-lumber-south` at 25x20 could not have been asked about as points. The sweep
+is bounded at both ends — it warns above 1600 tiles and refuses above 4096 — and hands back the
+best 24, ranked by reach with distance to the zone centre breaking ties. That tie-break is the
+hop-cap trap in disguise: `brit-mine-north` once got an arrival 16 tiles from its nearest waypoint
+against a 12-tile cap, and it stranded every miner sent to it.
 
 Two fields, because they are different questions and a good tile needs both:
 
@@ -134,8 +159,63 @@ The overlay itself (`js/worksites.js`) is **not a shape layer**. Those records a
 in step and two things to click; it draws *over* them, toggled by a synthetic layer row exactly as
 `coverage.js` is. Dots are green at or above the type's floor, amber below it, red at nothing at
 all — three bands rather than a gradient, because the author's decision is three-way: fine, thin,
-useless. Probe points draw hollow, so a tile being considered never looks like one already
-authored.
+useless. **`canFit` beats reach outright**: a tile nothing can stand on is red however much ore
+surrounds it. Probe points draw hollow, so a tile being considered never looks like one already
+authored, and a candidate the author has taken draws filled — at that moment it *is* what the file
+would say.
+
+### Authoring a work site
+
+The Site tool, in the editor. The other way to author a site is `[BotWorkScout` in game
+(`Scripts/Custom/Bots/README.md`), which writes a proposal to `Data/Live/work-scout.json` for a
+human to merge and deliberately never touches `navigation.json`. This is the one that writes.
+
+The shard must be running: every number below is measured by it.
+
+1. **Click `Work site`, then click the centre of the face.** The form opens straight away — alone
+   among the tools, because the type decides which harvest definition the sweep measures against
+   and the sweep runs several steps before a tool would normally ask anything. Set the type to
+   `mine` or `lumber`; the id is auto-generated from the enclosing zone.
+2. **Drag out the zone the bots may work inside.** This is where they wander and shuffle, not
+   where they stand. It stays drawn for the rest of the flow.
+3. **The shard sweeps it and offers the tiles worth standing on.** Every circle is standable and
+   at or above the type's floor — 5 for a mine, 3 for a wood — and the number beside it is how
+   many harvestable tiles are in reach from it. The best four are already taken.
+4. Click a circle to take or drop it. Click bare ground to test a tile the sweep did not offer:
+   it is measured the same way and either taken or refused with the reason, `cannot be stood on`
+   or `reaches 2, needs 5`. The same tile can never be taken twice.
+5. **Enter, or the `Finish` button.** Three records appear as pending edits.
+6. **Save.** Nothing is written before this. Confirm the records landed in
+   `Data/Custom/navigation.json` — a work site is the one create where a partial write is worse
+   than no write.
+
+If no circles appear, the status line says why. Usually the zone is on the wrong side of the
+face; occasionally the floor is wrong for the ground, and `Custom.BotWorkSiteMinReachMine` /
+`...Lumber` are the two keys that set it. Arrivals also have to sit within the hop cap of an
+approach waypoint — see `Scripts/Custom/Core/Navigation/README.md` — which is a separate check the
+audit makes and this tool does not.
+
+### Authoring a road
+
+The **Corridor** tool proposes waypoints and edges between two points; it creates nothing by
+itself, and nothing is saved until you say so. The in-game equivalents are `[NavMark` /
+`[NavRecord` / `[NavLink` (`Scripts/Custom/Core/Navigation/README.md`), which are the right reach
+for a single waypoint rather than a road.
+
+1. **Click `Corridor`, then click where the road starts.**
+2. **Click via points to steer it, then the end.** Each leg is routed separately and joined, so a
+   via point is how you make the road go round the mountain rather than at it.
+3. **Enter, or the `Finish` button, routes it.** The status line counts the legs as they walk;
+   every hop is verified against the engine's own `MovementPath`, which is why it is not instant.
+4. **Drag the proposed waypoints until the road sits where you want it.** The hops derive from the
+   waypoint positions, so dragging one moves the road rather than leaving a stale line behind.
+   Right-click deletes a waypoint and relinks its neighbours, double-click inserts one, and
+   shift-drag snaps. Each edited hop is re-verified through the `nav-hop` probe.
+5. **Save**, then run the audit.
+
+An over-cap hop is a **warning**, not a refusal — the shard accepts it and the walker may then be
+unable to plan it, so it is worth fixing before it strands somebody. The audit and `validate.js`
+both name the cap the hop broke.
 
 ### Editing a proposal
 

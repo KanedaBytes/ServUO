@@ -1310,6 +1310,22 @@ clock  shift over - 21 swing(s), 17 mined, carrying 17
 
 It had shuffled onto a zero-reach tile and had to walk back in. Every shift was paying this.
 
+**And `SeekReach` did not stop it being announced as a shift.** What that fix corrected was the
+walk-in asking a different question from `Tick`; it left `_clockedIn` meaning "has tiles in reach
+right now", which `Tick` clears on every reach loss and sets again on every reach regain. So the
+bot went back to work, which is what `SeekReach` is for, and said "clocked in" again each time it
+did. A later session found one miner logging four clock-ins in a shift (reach 3, 12, 4, 3) and
+another logging eight, some two seconds apart, none of which had left the site.
+
+The shift now has a latch of its own, keyed on `VisitExpiresAt` rather than held as a plain bool:
+a new `GathererBehavior` is usually a new shift, but the arrival handoff can carry an existing
+window onto a fresh instance and a stuck-recovery teleport can re-arrive mid-shift, and an
+instance bool would call both of those new shifts. Losing and regaining reach now logs
+`lost reach` and `back on the face`, so the oscillation stays visible without being counted as a
+shift it is not. `GathererBehavior.ClockIns` counts them and the work probe asserts exactly one -
+the probe previously sampled `IsWorking` once, twelve seconds in, which cannot tell one clock-in
+from eight, which is why it passed with the log above sitting in the same run.
+
 ### 3. The give-up clock was racing the walker's recovery ladder
 
 `NavWalker.ArrivalRangeFor` returns **0** for a `NavStepKind.Arrival` — the last tile of a route

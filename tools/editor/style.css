@@ -101,6 +101,10 @@ button:disabled { opacity: .45; cursor: default; }
 .keys dt { color: var(--muted); }
 .keys dd { margin: 0; }
 
+.help { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.help a { color: var(--accent); text-decoration: none; }
+.help a:hover { text-decoration: underline; }
+
 /* --- error banner ---------------------------------------------------------------------------
  * Persistent by design. The bug this replaces was a save that failed, reverted the view, and said
  * so only in a status line that cleared itself after six seconds.
