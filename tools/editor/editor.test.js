@@ -213,6 +213,99 @@ test('clicking an edge line selects the edge, and never steals a waypoint click'
     assert.strictEqual(shapes.hitTest(view, world, visible, null, 20.5, 30), null);
 });
 
+test('a waypoint wins its own click in the order the editor actually builds', () => {
+    // The test above puts the edge FIRST in the array, and that is what let this through: the
+    // old hit test returned the first node it touched walking the array in reverse, so with
+    // [edge, a, b] the waypoints were reached first and it looked correct. project() emits
+    // waypoints before edges, which is the opposite order - and with nav-edges on, every click
+    // on a waypoint selected the edge under it and no waypoint could be dragged at all.
+    const a = pointShape('wp:a', 0, 0);
+    const b = pointShape('wp:b', 40, 0);
+    const edge = {
+        layer: 'nav-edges', id: 'edge:a>b', kind: 'polyline', map: 'Trammel', label: 'a - b',
+        points: [[0, 0, 0], [40, 0, 0]], props: { from: 'a', to: 'b' }
+    };
+
+    const visible = new Set(['nav', 'nav-edges']);
+    const world = [a, b, edge];
+
+    const onA = shapes.hitTest(view, world, visible, null, 0.5, 0.5);
+    assert.strictEqual(onA.shape, a, 'the waypoint, not the edge that ends on it');
+    assert.strictEqual(onA.mode, 'move', 'and it must be draggable, not a node grab');
+
+    // The edge is still selectable between its ends, which is the only way to delete one.
+    assert.strictEqual(shapes.hitTest(view, world, visible, null, 20.5, 0.5).shape, edge);
+});
+
+test('a line beats an area it crosses, whatever the area is', () => {
+    // Tiers, not sizes: area only breaks ties between areas. An edge drawn across a nav zone has
+    // to stay clickable or there is no way to delete it, however small the zone is.
+    const zone = {
+        layer: 'nav-zones', id: 'zone:yard', kind: 'rect', map: 'Trammel',
+        rect: [0, 0, 40, 40], props: {}
+    };
+    const edge = {
+        layer: 'nav-edges', id: 'edge:a>b', kind: 'polyline', map: 'Trammel',
+        points: [[0, 20, 0], [40, 20, 0]], props: {}
+    };
+
+    const visible = new Set(['nav-zones', 'nav-edges']);
+    const hit = shapes.hitTest(view, [zone, edge], visible, null, 20.5, 20.5);
+
+    assert.strictEqual(hit.shape, edge);
+    assert.strictEqual(hit.mode, 'body');
+
+    // Off the line but still inside the zone, the zone.
+    assert.strictEqual(shapes.hitTest(view, [zone, edge], visible, null, 20.5, 35).shape, zone);
+});
+
+test('a polygon zone can be picked by its inside, not only by a vertex', () => {
+    // A poly carries both a bounding rect and its vertices. The old single loop sent every
+    // non-rect kind down the node path and then `continue`d, so the insidePolygon test below it
+    // was unreachable: a polygon zone could be grabbed by a corner but never by its body.
+    const poly = {
+        layer: 'nav-zones', id: 'zone:wedge', kind: 'poly', map: 'Trammel',
+        rect: [0, 0, 40, 40], points: [[0, 0, 0], [40, 0, 0], [40, 40, 0]], props: {}
+    };
+
+    const visible = new Set(['nav-zones']);
+
+    const inside = shapes.hitTest(view, [poly], visible, null, 30, 20);
+    assert.strictEqual(inside.shape, poly);
+    assert.strictEqual(inside.mode, 'move');
+
+    // A vertex is still a vertex grab.
+    assert.strictEqual(shapes.hitTest(view, [poly], visible, null, 0.5, 0.5).mode, 'node');
+
+    // Inside the bounding box but outside the polygon is nothing.
+    assert.strictEqual(shapes.hitTest(view, [poly], visible, null, 5, 35), null);
+});
+
+test('a drafted rect keeps being drawn after the tool moves on to collecting points', () => {
+    // The Site tool drags a zone, then flips the draft to 'points' to collect arrival tiles - and
+    // the zone the author had just drawn vanished at the exact moment they were asked to place
+    // tiles inside it. `kind` says what the NEXT click collects; `rect` says what has already
+    // been drawn. Drawing off `kind` conflated the two.
+    const { ctx, calls } = stubContext();
+    const view = stubView(1);
+
+    shapes.drawDraft(ctx, view, { kind: 'points', points: [[1475, 1645, 0]], rect: [1470, 1640, 10, 12] });
+
+    const rects = calls.filter((call) => call.name === 'strokeRect');
+    assert.strictEqual(rects.length, 1, 'the zone stopped being drawn once the tool moved on');
+    assert.deepStrictEqual(rects[0].args, [595, 395, 10, 12]);
+});
+
+test('a rect-drag tool draws a rubber band before it has any points', () => {
+    // navzone and restricted start with points: [] and dragged out with no rubber band at all,
+    // because the draw bailed on an empty points array before it ever looked at the rect.
+    const { ctx, calls } = stubContext();
+
+    shapes.drawDraft(ctx, stubView(1), { kind: 'rect', points: [], rect: [1470, 1640, 4, 6] });
+
+    assert.strictEqual(calls.filter((call) => call.name === 'strokeRect').length, 1);
+});
+
 test('a hidden layer is not hit-tested, so an invisible edge cannot be picked', () => {
     const edge = {
         layer: 'nav-edges', id: 'edge:a>b', kind: 'polyline', map: 'Trammel',
@@ -256,6 +349,7 @@ function stubContext() {
             fill: record('fill'),
             save: record('save'),
             restore: record('restore'),
+            setLineDash: record('setLineDash'),
             setTransform: record('setTransform')
         }
     };
@@ -550,6 +644,7 @@ test('every tool produces a shape unproject can write, with the right fields in 
     // This is the seam that would fail silently: a shape built in the browser goes straight to
     // unproject, and if the two disagree about a field name the record is written missing it.
     const { buildShape } = await import('./js/build.js');
+    const { LAYERS } = shapes;
     const { unproject } = require('./project.js');
 
     const nav = fs.readFileSync(FILES.navigation, 'utf8');
@@ -609,6 +704,26 @@ test('every tool produces a shape unproject can write, with the right fields in 
         // builds one, and is treated as a list of one rather than given a second code path.
         const shapes = Array.isArray(built) ? built : [built];
         const shape = shapes[0];
+
+        // Every record has to name a real layer, and every record of one build has to belong to
+        // one file. This is not housekeeping: `fileOf` reads LAYERS[shape.layer], returns null
+        // when it misses, and `filesWithEdits` drops a shape whose file is null - so a record
+        // with no layer is silently never saved and Save still reports success. The Site tool
+        // shipped that way. It builds for three different layers, `common` carried the single
+        // LAYER_FOR[key] lookup, there is no 'site' key in that table, and so all four of its
+        // records were born with layer undefined. A whole authored work site was lost to it.
+        // The unproject assertions below cannot see this, because unproject dispatches on the id
+        // prefix and never looks at the layer.
+        const files = new Set();
+
+        for (const one of shapes) {
+            assert.ok(one.layer, `${key}: ${one.id} was built with no layer`);
+            assert.ok(LAYERS[one.layer], `${key}: ${one.id} names layer '${one.layer}', which is not in LAYERS`);
+            files.add(LAYERS[one.layer].file);
+        }
+
+        assert.strictEqual(files.size, 1,
+            `${key} built records for more than one file (${[...files].join(', ')}); a save is scoped to one`);
 
         const written = unproject(file, text, { creates: shapes });
 

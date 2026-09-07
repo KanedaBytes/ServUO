@@ -103,11 +103,18 @@ export function buildShape(key, props, map, draft, context = {}) {
         // Three records, built together because they are one thing. Their ids are derived from
         // the site's own id rather than auto-generated separately, so a site reads as a set in the
         // filter and in a diff: brit-mine-west, brit-mine-west-face, and its arrivals.
+        // The only tool that builds records for three different layers, which is exactly how it
+        // came to build them for none. `common` carries LAYER_FOR[key], and there is no single
+        // layer a work site belongs to - so every record here names its own. Without that the
+        // layer is undefined, and an undefined layer is not a cosmetic fault: `fileOf` returns
+        // null for it, `filesWithEdits` drops the file, and Save reports success having written
+        // nothing. A whole site was authored and lost that way before this comment existed.
         case 'site': {
             const zoneId = `${props.id}-face`;
 
             const site = {
-                ...common, id: `dest:${props.id}`, kind: 'point', label: props.name || props.id,
+                ...common, layer: 'nav-destinations',
+                id: `dest:${props.id}`, kind: 'point', label: props.name || props.id,
                 points: [[point[0], point[1], 0]],
                 props: {
                     id: props.id,
@@ -128,14 +135,16 @@ export function buildShape(key, props, map, draft, context = {}) {
             // GathererBehavior.ResolveSite looks for a zone tagged 'mine' or 'lumber' at the
             // bot's feet - a zone without it is invisible to the behaviour that needs it.
             const zone = {
-                ...common, id: `zone:${zoneId}`, kind: 'rect', label: zoneId,
+                ...common, layer: 'nav-zones',
+                id: `zone:${zoneId}`, kind: 'rect', label: zoneId,
                 rect: [...draft.rect],
                 props: { id: zoneId, tags: `${props.type} wilderness work` },
                 fields: [{ key: 'tags', label: 'Tags', type: 'string' }]
             };
 
             const arrivals = (context.arrivals || []).map(([x, y], index) => ({
-                ...common, id: `arr:${props.id}#${index}`, kind: 'point',
+                ...common, layer: 'nav-arrivals',
+                id: `arr:${props.id}#${index}`, kind: 'point',
                 label: `${props.id} arrival`,
                 points: [[x, y, 0]],
                 props: {

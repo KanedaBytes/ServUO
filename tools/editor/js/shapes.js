@@ -454,7 +454,7 @@ export function pick(view, shapes, visible, worldX, worldY) {
 
 /** Draws whatever the active create tool has collected so far. */
 export function drawDraft(ctx, view, draft) {
-    if (!draft || !draft.points.length) {
+    if (!draft || (!draft.points.length && !draft.rect)) {
         return;
     }
 
@@ -464,11 +464,22 @@ export function drawDraft(ctx, view, draft) {
     ctx.fillStyle = '#ffd479';
     ctx.lineWidth = 2;
 
-    if (draft.kind === 'rect' && draft.rect) {
+    // The rect is drawn whenever there is one, NOT only while `kind` says 'rect'.
+    //
+    // The Site tool flips the draft to 'points' the instant the zone drag ends, so it can start
+    // collecting arrivals - and the zone the author had just finished dragging vanished off the
+    // map at exactly the moment they were asked to place tiles inside it. The two are
+    // independent: `kind` says what the next click collects, `rect` says what has been drawn
+    // already. Keying the drawing off `kind` conflated them.
+    if (draft.rect) {
         const [x, y, w, h] = draft.rect;
         const [sx, sy] = view.toScreen(x, y);
         ctx.strokeRect(sx, sy, w * view.scale, h * view.scale);
-    } else {
+    }
+
+    // A rect-drag tool starts with no points at all, which the early return above used to treat
+    // as nothing to draw - so navzone and restricted dragged out with no rubber band whatsoever.
+    if (draft.kind !== 'rect' && draft.points.length > 0) {
         ctx.beginPath();
 
         draft.points.forEach(([x, y], i) => {
@@ -629,13 +640,95 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
         }
     }
 
-    // Smallest thing first, not last-drawn first.
+    // By kind, then by size - never by draw order.
     //
     // Drawing order is the wrong rule for picking. The shop district is a 210x170 rectangle that
     // contains the tavern, every shop, two watch posts and several routes; picking by draw order
     // meant a click anywhere inside it selected the district and nothing else was reachable by
-    // mouse at all. Points and route nodes are small deliberate targets, so they win outright;
-    // among rectangles the smallest one wins, which is the one the click most specifically means.
+    // mouse at all.
+    //
+    // The tiers are points, then lines, then areas, and a tier wins outright - area never breaks
+    // a tie across tiers, only within the area tier. This used to be one loop that returned the
+    // first node it touched in reverse array order, and that is subtly not the same thing: an
+    // edge's endpoints sit exactly on the waypoints it joins, edges are projected after
+    // waypoints, so reverse order reached the edge first and a waypoint could not be dragged at
+    // all with nav-edges on. The comment that used to sit here asserted the opposite - that the
+    // loop "always returns the waypoint" - which was the assumption the bug was made of.
+    const candidates = (test) => {
+        for (let i = shapes.length - 1; i >= 0; i--) {
+            const shape = shapes[i];
+
+            if (!visible.has(shape.layer) || shape.map !== view.facet.name || !hasGeometry(shape)) {
+                continue;
+            }
+
+            const hit = test(shape);
+
+            if (hit) {
+                return hit;
+            }
+        }
+
+        return null;
+    };
+
+    const nodeIn = (shape) => {
+        if (!shape.points) {
+            return null;
+        }
+
+        for (let n = 0; n < shape.points.length; n++) {
+            const [px, py] = shape.points[n];
+
+            if (near([px + 0.5, py + 0.5], worldX, worldY, slack)) {
+                return { shape, mode: shape.kind === 'point' ? 'move' : 'node', index: n };
+            }
+        }
+
+        return null;
+    };
+
+    // 1. Points. Small, deliberate targets, and the thing a click on one unambiguously means.
+    const point = candidates((shape) => (shape.kind === 'point' ? nodeIn(shape) : null));
+
+    if (point) {
+        return point;
+    }
+
+    // 2. The nodes of a line or a polygon - draggable vertices, still smaller targets than a body.
+    const node = candidates((shape) =>
+        (shape.kind === 'polyline' || shape.kind === 'poly' ? nodeIn(shape) : null));
+
+    if (node) {
+        return node;
+    }
+
+    // 3. The LINE of a polyline, not just its nodes. Above the areas, not below them: an edge
+    //    drawn across a nav zone has to stay clickable, or there is no way to delete it.
+    const line = candidates((shape) => {
+        if (shape.kind !== 'polyline') {
+            return null;
+        }
+
+        for (let n = 1; n < shape.points.length; n++) {
+            if (nearSegment(shape.points[n - 1], shape.points[n], worldX, worldY, slack)) {
+                return { shape, mode: 'body' };
+            }
+        }
+
+        return null;
+    });
+
+    if (line) {
+        return line;
+    }
+
+    // 4. Areas, smallest first - the one the click most specifically means. A poly is tested by
+    //    its bounding box and then for real, the same order NavZone.Contains uses and for the
+    //    same reason: the box rejects almost everything for four comparisons instead of a ray
+    //    cast. Polys reach this at all only since the tiers were split; the old single loop sent
+    //    every non-rect kind down the node path and `continue`d, so a polygon zone could be
+    //    picked by a vertex but never by its interior.
     let best = null;
     let bestArea = Infinity;
 
@@ -646,15 +739,7 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
             continue;
         }
 
-        if (shape.kind !== 'rect') {
-            for (let n = 0; n < shape.points.length; n++) {
-                const [px, py] = shape.points[n];
-
-                if (near([px + 0.5, py + 0.5], worldX, worldY, slack)) {
-                    return { shape, mode: shape.kind === 'point' ? 'move' : 'node', index: n };
-                }
-            }
-
+        if (shape.kind !== 'rect' && shape.kind !== 'poly') {
             continue;
         }
 
@@ -664,9 +749,6 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
             continue;
         }
 
-        // The bounding box first for both kinds, then the real test for a poly - the same order
-        // NavZone.Contains uses, and for the same reason: the box rejects almost everything for
-        // four comparisons instead of a ray cast.
         if (shape.kind === 'poly' && !insidePolygon(shape.points, worldX, worldY)) {
             continue;
         }
@@ -677,31 +759,7 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
         }
     }
 
-    if (best) {
-        return best;
-    }
-
-    // Last: the LINE of a polyline, not just its nodes.
-    //
-    // An edge's nodes sit exactly on top of the waypoints they join, so the loop above always
-    // returns the waypoint and an edge could never be selected at all - which would leave no way
-    // to delete one. Tested last so it can never steal a waypoint click, only catch the clicks
-    // that hit nothing.
-    for (let i = shapes.length - 1; i >= 0; i--) {
-        const shape = shapes[i];
-
-        if (shape.kind !== 'polyline' || !visible.has(shape.layer) || shape.map !== view.facet.name) {
-            continue;
-        }
-
-        for (let n = 1; n < shape.points.length; n++) {
-            if (nearSegment(shape.points[n - 1], shape.points[n], worldX, worldY, slack)) {
-                return { shape, mode: 'body' };
-            }
-        }
-    }
-
-    return null;
+    return best;
 }
 
 function near([x, y], worldX, worldY, slack) {
