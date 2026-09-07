@@ -255,14 +255,33 @@ namespace Server.Custom
                 }
             }
 
+            // Islands are a data fault, not an edge fault, so the audit does not find them by
+            // pathing - it reads the same check Nav.Data ran at load and repeats it here. Worth
+            // repeating rather than leaving to the boot log: the audit is what somebody runs
+            // after editing, and a road joined to nothing paths every one of its own edges
+            // perfectly while going nowhere.
+            var islands = new List<string>();
+
+            foreach (string warning in NavigationSystem.DataWarnings)
+            {
+                if (warning.IndexOf("island", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    islands.Add(warning);
+                    lines.Add("ISLAND " + warning);
+                }
+            }
+
             summary = String.Format(
                 "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
-                + "{4} adjacent (skipped).",
+                + "{4} adjacent (skipped){5}.",
                 checkedEdges,
                 blocked,
                 far,
                 occupied,
-                adjacent);
+                adjacent,
+                islands.Count == 0
+                    ? ""
+                    : String.Format(", {0} island(s) holding somewhere to go", islands.Count));
 
             report = lines;
             problems = found;

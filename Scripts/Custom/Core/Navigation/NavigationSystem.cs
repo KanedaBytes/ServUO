@@ -593,41 +593,170 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Warns when one facet's destinations sit in more than one walk-connected component -
-        /// the shape of "these two places look connected on the map but nothing can walk
-        /// between them", which is the single most common authoring mistake.
+        /// Warns when a walk-connected component OTHER than the largest holds a destination or an
+        /// arrival point - an island, which is the single most common authoring mistake.
+        ///
+        /// This used to count components per facet and say only how many there were, which is
+        /// true and almost useless: it did not say which waypoints were cut off, did not look at
+        /// arrivals at all, and left the reader to find the seam by hand. A road authored out to
+        /// the west cliff was joined to nothing, because the corridor tool had put a DUPLICATE
+        /// waypoint on top of 'brit-gate-w' rather than linking to it - 43 waypoints and a mine
+        /// hanging off the graph, and the first symptom anybody saw was a Miner choosing the
+        /// wrong site. An island has to be a warning at load, not a bot that cannot route.
+        ///
+        /// The largest component is taken as the mainland by definition rather than by name: a
+        /// shard is free to grow a second continent, and what makes an island wrong is that
+        /// somewhere with a reason to be walked to is on it. A component holding nothing but
+        /// waypoints is left alone - that is scaffolding, not a fault.
         /// </summary>
         private static void CheckComponents()
         {
-            foreach (KeyValuePair<Map, List<NavDestination>> pair in _destinationsByMap)
+            if (_graph == null || _graph.ComponentCount <= 1)
             {
-                var components = new HashSet<int>();
+                return;
+            }
 
-                foreach (NavDestination destination in pair.Value)
+            // Every waypoint, grouped by the component it walks within.
+            var members = new Dictionary<int, List<NavWaypoint>>();
+
+            foreach (NavWaypoint waypoint in _graph.Nodes)
+            {
+                int component = _graph.ComponentOf(waypoint.Id);
+
+                if (component < 0)
                 {
-                    NavWaypoint nearest = _graph.Nearest(destination.Location, pair.Key, 0);
-
-                    if (nearest == null)
-                    {
-                        continue;
-                    }
-
-                    int component = _graph.ComponentOf(nearest.Id);
-
-                    if (component >= 0)
-                    {
-                        components.Add(component);
-                    }
+                    continue;
                 }
 
-                if (components.Count > 1)
+                List<NavWaypoint> list;
+
+                if (!members.TryGetValue(component, out list))
                 {
-                    _dataWarnings.Add(String.Format(
-                        "{0} destinations span {1} disconnected walk components - some places cannot be reached on foot",
-                        pair.Key,
-                        components.Count));
+                    list = new List<NavWaypoint>();
+                    members[component] = list;
+                }
+
+                list.Add(waypoint);
+            }
+
+            int mainland = -1;
+            int biggest = -1;
+
+            foreach (KeyValuePair<int, List<NavWaypoint>> pair in members)
+            {
+                if (pair.Value.Count > biggest)
+                {
+                    biggest = pair.Value.Count;
+                    mainland = pair.Key;
                 }
             }
+
+            // What each island holds. Both questions matter and the old check asked neither:
+            // a destination on an island cannot be walked to, and an arrival on one cannot be
+            // walked away from.
+            var strandedDestinations = new Dictionary<int, List<string>>();
+            var strandedArrivals = new Dictionary<int, int>();
+
+            foreach (NavDestination destination in _store.Destinations)
+            {
+                int component = ComponentNear(destination.Location, destination.Map);
+
+                if (component < 0 || component == mainland)
+                {
+                    continue;
+                }
+
+                List<string> ids;
+
+                if (!strandedDestinations.TryGetValue(component, out ids))
+                {
+                    ids = new List<string>();
+                    strandedDestinations[component] = ids;
+                }
+
+                ids.Add(destination.Id);
+            }
+
+            foreach (NavArrival arrival in _store.Arrivals)
+            {
+                // An arrival has no map of its own; it lives on the one its destination is on.
+                NavDestination owner;
+
+                if (!_destinations.TryGetValue(arrival.DestinationId, out owner))
+                {
+                    continue;
+                }
+
+                int component = ComponentNear(arrival.Location, owner.Map);
+
+                if (component < 0 || component == mainland)
+                {
+                    continue;
+                }
+
+                int count;
+                strandedArrivals.TryGetValue(component, out count);
+                strandedArrivals[component] = count + 1;
+            }
+
+            foreach (KeyValuePair<int, List<NavWaypoint>> pair in members)
+            {
+                if (pair.Key == mainland)
+                {
+                    continue;
+                }
+
+                List<string> destinations;
+                int arrivals;
+
+                strandedDestinations.TryGetValue(pair.Key, out destinations);
+                strandedArrivals.TryGetValue(pair.Key, out arrivals);
+
+                if ((destinations == null || destinations.Count == 0) && arrivals == 0)
+                {
+                    continue;
+                }
+
+                _dataWarnings.Add(String.Format(
+                    "{0} waypoint(s) form an island nothing can walk to or from, holding {1}{2}: {3}. "
+                    + "Link one of them to the main graph.",
+                    pair.Value.Count,
+                    destinations == null || destinations.Count == 0
+                        ? "no destination"
+                        : String.Format("destination(s) {0}", String.Join(", ", destinations.ToArray())),
+                    arrivals == 0 ? "" : String.Format(" and {0} arrival point(s)", arrivals),
+                    NameWaypoints(pair.Value)));
+            }
+        }
+
+        /// <summary>The component of the waypoint nearest a point, or -1 when the graph is empty.</summary>
+        private static int ComponentNear(Point3D at, Map map)
+        {
+            NavWaypoint nearest = _graph.Nearest(at, map, 0);
+
+            return nearest == null ? -1 : _graph.ComponentOf(nearest.Id);
+        }
+
+        /// <summary>
+        /// The island's waypoints, named. Capped, because an island of forty-three is as findable
+        /// from the first eight ids as from all of them, and a warning nobody can read is one
+        /// nobody acts on.
+        /// </summary>
+        private static string NameWaypoints(List<NavWaypoint> waypoints)
+        {
+            int shown = Math.Min(waypoints.Count, 8);
+            var names = new string[shown];
+
+            for (int i = 0; i < shown; i++)
+            {
+                names[i] = String.Format("'{0}'", waypoints[i].Id);
+            }
+
+            string joined = String.Join(", ", names);
+
+            return waypoints.Count > shown
+                ? String.Format("{0} and {1} more", joined, waypoints.Count - shown)
+                : joined;
         }
 
         private static void RunSelfTests()

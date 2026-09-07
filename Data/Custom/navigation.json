@@ -373,7 +373,9 @@
     {"destination":"brit-mine-north","x":1450,"y":1512,"z":40,"exclusive":false,"waypoints":"brit-minenorth-1"},
     {"destination":"brit-mine-north","x":1447,"y":1527,"z":32,"exclusive":false,"waypoints":"brit-minenorth-1"},
     {"destination":"brit-mine-west","x":1192,"y":1750,"z":0,"exclusive":false,"waypoints":"wp-23"},
-    {"destination":"brit-mine-west","x":1195,"y":1754,"z":0,"exclusive":false,"waypoints":"wp-23"}
+    {"destination":"brit-mine-west","x":1195,"y":1754,"z":0,"exclusive":false,"waypoints":"wp-23"},
+    {"destination":"brit-mine-west","x":1196,"y":1776,"z":0,"exclusive":false,"waypoints":"wp-23"},
+    {"destination":"brit-mine-west","x":1193,"y":1779,"z":0,"exclusive":false,"waypoints":"wp-23"}
   ],
   "zones": [
     {"id":"brit-town","map":"Trammel","x":1416,"y":1498,"width":324,"height":279,"tags":"town britain guarded"},
