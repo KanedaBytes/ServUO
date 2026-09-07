@@ -53,6 +53,7 @@ const FILES = {
     navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json'),
     botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json'),
     navHop: path.join(REPO_ROOT, 'Data', 'Live', 'nav-hop.json'),
+    navAdopt: path.join(REPO_ROOT, 'Data', 'Live', 'nav-adopt.json'),
 
     // Authoring input, not live data: uo-offline's navigation converted into our schema.
     // Read-only by construction - resolveSave has no entry for it, so the save endpoint

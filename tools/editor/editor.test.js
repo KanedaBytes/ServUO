@@ -150,7 +150,11 @@ test('every tool names a real layer and a kind the state machine handles', () =>
     // 'site' is the three-phase one: a point, then a rect, then N points finished with Enter.
     // Adding a kind is deliberately a change in three places - tools.js, app.js and build.js -
     // and this set is the fourth, so a kind the state machine cannot drive fails here first.
-    const kinds = new Set(['point', 'rect', 'form', 'pair', 'chain', 'owner-then-point', 'site', 'point-chain']);
+    const kinds = new Set([
+        'point', 'rect', 'form', 'pair', 'chain', 'owner-then-point', 'site', 'point-chain',
+        // Drags a box and creates nothing: the rect is a question for the shard, and the
+        // answer is a proposal to accept or discard.
+        'adopt-rect']);
 
     for (const [key, tool] of Object.entries(tools.TOOLS)) {
         assert.ok(shapes.LAYERS[tool.layer], `${key} names an unknown layer '${tool.layer}'`);

@@ -801,7 +801,7 @@ function near([x, y], worldX, worldY, slack) {
 }
 
 /** Perpendicular distance to a segment, clamped to its ends. Nodes are offset to tile centres. */
-function nearSegment(a, b, worldX, worldY, slack) {
+export function nearSegment(a, b, worldX, worldY, slack) {
     const ax = a[0] + 0.5;
     const ay = a[1] + 0.5;
     const dx = b[0] - a[0];

@@ -195,7 +195,7 @@ namespace Server.Custom
             public readonly List<NavArrival> Arrivals = new List<NavArrival>();
 
             public readonly List<PendingEdge> Pending = new List<PendingEdge>();
-            public readonly List<string> Failures = new List<string>();
+            public readonly List<FailedEdge> Failures = new List<FailedEdge>();
 
             /// <summary>Proposed edges that land on an existing waypoint, as "from&gt;to".</summary>
             public readonly HashSet<string> Joins =
@@ -416,8 +416,16 @@ namespace Server.Custom
 
                 if (from == null || to == null)
                 {
-                    Failures.Add(String.Format(
-                        "{0} -> {1}: one end is not in the proposal", pending.FromId, pending.ToId));
+                    Failures.Add(new FailedEdge
+                    {
+                        From = pending.FromId,
+                        To = pending.ToId,
+                        Reason = "one end is not in the proposal",
+                        FromX = from == null ? 0 : from.X,
+                        FromY = from == null ? 0 : from.Y,
+                        ToX = to == null ? 0 : to.X,
+                        ToY = to == null ? 0 : to.Y
+                    });
                     return;
                 }
 
@@ -429,8 +437,16 @@ namespace Server.Custom
 
                 if (!NavCorridor.TryPath(Map, start, goal, out path, out error) || path.Count < 2)
                 {
-                    Failures.Add(String.Format(
-                        "{0} -> {1}: {2}", pending.FromId, pending.ToId, error ?? "no route"));
+                    Failures.Add(new FailedEdge
+                    {
+                        From = pending.FromId,
+                        To = pending.ToId,
+                        Reason = error ?? "no route",
+                        FromX = from.X,
+                        FromY = from.Y,
+                        ToX = to.X,
+                        ToY = to.Y
+                    });
                     return;
                 }
 
@@ -711,6 +727,23 @@ namespace Server.Custom
         /// is what makes a join possible, and keeping it here rather than re-deriving it at walk
         /// time means the decision is made once, while the authored region is still in hand.
         /// </summary>
+        /// <summary>
+        /// An edge that could not be walked, with the ends needed to draw it.
+        ///
+        /// A sentence is enough for a log and not enough for a map: the editor draws these in red
+        /// so the author can see WHERE the road broke, and a string cannot be given a position.
+        /// </summary>
+        private sealed class FailedEdge
+        {
+            public string From;
+            public string To;
+            public string Reason;
+            public int FromX;
+            public int FromY;
+            public int ToX;
+            public int ToY;
+        }
+
         private sealed class PendingEdge
         {
             public NavEdge Edge;
@@ -810,7 +843,7 @@ namespace Server.Custom
             WriteEdges(builder, job);
             WriteDestinations(builder, job);
             WriteArrivals(builder, job);
-            WriteStrings(builder, "failures", job.Failures, true);
+            WriteFailures(builder, job);
             WriteStrings(builder, "stranded", job.Stranded, true);
             WriteStrings(builder, "islands", job.Islands, false);
 
@@ -941,6 +974,28 @@ namespace Server.Custom
             }
 
             builder.Append(job.Arrivals.Count > 0 ? "\n" : "").Append("  ],\n");
+        }
+
+        private static void WriteFailures(StringBuilder builder, Job job)
+        {
+            builder.Append("  \"failures\": [\n");
+
+            for (int i = 0; i < job.Failures.Count; i++)
+            {
+                FailedEdge failure = job.Failures[i];
+
+                builder.Append(i > 0 ? ",\n" : "");
+                builder.Append("    {\"from\":").Append(Json.Quote(failure.From))
+                    .Append(",\"to\":").Append(Json.Quote(failure.To))
+                    .Append(",\"reason\":").Append(Json.Quote(failure.Reason))
+                    .Append(",\"fromX\":").Append(failure.FromX)
+                    .Append(",\"fromY\":").Append(failure.FromY)
+                    .Append(",\"toX\":").Append(failure.ToX)
+                    .Append(",\"toY\":").Append(failure.ToY)
+                    .Append("}");
+            }
+
+            builder.Append(job.Failures.Count > 0 ? "\n" : "").Append("  ],\n");
         }
 
         private static void WriteStrings(StringBuilder builder, string key, List<string> lines, bool comma)

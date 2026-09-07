@@ -26,7 +26,7 @@ import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
     READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
-    hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode, syncDerived
+    hitTest, pick, nearSegment, geometryOf, applyGeometry, moveShape, resizeRect, moveNode, syncDerived
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
@@ -95,6 +95,9 @@ const state = {
     referenceRegions: new Set(),
     referenceBox: null,
     referenceCounts: null,
+
+    /** Edges the last adopt could not walk. Drawn red; never proposed. */
+    adoptFailures: [],
 
     selected: null,
     hovered: null,
@@ -1292,6 +1295,12 @@ function render() {
 
     drawShapes(ctx, view, state.shapes, state.visible, state.selected, state.hovered, matchingShapes());
 
+    // Edges the adopt could not walk. Drawn over everything because they are the thing the author
+    // has to decide about, and they are NOT records - nothing will be written for them.
+    if (state.adoptFailures.length > 0) {
+        drawAdoptFailures(ctx, view);
+    }
+
     if (state.worksitesVisible) {
         worksites.draw(ctx, view);
     }
@@ -1732,7 +1741,10 @@ function startTool(key, placeAt = null) {
     }
 
     state.tool = { key, ...tool, phase: 0, owner: null, ids: [], arrivals: [] };
-    state.draft = { kind: tool.kind === 'rect' ? 'rect' : 'points', points: [], rect: null };
+    state.draft = {
+        kind: tool.kind === 'rect' || tool.kind === 'adopt-rect' ? 'rect' : 'points',
+        points: [], rect: null
+    };
     state.selected = null;
 
     // An owner-then-point tool can skip its first phase when the thing it needs is already picked.
@@ -2051,6 +2063,7 @@ async function confirmReplaceProposal() {
 
     if (live.length === 0) {
         state.proposal = null;
+    state.adoptFailures = [];
         return true;
     }
 
@@ -2071,6 +2084,7 @@ async function confirmReplaceProposal() {
     }
 
     state.proposal = null;
+    state.adoptFailures = [];
     syncDerived(state.shapes);
 
     return true;
@@ -2103,6 +2117,244 @@ async function askForSite(x, y) {
     setHint(tool.hint2);
     setToolStep();
     requestRender();
+}
+
+/**
+ * The edges an adopt could not walk, in red.
+ *
+ * Not shapes, deliberately: a shape is something the editor could be asked to save, and these must
+ * never be. They are a drawing of a decision - this road is broken, here - and they vanish with the
+ * next adopt or a discard.
+ */
+function drawAdoptFailures(ctx, view) {
+    ctx.save();
+    ctx.strokeStyle = '#ff2d2d';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 4]);
+
+    for (const failure of state.adoptFailures) {
+        const [ax, ay] = view.toScreen(failure.fromX + 0.5, failure.fromY + 0.5);
+        const [bx, by] = view.toScreen(failure.toX + 0.5, failure.toY + 0.5);
+
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+
+        // A cross at each end, so a failure whose ends are off screen still reads as an endpoint
+        // rather than a line running out of the view.
+        for (const [px, py] of [[ax, ay], [bx, by]]) {
+            ctx.beginPath();
+            ctx.setLineDash([]);
+            ctx.moveTo(px - 4, py - 4);
+            ctx.lineTo(px + 4, py + 4);
+            ctx.moveTo(px + 4, py - 4);
+            ctx.lineTo(px - 4, py + 4);
+            ctx.stroke();
+            ctx.setLineDash([6, 4]);
+        }
+    }
+
+    ctx.restore();
+}
+
+/** The failed edge under the cursor, for the hover readout. */
+function adoptFailureAt(worldX, worldY) {
+    const slack = 3 / Math.max(view.scale, 0.001);
+
+    for (const failure of state.adoptFailures) {
+        if (nearSegment(
+            [failure.fromX, failure.fromY], [failure.toX, failure.toY], worldX, worldY, slack)) {
+            return failure;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Adopt a region of the uo-offline reference.
+ *
+ * The shard does all of it: only the shard can walk an edge. This drops the token, polls the
+ * proposal while it is built, and turns the answer into unsaved records - which is the same review
+ * a hand-drawn corridor gets, and the reason nothing here can damage the nav data.
+ *
+ * The poll is what makes a long run bearable. Every edge is a flood-fill and a large region is
+ * minutes of them; without `done`/`total` the editor is indistinguishable from a hang.
+ */
+async function startAdopt(rect) {
+    if (!rect) {
+        return;
+    }
+
+    const [x, y, width, height] = rect;
+
+    setStatus(`Asking the shard to walk ${width}x${height} at ${x},${y}...`, 'ok');
+
+    try {
+        const dropped = await api.request('nav-adopt', `${x},${y},${width},${height}`);
+        const ack = await api.awaitAck('nav-adopt', { nonce: dropped.nonce, timeoutMs: 20000 });
+
+        if (!ack.ok) {
+            setStatus(ack.message, 'error');
+            return;
+        }
+    } catch (error) {
+        setStatus(`Adopt failed: ${error.message}`, 'error');
+        return;
+    }
+
+    await pollAdopt();
+}
+
+/** Follow a running adopt to its end, showing how far it has got. */
+async function pollAdopt() {
+    for (let i = 0; i < 900; i++) {
+        let proposal;
+
+        try {
+            proposal = await api.adopt();
+        } catch (error) {
+            setStatus(`Adopt: ${error.message}`, 'error');
+            return;
+        }
+
+        if (proposal.status === 'done') {
+            showAdoptProposal(proposal);
+            return;
+        }
+
+        setStatus(`Adopting: walked ${proposal.done} of ${proposal.total} edge(s)...`, 'ok');
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    setStatus('The adopt did not finish. Check the shard console.', 'error');
+}
+
+/**
+ * Turn a finished proposal into unsaved records, and say what it refused.
+ *
+ * Stranded waypoints are DROPPED here rather than written: a waypoint whose every edge failed to
+ * walk is a point in space with no road, and writing one "to fix later" is the shape of the fault
+ * the west road shipped with.
+ */
+function showAdoptProposal(proposal) {
+    const stranded = new Set(proposal.stranded || []);
+    const created = [];
+
+    for (const waypoint of proposal.waypoints || []) {
+        if (stranded.has(waypoint.id)) {
+            continue;
+        }
+
+        created.push({
+            layer: 'nav', id: `wp:${waypoint.id}`, kind: 'point', map: waypoint.map,
+            label: waypoint.name || waypoint.id,
+            points: [[waypoint.x, waypoint.y, waypoint.z]],
+            props: {
+                id: waypoint.id,
+                ...(waypoint.name ? { name: waypoint.name } : {}),
+                arrivalRange: waypoint.arrivalRange || 0,
+                tags: waypoint.tags || '',
+                source: waypoint.source
+            },
+            fields: []
+        });
+    }
+
+    const alive = new Set(created.map((shape) => shape.props.id));
+
+    for (const edge of proposal.edges || []) {
+        // An edge onto a dropped waypoint goes with it. The join edges are the exception worth
+        // noticing: their far end is one of OURS and is not in `alive` at all.
+        const fromOk = alive.has(edge.from) || !stranded.has(edge.from);
+        const toOk = alive.has(edge.to) || !stranded.has(edge.to);
+
+        if (!fromOk || !toOk) {
+            continue;
+        }
+
+        created.push({
+            layer: 'nav-edges', id: `edge:${edge.from}>${edge.to}`, kind: 'polyline',
+            map: proposal.map, label: '',
+            points: [[0, 0, 0], [0, 0, 0]],
+            props: {
+                from: edge.from, to: edge.to, kind: 'walk',
+                tags: edge.tags || '', source: edge.source
+            },
+            fields: []
+        });
+    }
+
+    for (const destination of proposal.destinations || []) {
+        created.push({
+            layer: 'nav-destinations', id: `dest:${destination.id}`, kind: 'point',
+            map: destination.map, label: destination.name || destination.id,
+            points: [[destination.x, destination.y, destination.z]],
+            props: {
+                id: destination.id, name: destination.name, type: destination.type,
+                tags: destination.tags || '', waypoints: destination.waypoints || '',
+                source: destination.source
+            },
+            fields: []
+        });
+    }
+
+    let index = 0;
+
+    for (const arrival of proposal.arrivals || []) {
+        created.push({
+            layer: 'nav-arrivals', id: `arr:${arrival.destination}#${index++}`, kind: 'point',
+            map: proposal.map, label: `${arrival.destination} arrival`,
+            points: [[arrival.x, arrival.y, arrival.z]],
+            props: {
+                destination: arrival.destination, exclusive: false,
+                waypoints: arrival.waypoints || '', source: arrival.source
+            },
+            fields: []
+        });
+    }
+
+    for (const shape of created) {
+        createShape(shape);
+    }
+
+    state.proposal = new Set(created.map((shape) => shape.id));
+    state.adoptFailures = proposal.failures || [];
+
+    syncDerived(state.shapes);
+    updateCounts();
+    requestRender();
+
+    const lines = [
+        `${created.length} record(s) proposed from uo-offline.`,
+        `${(proposal.edges || []).length} edge(s) walked and subdivided under the hop cap.`,
+        `${proposal.links || 0} join(s) onto existing waypoints.`
+    ];
+
+    if (proposal.skipped) {
+        lines.push(`${proposal.skipped.authored} skipped as already authored,`
+            + ` ${proposal.skipped.noArrival} destination(s) skipped for having no arrival.`);
+    }
+
+    if (state.adoptFailures.length > 0) {
+        lines.push('', `${state.adoptFailures.length} edge(s) could not be walked and are NOT`
+            + ' proposed - they are drawn red; hover one for the reason.');
+    }
+
+    if (stranded.size > 0) {
+        lines.push(`${stranded.size} waypoint(s) had no surviving edge and were dropped.`);
+    }
+
+    for (const island of proposal.islands || []) {
+        lines.push('', island);
+    }
+
+    lines.push('', 'Nothing is written yet. Save to accept, or Discard.');
+
+    showBanner(lines.join('\n'), 'warn');
+    setStatus(`Adopted ${created.length} record(s). Save to accept.`, 'ok');
 }
 
 /**
@@ -2389,6 +2641,7 @@ function wireInput() {
 
         if (state.tool) {
             if (state.tool.kind === 'rect'
+                || state.tool.kind === 'adopt-rect'
                 || (state.tool.kind === 'site' && state.tool.phase === 1)) {
                 const x = Math.floor(worldX);
                 const y = Math.floor(worldY);
@@ -2452,6 +2705,16 @@ function wireInput() {
 
         if (view.facet && dom.coords) {
             dom.coords.textContent = `${Math.floor(worldX)}, ${Math.floor(worldY)}`;
+        }
+
+        // Why an adopted road broke, where it broke. The reason comes from the shard's own walker,
+        // so it says what the pathfinder actually refused rather than a guess about it.
+        if (state.adoptFailures.length > 0) {
+            const failure = adoptFailureAt(worldX, worldY);
+
+            if (failure) {
+                setStatus(`${failure.from} -> ${failure.to}: ${failure.reason}`, 'error');
+            }
         }
 
         const drag = state.drag;
@@ -2520,6 +2783,15 @@ function wireInput() {
         canvas.classList.remove('dragging');
 
         if (drag && drag.kind === 'draw-rect') {
+            // Adopt creates nothing here: the rect is a question, and startAdopt asks it.
+            if (state.tool && state.tool.kind === 'adopt-rect') {
+                const rect = state.draft.rect;
+
+                cancelTool();
+                startAdopt(rect);
+                return;
+            }
+
             if (state.tool && state.tool.kind === 'site') {
                 state.tool.phase = 2;
                 state.draft.kind = 'points';

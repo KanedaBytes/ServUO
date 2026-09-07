@@ -312,6 +312,18 @@ const ROUTES = {
      * browser drop them is work nobody asked for. The regions the caller wants are named in the
      * query, so a toggle that is off costs nothing on the wire.
      */
+    /** The adopt proposal, progress and all. Polled while a run is in flight. */
+    /**
+     * The adopt proposal, progress and all.
+     *
+     * Polled while a run is in flight: a large region is minutes of flood-fill, and `done`/`total`
+     * is the only thing that distinguishes working from hung.
+     */
+    '/api/adopt': (request, response) => {
+        sendJson(response, 200, readJson(whitelist.FILES.navAdopt)
+            || { utc: null, status: 'none', done: 0, total: 0 });
+    },
+
     '/api/reference': (request, response) => {
         const url = new URL(request.url, `http://${HOST}`);
         const bbox = parseBbox(url.searchParams.get('bbox'));

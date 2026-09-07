@@ -198,6 +198,22 @@ export const TOOLS = {
         ]
     },
 
+    /**
+     * Adopt a region of the uo-offline reference.
+     *
+     * `adopt-rect` rather than `rect`: it creates no record of its own. The rectangle is a
+     * QUESTION asked of the shard - which of somebody else's roads are in here, and can they be
+     * walked - and the answer comes back as a proposal to accept or discard.
+     */
+    adopt: {
+        layer: 'reference',
+        label: 'Adopt region',
+        kind: 'adopt-rect',
+        hint: 'Drag a box over the reference roads to adopt. Esc cancels.',
+        title: 'Adopt region',
+        fields: []
+    },
+
     restricted: {
         layer: 'restricted',
         label: 'Restricted zone',

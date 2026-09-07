@@ -68,6 +68,7 @@ export const api = {
 
     entities: () => request('GET', '/api/entities'),
     audit: () => request('GET', '/api/audit'),
+    adopt: () => request('GET', '/api/adopt'),
     reach: () => request('GET', '/api/reach'),
     route: () => request('GET', '/api/route'),
     botlog: () => request('GET', '/api/botlog'),
