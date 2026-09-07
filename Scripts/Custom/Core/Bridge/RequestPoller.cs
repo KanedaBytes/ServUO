@@ -35,6 +35,15 @@ namespace Server.Custom
         // The same cap LogWarnings uses for the console, so the ack and the log agree.
         private const int MaxDetails = 40;
 
+        /// <summary>
+        /// Tiles between the waypoints nav-route proposes along a road.
+        ///
+        /// Ten, comfortably inside Custom.NavHopMaxTiles (12) so a proposed hop is never born
+        /// over the cap, and far enough apart that a corridor is a handful of records rather than
+        /// a waypoint every step.
+        /// </summary>
+        private const int HopSpacing = 10;
+
         private static readonly IList<string> NoDetails = new string[0];
 
         private static long _handled;
@@ -274,6 +283,81 @@ namespace Server.Custom
                 // The body is optional and is "<mine|lumber> x,y x,y ..." - points that are NOT in
                 // navigation.json yet, so a tile can be judged while it is being placed rather
                 // than after a save and a reload. With no body it just refreshes the authored set.
+                // Walk a road between two points the way a bot would, doors and gates included,
+                // and write the tiles to Data/Live/nav-route.json for the editor to lay waypoints
+                // along. Body is "x1,y1 x2,y2 [facet]".
+                case "nav-route":
+                {
+                    string[] fields = (body ?? "").Split(
+                        new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    var ends = new List<Point3D>();
+                    Map facet = Map.Trammel;
+
+                    for (int i = 0; i < fields.Length; i++)
+                    {
+                        string field = fields[i];
+
+                        if (field.StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        int comma = field.IndexOf(',');
+
+                        if (comma < 0)
+                        {
+                            Map named;
+
+                            if (JsonConfig.TryParseMap(field, out named))
+                            {
+                                facet = named;
+                            }
+
+                            continue;
+                        }
+
+                        int x, y;
+
+                        if (Int32.TryParse(field.Substring(0, comma), out x)
+                            && Int32.TryParse(field.Substring(comma + 1), out y))
+                        {
+                            ends.Add(new Point3D(x, y, 0));
+                        }
+                    }
+
+                    if (ends.Count != 2)
+                    {
+                        message = "nav-route needs exactly two points: '1420,1640 1200,1750'";
+                        return false;
+                    }
+
+                    List<Point3D> route;
+                    string routeError;
+
+                    // Flood, verify every hop with a real BaseCreature, and re-flood around any
+                    // step the engine refuses. The flood answers "a road exists"; only the
+                    // creature answers "the pathfinder a bot uses can walk this leg", and that
+                    // second question is the one [NavAudit asks once the waypoints are saved.
+                    List<Point3D> hops;
+
+                    bool walked = NavCorridor.TryRoad(
+                        facet, ends[0], ends[1], HopSpacing, out route, out hops, out routeError);
+
+                    NavCorridor.WriteSnapshot(
+                        facet, ends[0], ends[1], route, hops, walked, routeError, walked, routeError);
+
+                    // A road that cannot be completed is still an ANSWER, and the partial path is
+                    // the useful half of it: "it reaches the gate and stops" is a different problem
+                    // from "it never leaves town", and the editor draws both.
+                    message = walked
+                        ? String.Format(
+                            "walked {0} tile(s); {1} hop(s), every one verified", route.Count, hops.Count)
+                        : String.Format("{0} ({1} tile(s) walked)", routeError, route.Count);
+
+                    return true;
+                }
+
                 case "site-reach":
                 {
                     string[] parts = (body ?? "").Split(

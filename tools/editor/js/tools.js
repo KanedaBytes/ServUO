@@ -80,6 +80,25 @@ export const TOOLS = {
     },
 
     /**
+     * Ask the shard to walk a road between two points, and propose waypoints along it.
+     *
+     * Two clicks and no form, because it CREATES NOTHING BY ITSELF. What comes back is a draft
+     * the author accepts, edits or throws away - the shard is answering "can a bot walk here and
+     * where would the waypoints go", which is a question the browser cannot answer at all: it has
+     * no map data, no movement rules, and no way to know that a bot opens a door and a flood does
+     * not.
+     */
+    corridor: {
+        layer: 'nav',
+        label: 'Corridor',
+        kind: 'pair-points',
+        hint: 'Click where the road starts. Esc cancels.',
+        hint2: 'Click where it should end. The shard walks it.',
+        title: 'Corridor',
+        fields: []
+    },
+
+    /**
      * A work site is three records, and authoring them separately is how one gets forgotten.
      *
      * A mine or a wood is a destination (where bots are sent), a zone (the ground they may work

@@ -356,6 +356,19 @@ const ROUTES = {
      * the editor only draws it. `probe` holds answers for points that are not in navigation.json
      * yet, which is what lets the Site tool judge a tile while it is being placed.
      */
+    /**
+     * The last road nav-route walked, as tiles plus the hops it verified.
+     *
+     * `hops` is what the editor proposes waypoints on, and `hopsWalkable` is the shard saying it
+     * drove a real creature over every one of them. The raw `points` are drawn as the road itself
+     * so an author can see what the proposal is a summary of.
+     */
+    '/api/route': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.navRoute)
+                || { utc: null, map: null, ok: false, points: [], hops: [] });
+    },
+
     '/api/reach': (request, response) => {
         sendJson(response, 200,
             readJson(whitelist.FILES.siteReach) || { utc: null, map: null, arrivals: [], probe: [] });

@@ -393,6 +393,55 @@ const ENTITY_COLORS = {
     creature: '#9a8c98'
 };
 
+/**
+ * The road nav-route last walked: the tiles as a thin line, the proposed hops as dots.
+ *
+ * Drawn whether or not the road completed. A partial road is the most useful thing on the screen
+ * when one fails - seeing that it reaches the gate and stops is most of the diagnosis, and a tool
+ * that drew nothing on failure would be hiding its own best evidence.
+ */
+export function drawRoute(ctx, view, route) {
+    if (!route || !route.points || route.points.length === 0 || route.map !== view.facet.name) {
+        return;
+    }
+
+    ctx.save();
+
+    // Amber for a road with a step the engine refused, so a proposal can never be mistaken for a
+    // verified one at a glance.
+    const color = route.ok ? 'rgba(123, 216, 143, .85)' : 'rgba(255, 212, 121, .9)';
+
+    ctx.beginPath();
+
+    for (let i = 0; i < route.points.length; i++) {
+        const [sx, sy] = view.toScreen(route.points[i][0] + 0.5, route.points[i][1] + 0.5);
+
+        if (i === 0) {
+            ctx.moveTo(sx, sy);
+        } else {
+            ctx.lineTo(sx, sy);
+        }
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    for (const [x, y] of route.hops || []) {
+        const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 0, 0, .7)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
 export function drawEntities(ctx, view, entities) {
     const width = ctx.canvas.clientWidth;
     const height = ctx.canvas.clientHeight;

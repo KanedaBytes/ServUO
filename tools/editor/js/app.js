@@ -25,7 +25,7 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, drawRoute,
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
 } from './shapes.js';
 import * as coverage from './coverage.js';
@@ -72,6 +72,7 @@ const state = {
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
     worksitesVisible: false,
+    route: null,
 
     selected: null,
     hovered: null,
@@ -684,6 +685,10 @@ function render() {
 
     drawShapes(ctx, view, state.shapes, state.visible, state.selected, state.hovered, matchingShapes());
 
+    if (state.route) {
+        drawRoute(ctx, view, state.route);
+    }
+
     if (state.worksitesVisible) {
         worksites.draw(ctx, view);
     }
@@ -1152,6 +1157,24 @@ function toolClick(worldX, worldY) {
         return true;
     }
 
+    // Two bare points, unlike 'pair', which collects two existing shapes. A road may start and
+    // end anywhere - the whole reason for it is usually that there are no waypoints out there yet.
+    if (tool.kind === 'pair-points') {
+        state.draft.points.push([x, y, 0]);
+
+        if (state.draft.points.length === 1) {
+            setHint(tool.hint2);
+            requestRender();
+            return true;
+        }
+
+        const [a, b] = state.draft.points;
+
+        cancelTool();
+        proposeCorridor(a, b);
+        return true;
+    }
+
     // A work site is three records collected in one flow: the destination, the zone around it,
     // and the arrival tiles inside that. Separately they are three tools and an author has to
     // remember to reach for all three; together they are the thing being made.
@@ -1220,6 +1243,101 @@ function toolClick(worldX, worldY) {
     requestRender();
 
     return true;
+}
+
+/**
+ * Yes or no, on the same modal every other prompt uses.
+ *
+ * A field-less askFor: submitting resolves to an empty object and cancelling resolves to null, so
+ * the truthiness is the answer. Reusing the modal rather than adding a second one keeps Esc, focus
+ * and the overlay behaving identically - a confirm that closed differently from every other dialog
+ * would be its own small bug.
+ */
+async function confirmModal(title, detail) {
+    const answer = await askFor({
+        title,
+        submit: 'Propose',
+        fields: [{ key: 'note', label: detail, readonly: true }]
+    }, { note: '' });
+
+    return !!answer;
+}
+
+/**
+ * Ask the shard to walk a road, then offer its hops as waypoints and edges.
+ *
+ * NOTHING IS SAVED HERE, and nothing is even created until the author says so. The shard returns
+ * a road it has verified - every hop walked by a real creature, doors and gates included - and
+ * this turns that into ordinary unsaved waypoint and edge records, which behave exactly like
+ * hand-placed ones: draggable, deletable, undoable, and written only by an explicit save.
+ *
+ * A road the shard could not finish still draws. "It reaches the gate and stops" is a different
+ * problem from "it never leaves town", and seeing where it stopped is most of the diagnosis.
+ */
+async function proposeCorridor(a, b) {
+    setStatus('Asking the shard to walk that road...', 'ok');
+
+    let answer;
+
+    try {
+        const body = `${a[0]},${a[1]} ${b[0]},${b[1]} ${state.facet.name}`;
+        const dropped = await api.request('nav-route', body);
+        const ack = await api.awaitAck('nav-route', { nonce: dropped.nonce, timeoutMs: 120000 });
+
+        answer = await api.route();
+        setStatus(ack.message, answer.ok ? 'ok' : 'error');
+    } catch (error) {
+        setStatus(`The shard could not walk that road: ${error.message}`, 'error');
+        return;
+    }
+
+    state.route = answer;
+    requestRender();
+
+    if (!answer.hops || answer.hops.length < 2) {
+        showBanner(`No road: ${answer.error || 'the shard walked nothing'}`);
+        return;
+    }
+
+    const count = answer.hops.length;
+    const proceed = await confirmModal(
+        'Propose this road?',
+        `${answer.points.length} tiles walked, ${count} waypoints proposed`
+        + `${answer.ok ? ', every hop verified' : `. NOT complete: ${answer.error}`}`
+        + '. Created unsaved - drag, edit or delete them, then Save to write them.');
+
+    if (!proceed) {
+        return;
+    }
+
+    const created = [];
+    let previous = null;
+
+    for (const [x, y, z] of answer.hops) {
+        const id = nextId(x, y, state.facet.name, [...state.shapes, ...created]);
+
+        const waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
+            state.facet.name, { points: [[x, y, z]] }, {});
+
+        // buildShape flattens Z to 0 for a click; a walked road carries the real one, and the
+        // authored Z is what makes a raised or sunken hop reachable at all.
+        waypoint.points = [[x, y, z]];
+        created.push(waypoint);
+
+        if (previous) {
+            created.push(buildShape('edge', {}, state.facet.name,
+                { points: [previous.points[0], waypoint.points[0]] },
+                { ids: [previous.props.id, waypoint.props.id] }));
+        }
+
+        previous = waypoint;
+    }
+
+    for (const shape of created) {
+        createShape(shape);
+    }
+
+    setStatus(`Proposed ${count} waypoint(s) and ${count - 1} edge(s). Save to write them.`, 'ok');
 }
 
 /** The Site tool's one modal, taken early. See the comment in toolClick. */
