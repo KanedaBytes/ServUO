@@ -93,7 +93,7 @@ export const TOOLS = {
         label: 'Corridor',
         kind: 'point-chain',
         hint: 'Click where the road starts. Esc cancels.',
-        hint2: 'Click via points to steer it, then the end. Enter finishes.',
+        hint2: 'Click via points to steer it, then the end. Enter or Finish routes it, Esc cancels.',
         title: 'Corridor',
         fields: []
     },
@@ -113,9 +113,9 @@ export const TOOLS = {
         label: 'Work site',
         kind: 'site',
         autoId: true,
-        hint: 'Click the centre of the site. Esc cancels.',
-        hint2: 'Drag the zone the bots may work inside.',
-        hint3: 'Click each arrival tile. Enter finishes, Esc cancels.',
+        hint: 'Click where the centre of the site goes. Esc cancels.',
+        hint2: 'Drag out the zone the bots may work inside. Esc cancels.',
+        hint3: 'Asking the shard where a bot could stand...',
         title: 'New work site',
         fields: [
             { key: 'id', label: 'Id', required: true },

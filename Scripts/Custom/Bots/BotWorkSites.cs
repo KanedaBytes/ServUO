@@ -505,6 +505,140 @@ namespace Server.Custom
         /// <summary>Where the editor reads per-arrival reach from.</summary>
         public const string ReachPath = "Data/Live/site-reach.json";
 
+        /// <summary>How many candidate tiles a zone sweep offers back. See SweepZone.</summary>
+        public const int MaxCandidates = 24;
+
+        /// <summary>Above this many tiles a zone sweep is worth warning about; see SweepZone.</summary>
+        public const int SweepWarnTiles = 1600;
+
+        /// <summary>And above this it is refused outright.</summary>
+        public const int SweepMaxTiles = 4096;
+
+        /// <summary>
+        /// The best places to stand inside a proposed work zone.
+        ///
+        /// The Site tool used to have no proposal step at all: the author clicked tiles and the
+        /// shard answered with the reach under each one, which meant authoring a site was a
+        /// guessing game played one click at a time against a cliff face. Worse, the answer was
+        /// drawn without its canFit, so a tile up on unstandable rock with twenty ore around it
+        /// looked like the BEST tile on the map. This inverts it - the shard, which is the only
+        /// thing here holding the map, proposes and the author accepts.
+        ///
+        /// The sweep runs on the game thread inside the request poller, so it is bounded twice:
+        /// by area (a 40x40 zone is already 1600 ReachFrom calls, each a 5x5 tile sweep) and by
+        /// how many it hands back. Ranked by reach, then by distance to the zone centre - a
+        /// far-flung arrival is how brit-mine-north got an arrival 16 tiles from its nearest
+        /// waypoint against a 12-tile hop cap, and stranded every miner sent to it.
+        /// </summary>
+        public static List<Point3D> SweepZone(Map map, Rectangle2D zone, string type, out string problem)
+        {
+            problem = null;
+
+            var found = new List<Point3D>();
+
+            if (map == null || map == Map.Internal)
+            {
+                problem = "no map";
+                return found;
+            }
+
+            HarvestDefinition definition = DefinitionForType(type);
+
+            if (definition == null)
+            {
+                problem = String.Format("'{0}' is not a work site type; expected mine or lumber", type);
+                return found;
+            }
+
+            int area = zone.Width * zone.Height;
+
+            if (area <= 0)
+            {
+                problem = "the zone is empty";
+                return found;
+            }
+
+            if (area > SweepMaxTiles)
+            {
+                problem = String.Format(
+                    "the zone is {0}x{1} = {2} tiles; the sweep is capped at {3}",
+                    zone.Width, zone.Height, area, SweepMaxTiles);
+                return found;
+            }
+
+            int floor = MinReachFor(type);
+            double centreX = zone.X + (zone.Width / 2.0);
+            double centreY = zone.Y + (zone.Height / 2.0);
+
+            var scored = new List<SweptTile>();
+
+            for (int x = zone.X; x < zone.X + zone.Width; x++)
+            {
+                for (int y = zone.Y; y < zone.Y + zone.Height; y++)
+                {
+                    var at = new Point3D(x, y, map.GetAverageZ(x, y));
+
+                    if (!map.CanSpawnMobile(at.X, at.Y, at.Z))
+                    {
+                        continue;
+                    }
+
+                    int reach = ReachFrom(map, at, definition);
+
+                    if (reach < floor)
+                    {
+                        continue;
+                    }
+
+                    double dx = x - centreX;
+                    double dy = y - centreY;
+
+                    scored.Add(new SweptTile(at, reach, (dx * dx) + (dy * dy)));
+                }
+            }
+
+            scored.Sort(
+                delegate(SweptTile a, SweptTile b)
+                {
+                    int byReach = b.Reach.CompareTo(a.Reach);
+
+                    return byReach != 0 ? byReach : a.FromCentre.CompareTo(b.FromCentre);
+                });
+
+            for (int i = 0; i < scored.Count && i < MaxCandidates; i++)
+            {
+                found.Add(scored[i].At);
+            }
+
+            if (scored.Count == 0)
+            {
+                problem = String.Format(
+                    "no tile in this zone can be stood on with {0}+ harvestable tile(s) in reach", floor);
+            }
+            else if (area > SweepWarnTiles)
+            {
+                problem = String.Format(
+                    "the zone is {0}x{1} = {2} tiles, which is a lot to sweep; consider a tighter zone",
+                    zone.Width, zone.Height, area);
+            }
+
+            return found;
+        }
+
+        private struct SweptTile
+        {
+            public readonly Point3D At;
+            public readonly int Reach;
+            public readonly double FromCentre;
+
+            public SweptTile(Point3D at, int reach, double fromCentre)
+            {
+                At = at;
+                Reach = reach;
+                FromCentre = fromCentre;
+            }
+        }
+
         /// <summary>
         /// Write the reach of EVERY arrival at every work site, not just the best one.
         ///

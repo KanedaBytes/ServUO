@@ -149,8 +149,6 @@ button:disabled { opacity: .45; cursor: default; }
     color: var(--accent);
 }
 
-#hint { color: var(--accent); }
-
 /* --- modal --- */
 
 #modal {
@@ -411,3 +409,19 @@ button:disabled { opacity: .45; cursor: default; }
 #readout #coords { font-variant-numeric: tabular-nums; opacity: .7; }
 #readout #status.ok { color: #7bd88f; }
 #readout #status.error { color: #ff7a6b; }
+/* refreshReach has passed 'warn' since it was written, and it rendered in the default colour. */
+#readout #status.warn { color: #ffd479; }
+
+/* The active tool's instructions, over the top of the map rather than in the corner of it.
+   Centred and at the top because that is where a tool's own buttons are, and because the thing
+   it is describing is usually in the middle of the map where the author is already looking. */
+#tool-guide { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+              max-width: min(720px, calc(100% - 32px)); display: flex; flex-direction: column;
+              gap: 2px; padding: 8px 14px; border-radius: 6px; font-size: 13px;
+              background: rgba(20,22,28,.92); border: 1px solid #3a3f4b;
+              box-shadow: 0 2px 10px rgba(0,0,0,.5); pointer-events: none; text-align: center; }
+#tool-guide #tool-step { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+                         opacity: .6; }
+#tool-guide #tool-hint { color: var(--accent); }
+#tool-guide #tool-legend:empty { display: none; }
+#tool-guide #tool-legend { font-size: 12px; opacity: .7; }

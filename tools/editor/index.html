@@ -102,6 +102,7 @@
             <button data-act="whole-map" title="Fit the whole facet">Whole map</button>
             <button data-act="goto" title="Go to a coordinate">Go to&hellip;</button>
             <span class="sep"></span>
+            <button data-act="finish-tool" title="Finish the active tool (Enter)" disabled>Finish</button>
             <button data-act="delete" title="Delete the selection (Del)" disabled>Delete</button>
             <span class="sep"></span>
             <button id="save" data-act="save" title="Save (Ctrl+S)" disabled>Save</button>
@@ -121,9 +122,17 @@
 
         <ul id="context-menu" hidden></ul>
 
+        <!-- The active tool's instructions. Above the map, not in the readout strip in the
+             bottom-left corner, where three steps of guidance sat in 12px text and were missed
+             entirely by somebody looking at the circles in the middle of the map. -->
+        <div id="tool-guide" hidden>
+            <span id="tool-step"></span>
+            <span id="tool-hint"></span>
+            <span id="tool-legend"></span>
+        </div>
+
         <div id="readout">
             <span id="coords">-</span>
-            <span id="hint"></span>
             <span id="status"></span>
         </div>
     </main>

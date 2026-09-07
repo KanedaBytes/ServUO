@@ -427,6 +427,7 @@ namespace Server.Custom
 
                     string probeType = null;
                     var probe = new List<Point3D>();
+                    var zones = new List<Rectangle2D>();
 
                     for (int i = 0; i < parts.Length; i++)
                     {
@@ -438,9 +439,14 @@ namespace Server.Custom
                             continue;
                         }
 
-                        int comma = part.IndexOf(',');
+                        string[] numbers = part.Split(',');
 
-                        if (comma < 0)
+                        // A part is the type, a point, or a zone rect, told apart by how many
+                        // numbers it carries. The zone form exists because the editor cannot ask
+                        // about a whole zone as points: MaxTokenBytes is 4096 and a point costs
+                        // about ten bytes, so a 25x20 lumber zone would not fit in the token at
+                        // all. One rect asks the same question in nineteen.
+                        if (numbers.Length == 1)
                         {
                             probeType = part;
                             continue;
@@ -448,23 +454,63 @@ namespace Server.Custom
 
                         int x, y;
 
-                        if (Int32.TryParse(part.Substring(0, comma), out x)
-                            && Int32.TryParse(part.Substring(comma + 1), out y))
+                        if (numbers.Length == 2)
                         {
-                            probe.Add(new Point3D(x, y, 0));
+                            if (Int32.TryParse(numbers[0], out x) && Int32.TryParse(numbers[1], out y))
+                            {
+                                probe.Add(new Point3D(x, y, 0));
+                            }
+
+                            continue;
+                        }
+
+                        int width, height;
+
+                        if (numbers.Length == 4
+                            && Int32.TryParse(numbers[0], out x)
+                            && Int32.TryParse(numbers[1], out y)
+                            && Int32.TryParse(numbers[2], out width)
+                            && Int32.TryParse(numbers[3], out height))
+                        {
+                            zones.Add(new Rectangle2D(x, y, width, height));
                         }
                     }
 
-                    if (probe.Count > 0 && probeType == null)
+                    if ((probe.Count > 0 || zones.Count > 0) && probeType == null)
                     {
                         message = "site-reach needs a type before its points: 'mine 1451,1517'";
                         return false;
                     }
 
+                    var swept = 0;
+                    var sweepWarnings = new List<string>();
+
+                    for (int i = 0; i < zones.Count; i++)
+                    {
+                        string problem;
+                        List<Point3D> candidates = BotWorkSites.SweepZone(
+                            Map.Trammel, zones[i], probeType, out problem);
+
+                        probe.AddRange(candidates);
+                        swept += candidates.Count;
+
+                        if (problem != null)
+                        {
+                            sweepWarnings.Add(problem);
+                        }
+                    }
+
+                    if (sweepWarnings.Count > 0)
+                    {
+                        warnings = sweepWarnings;
+                    }
+
                     BotWorkSites.WriteReachSnapshot(Map.Trammel, probe, probeType);
 
-                    message = String.Format(
-                        "site reach written, {0} probe point(s)", probe.Count);
+                    message = zones.Count > 0
+                        ? String.Format(
+                            "site reach written, {0} candidate(s) from {1} zone(s)", swept, zones.Count)
+                        : String.Format("site reach written, {0} probe point(s)", probe.Count);
                     return true;
                 }
 

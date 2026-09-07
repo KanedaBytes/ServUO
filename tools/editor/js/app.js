@@ -30,6 +30,7 @@ import {
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
+import { auditLine, hasBlocked } from './audit.js';
 import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId } from './ids.js';
@@ -123,7 +124,9 @@ window.__editor = { state, view, coverage };
 
 async function boot() {
     Object.assign(dom, {
-        coords: $('coords'), hint: $('hint'), status: $('status'),
+        coords: $('coords'), status: $('status'),
+        toolGuide: $('tool-guide'), toolStep: $('tool-step'), toolHint: $('tool-hint'),
+        toolLegend: $('tool-legend'),
         properties: $('properties'), matches: $('matches'), filter: $('filter'),
         menu: $('context-menu'), toolbar: $('toolbar'),
         banner: $('banner'), bannerText: $('banner-text'),
@@ -445,6 +448,17 @@ function buildLayerList() {
     }));
 }
 
+/** Turn the work-site overlay on, and tick its row so the map and the panel agree. */
+function showWorksiteOverlay() {
+    state.worksitesVisible = true;
+
+    const row = dom.layers && dom.layers.querySelector('#layer-worksites');
+
+    if (row) {
+        row.checked = true;
+    }
+}
+
 function layerRow(key, label, color, checked, onChange) {
     const row = document.createElement('li');
 
@@ -578,6 +592,10 @@ function updateToolbar() {
             button.disabled = !has;
         } else if (act === 'delete') {
             button.disabled = !state.selected || !isWritable(state.selected);
+        } else if (act === 'finish-tool') {
+            // Enter has always finished a site and a road, and nothing on screen said so. A
+            // button is the affordance; the key stays the fast path.
+            button.disabled = !state.tool;
         }
     }
 
@@ -673,17 +691,42 @@ async function refreshReach(probeType, probePoints) {
         ? `${probeType} ${probePoints.map(([x, y]) => `${x},${y}`).join(' ')}`
         : '';
 
+    return sendReach(body);
+}
+
+/**
+ * Ask the shard for the best places to stand inside a zone.
+ *
+ * One rect, not a point list, because the token is capped at 4096 bytes and a 25x20 lumber zone
+ * would not fit as points. The shard sweeps it with the same ReachFrom the bot runs and hands
+ * back the best two dozen standable tiles, already ranked.
+ */
+async function sweepZone(probeType, [x, y, w, h]) {
+    return sendReach(`${probeType} ${x},${y},${w},${h}`);
+}
+
+/**
+ * Never computed here. The count comes from BotWorkSites.ReachFrom running the same sweep the bot
+ * runs, against real map data the browser does not have.
+ *
+ * Returns the ack so a caller can show what the shard warned about - an over-large zone, or a
+ * zone with nothing standable in it, which is the one case where an empty answer needs a reason.
+ */
+async function sendReach(body) {
     try {
         const dropped = await api.request('site-reach', body);
-        await api.awaitAck('site-reach', { nonce: dropped.nonce, timeoutMs: 15000 });
+        const ack = await api.awaitAck('site-reach', { nonce: dropped.nonce, timeoutMs: 30000 });
 
         worksites.setReach(await api.reach());
         updateCounts();
         requestRender();
+
+        return ack;
     } catch (error) {
         // A reach answer is an aid, never a gate. The shard being down must not stop anybody
         // placing a point - it only means the dots are not there to help while they do it.
         setStatus(`Could not measure reach: ${error.message}`, 'warn');
+        return null;
     }
 }
 
@@ -1523,6 +1566,7 @@ function startTool(key, placeAt = null) {
     }
 
     setHint(state.tool.phase === 1 ? tool.hint2 : tool.hint);
+    setToolStep();
     showProperties(null);
     updateToolbar();
 
@@ -1600,15 +1644,7 @@ function toolClick(worldX, worldY) {
         }
 
         if (tool.phase === 2) {
-            tool.arrivals.push([x, y]);
-            setHint(`${tool.arrivals.length} arrival(s). Click more, or press Enter to finish.`);
-
-            // Ask the shard what is actually under each tile as it lands. This is the whole
-            // reason the tool exists rather than three separate ones: an arrival is a guess until
-            // something with the map in front of it says how much is in reach.
-            refreshReach(state.tool.siteType || 'mine', tool.arrivals);
-
-            requestRender();
+            takeArrival(x, y);
             return true;
         }
 
@@ -1847,6 +1883,117 @@ async function askForSite(x, y) {
     state.draft.kind = 'rect';
 
     setHint(tool.hint2);
+    setToolStep();
+    requestRender();
+}
+
+/**
+ * Ask the shard where a bot could stand inside the zone just drawn, and take the best few.
+ *
+ * The tool used to arrive at this step with nothing on the map and nothing to say, and the
+ * author was left clicking at a cliff face to find out - one round trip per click - which tiles
+ * were any good. The shard holds the map; it should answer first and be corrected, rather than
+ * be asked the same question fifteen times.
+ */
+async function proposeArrivals() {
+    const tool = state.tool;
+    const type = tool.siteType || 'mine';
+
+    // The overlay these circles belong to is off by default, and the tool that exists to produce
+    // them never turned it on - so the shard answered, the editor drew, and the author saw an
+    // empty map.
+    showWorksiteOverlay();
+
+    setStatus('Asking the shard where a bot could stand...', 'ok');
+
+    const ack = await sweepZone(type, state.draft.rect);
+
+    if (!state.tool || state.tool !== tool) {
+        return;
+    }
+
+    tool.arrivals = worksites.bestCandidates();
+    worksites.setTaken(tool.arrivals);
+
+    const offered = worksites.candidates().length;
+
+    if (offered === 0) {
+        // The one case where an empty answer needs a reason. The shard says which floor it was
+        // holding the zone to, because the fix is usually to move the zone rather than the floor.
+        const why = (ack && ack.warnings && ack.warnings[0])
+            || `nothing in this zone can be stood on with enough ${type} in reach`;
+
+        setStatus(`No arrival tiles: ${why}`, 'error');
+    } else if (ack && ack.warnings && ack.warnings.length > 0) {
+        setStatus(ack.warnings[0], 'warn');
+    } else {
+        setStatus(`${offered} tile(s) offered, best ${tool.arrivals.length} taken.`, 'ok');
+    }
+
+    setToolStep();
+    requestRender();
+}
+
+/**
+ * A click in the arrival step: take a proposed tile, drop one already taken, or test a new one.
+ *
+ * Clicking the same tile twice used to append a second arrival at the same coordinates, and the
+ * writer committed both - so the way to fix a misplaced arrival was to throw the whole site away
+ * with Esc and start again.
+ */
+async function takeArrival(x, y) {
+    const tool = state.tool;
+    const key = worksites.tileKey(x, y);
+    const already = tool.arrivals.findIndex(([ax, ay]) => worksites.tileKey(ax, ay) === key);
+
+    if (already >= 0) {
+        tool.arrivals.splice(already, 1);
+        worksites.setTaken(tool.arrivals);
+        setToolStep();
+        requestRender();
+        return;
+    }
+
+    const offered = worksites.candidateAt(x, y);
+
+    if (offered) {
+        tool.arrivals.push([x, y]);
+        worksites.setTaken(tool.arrivals);
+        setToolStep();
+        requestRender();
+        return;
+    }
+
+    // A tile the sweep did not offer. It is still measured rather than refused - the sweep hands
+    // back the best two dozen, not every acceptable tile, and the author may want one it capped
+    // out. But it has to pass the same test, and if it does not, say which test it failed:
+    // silently ignoring the click reads as a broken tool.
+    setStatus(`Measuring ${x},${y}...`, 'ok');
+
+    await refreshReach(tool.siteType || 'mine', [...tool.arrivals, [x, y]]);
+
+    if (!state.tool || state.tool !== tool) {
+        return;
+    }
+
+    const measured = worksites.candidateAt(x, y);
+
+    if (!measured) {
+        setStatus(`${x},${y} was not measured; is the shard up?`, 'warn');
+        return;
+    }
+
+    if (measured.canFit === false) {
+        setStatus(`${x},${y} cannot be stood on.`, 'error');
+    } else if (measured.reach < measured.min) {
+        setStatus(`${x},${y} reaches ${measured.reach}, needs ${measured.min}.`, 'error');
+    } else {
+        tool.arrivals.push([x, y]);
+        setStatus(`${x},${y} taken, reach ${measured.reach}.`, 'ok');
+    }
+
+    worksites.setTaken(tool.arrivals);
+    setToolStep();
     requestRender();
 }
 
@@ -2159,7 +2306,9 @@ function wireInput() {
                 state.tool.phase = 2;
                 state.draft.kind = 'points';
                 setHint(state.tool.hint3);
+                setToolStep();
                 requestRender();
+                proposeArrivals();
                 return;
             }
 
@@ -2373,6 +2522,7 @@ function wireInput() {
             'zoom-out': () => view.zoomAt(midX, midY, 1 / 1.4),
             'whole-map': () => view.fitAll(),
             goto: gotoCoordinate,
+            'finish-tool': finishTool,
             delete: deleteSelected,
             save,
             discard
@@ -2762,16 +2912,21 @@ function wireAudit() {
             state.audit = await api.audit();
             setAuditFlags(state.audit.problems);
 
-            setStatus(ack.message, state.audit.problems.length > 0 ? 'error' : 'ok');
+            // Occupied findings are a pass. NavAudit.TryRun returns `blocked == 0`, so an audit
+            // that found nothing but mobiles standing on edges has not failed, and must not paint
+            // the status bar red - the shard's own contract says occupancy is a warning.
+            const blocked = hasBlocked(state.audit.problems);
+
+            setStatus(ack.message, blocked ? 'error' : 'ok');
 
             if (state.audit.problems.length > 0) {
                 showBanner(
                     `${ack.message}\n\n`
-                    + state.audit.problems.slice(0, 12)
-                        .map((p) => `• ${p.blocked ? 'BLOCKED' : 'over cap'} ${p.from} -> ${p.to}`
-                            + ` (${p.distance} tiles)`)
-                        .join('\n')
-                    + '\n\nA waypoint at a closed door is a false positive. Verify before editing.',
+                    + state.audit.problems.slice(0, 12).map(auditLine).join('\n')
+                    + (blocked
+                        ? '\n\nA waypoint at a closed door is a false positive.'
+                            + ' Verify before editing.'
+                        : ''),
                     'warn');
             } else {
                 hideBanner();
@@ -2904,10 +3059,61 @@ function setStatus(message, kind) {
     }, 8000);
 }
 
+/**
+ * The active tool's instruction, in the panel above the map.
+ *
+ * The text was always written - `tool.hint`, `hint2`, `hint3` have said "Enter finishes" since
+ * the tools were built. It went to a 12px span in the bottom-left corner of the canvas, and an
+ * author looking at fifteen circles in the middle of the map never saw a word of it. Same
+ * strings, somewhere they land.
+ */
 function setHint(message) {
-    if (dom.hint) {
-        dom.hint.textContent = message || '';
+    if (!dom.toolGuide) {
+        return;
     }
+
+    if (!message) {
+        dom.toolGuide.hidden = true;
+        dom.toolHint.textContent = '';
+        dom.toolStep.textContent = '';
+        dom.toolLegend.textContent = '';
+        return;
+    }
+
+    dom.toolGuide.hidden = false;
+    dom.toolHint.textContent = message;
+}
+
+/**
+ * Where the active tool is, and what the circles on the map mean.
+ *
+ * Split from setHint because the step number and the legend change on their own - taking an
+ * arrival changes the count without changing the instruction.
+ */
+function setToolStep() {
+    const tool = state.tool;
+
+    if (!tool || !dom.toolGuide) {
+        return;
+    }
+
+    const steps = tool.kind === 'site' ? 3 : 0;
+
+    dom.toolGuide.hidden = false;
+    dom.toolStep.textContent = steps > 0 ? `Step ${tool.phase + 1} of ${steps}` : '';
+
+    if (tool.kind === 'site' && tool.phase === 2) {
+        const offered = worksites.candidates().length;
+
+        dom.toolHint.textContent = `${tool.arrivals.length} of ${offered} tile(s) taken.`
+            + ' Click a circle to take or drop it, or click bare ground to test a tile.'
+            + ' Enter finishes, then Save.';
+        dom.toolLegend.textContent = 'The number on a circle is how many harvestable tiles are'
+            + ' in reach from it. Filled means taken.';
+        return;
+    }
+
+    dom.toolLegend.textContent = '';
 }
 
 boot();
