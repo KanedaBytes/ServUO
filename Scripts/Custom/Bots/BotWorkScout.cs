@@ -4,45 +4,33 @@
 // See LICENSE-BOTS at the repository root.
 // -----------------------------------------------------------------------------
 //
-// BotWorkScout.cs — authoring tool: find work sites and the roads to them, from
-// inside the engine.
+// BotWorkScout.cs — authoring tool: build the road to a hand-picked work site.
 //
-// WHY THIS EXISTS, and it is worth being blunt about it.
+// TWO GENERATIONS OF THIS FILE HAVE BEEN WRONG, in instructive ways.
 //
-// The first cut of session 7e's navigation data was derived offline, by reading
-// the client's own map1LegacyMUL.uop, statics1.mul and tiledata.mul in a script.
-// It looked right. Every arrival point sat within two tiles of what the script
-// believed was a mineable land tile, and every corridor hop was walkable
-// according to a breadth-first search over the land and item Impassable flags.
+// The first derived everything offline from the client's MUL and UOP files. It
+// read a flat z -5 along a corridor the engine resolves at 30, 50 and -15, and
+// [NavAudit rejected fourteen of its edges.
 //
-// It was wrong. [NavAudit came back with fourteen blocked edges and reported the
-// resolved Z of the corridor as 30, 50, -15 and 11 where the script had read a
-// flat -5 for all of them, and BotWorkSites excluded both mine faces because the
-// engine could not find a harvestable tile at any arrival point. The UOP chunk
-// table is hash-keyed and the script's ordering assumption did not survive
-// contact with it - close enough to look plausible on a handful of spot checks,
-// far enough out to be useless.
+// The second asked the engine, which fixed the geometry and hid a worse fault:
+// it also let the engine CHOOSE the sites, by sweeping for anything
+// HarvestDefinition.Validate accepted. That is a far weaker test than it sounds.
+// Stock ServUO's m_MountainAndCaveTiles contains land ids - 236-247 among them -
+// that this client's tiledata names 'forest', so the sweep found scattered
+// transition tiles in the fields west of Castle Britannia and called them a
+// mine. Every arrival passed Validate; every arrival had one to four harvestable
+// tiles in reach; the corridor crossed the castle moat; and the work probe
+// passed anyway, because the miner was hauling the ore EquipmentTable spawns it
+// with. Real rock is land 556-559, named 'rock', in cells that saturate at
+// 100/100.
 //
-// So the data comes from the engine now. Everything below asks exactly the
-// questions the runtime asks, with the runtime's own methods:
+// So this generation chooses nothing. THE SITES AND THEIR ARRIVAL POINTS ARE
+// HAND-PICKED AND VERIFIED IN-GAME, listed below as coordinates. The tool's job
+// is now only the part a human should not do by hand: find a walkable road from
+// each site back to the existing graph, and prove every hop with the same
+// MovementPath test [NavAudit uses.
 //
-//   harvestable?   HarvestDefinition.Validate, over map.Tiles, through
-//                  BotHarvest.FindTarget's own scan - the same call the bot
-//                  makes when it swings.
-//   standable?     map.CanFit, at NavWalker.ResolveZ - the same Z the walker
-//                  aims a hop at.
-//   walkable hop?  MovementPath both ways, which is verbatim what
-//                  NavAudit.CanWalk does. If the scout emits it, the audit
-//                  passes it, because it is the same test.
-//
-// It writes Data/Live/work-scout.json for a human to merge into
-// Data/Custom/navigation.json. It deliberately does NOT edit navigation.json:
-// that file is authored, carries comments and ordering somebody chose, and a
-// generator that rewrites it would quietly become the author.
-//
-// Run it with Custom.BotWorkScoutOnStart=True, or [BotWorkScout in-game.
-// ServUO's console cannot invoke staff commands, which is why the flag exists -
-// the same reason Custom.NavAuditOnStart does.
+// Use [BotSiteAudit and [BotSitePick to choose a site; use this to connect it.
 
 using System;
 using System.Collections.Generic;
@@ -59,22 +47,13 @@ namespace Server.Custom
 
         public const string SnapshotPath = "Data/Live/work-scout.json";
 
-        /// <summary>The authored hop cap. A sampled leg never exceeds it.</summary>
         private static int HopCap
         {
             get { return NavigationSystem.HopMaxTiles; }
         }
 
-        /// <summary>How far around a seed to sweep for harvestable tiles.</summary>
-        private const int SeedRadius = 30;
-
-        /// <summary>Keep arrival points this far apart, so four bots are not on one tile.</summary>
-        private const int ArrivalSpacing = 5;
-
-        private const int ArrivalsPerSite = 4;
-
-        /// <summary>Tiles the corridor search may wander from the straight line before giving up.</summary>
-        private const int CorridorMargin = 90;
+        /// <summary>Tiles the corridor flood may wander from the straight line before giving up.</summary>
+        private const int CorridorMargin = 260;
 
         public static void Initialize()
         {
@@ -87,72 +66,87 @@ namespace Server.Custom
         }
 
         [Usage("BotWorkScout")]
-        [Description("Sweeps for mine and lumber sites near Britain and the roads to them, and writes Data/Live/work-scout.json.")]
+        [Description("Builds and verifies the road from each authored work site back to the town graph; writes Data/Live/work-scout.json.")]
         private static void OnCommand(CommandEventArgs e)
         {
             Run(e.Mobile);
         }
 
-        private sealed class Seed
+        private sealed class Site
         {
             public string Id;
             public string Name;
             public string Type;
             public string Tag;
-            public Point3D At;
-            public BotClass Worker;
             public string Prefix;
+            public BotClass Worker;
+            public Point3D[] Arrivals;
         }
 
-        // The seeds are approximate centres, not authored answers: the scout sweeps SeedRadius
-        // around each and reports what is actually there. They came from the offline pass, which
-        // was reliable about WHERE the rock and the trees are (a 700x800 sweep found the same two
-        // ranges the engine does) and unreliable about the exact tiles and their heights.
-        private static readonly Seed[] Seeds =
+        // HAND-PICKED, verified with [BotSitePick against the shard's own TileMatrix, and confirmed
+        // in-game. The reach figure beside each is how many harvestable tiles sit inside the 5x5
+        // box BotHarvest.FindTarget sweeps from that tile - the number the previous generation of
+        // this file never looked at, and the one Nav.Data now guards.
+        private static readonly Site[] Sites =
         {
-            new Seed
+            new Site
             {
-                Id = "brit-mine-north", Name = "Britain West Mine, north face",
-                Type = "mine", Tag = "mine-north",
-                At = new Point3D(1281, 1594, 0), Worker = BotClass.Miner, Prefix = "brit-minenorth",
+                Id = "brit-mine-north", Name = "The Northern Outcrop",
+                Type = "mine", Tag = "mine-north", Prefix = "brit-minenorth",
+                Worker = BotClass.Miner,
+                Arrivals = new[]
+                {
+                    new Point3D(1451, 1517, 43),  // reach 14
+                    new Point3D(1452, 1529, 35),  // reach 12
+                    new Point3D(1448, 1522, 45),  // reach 12
+                    new Point3D(1450, 1512, 40),  // reach 12
+                    new Point3D(1447, 1527, 32),  // reach 11
+                },
             },
-            new Seed
+            new Site
             {
-                Id = "brit-mine-south", Name = "Britain West Mine, south face",
-                Type = "mine", Tag = "mine-south",
-                At = new Point3D(1281, 1655, 0), Worker = BotClass.Miner, Prefix = "brit-minesouth",
+                Id = "brit-mine-west", Name = "The West Cliff",
+                Type = "mine", Tag = "mine-west", Prefix = "brit-minewest",
+                Worker = BotClass.Miner,
+                Arrivals = new[]
+                {
+                    new Point3D(1192, 1750, 2),   // reach 15
+                    new Point3D(1196, 1756, 4),   // reach 13
+                    new Point3D(1197, 1763, 2),   // reach 13
+                    new Point3D(1197, 1774, 2),   // reach 13
+                },
             },
-            new Seed
+            new Site
             {
-                Id = "brit-lumber-nw", Name = "The North-west Wood",
-                Type = "lumber", Tag = "lumber-nw",
-                At = new Point3D(1319, 1542, 0), Worker = BotClass.Lumberjack, Prefix = "brit-woodpath",
+                Id = "brit-lumber-south", Name = "The Southern Wood",
+                Type = "lumber", Tag = "lumber-south", Prefix = "brit-woodpath",
+                Worker = BotClass.Lumberjack,
+                Arrivals = new[]
+                {
+                    new Point3D(1422, 1835, 0),   // reach 4
+                    new Point3D(1414, 1844, 0),   // reach 4
+                    new Point3D(1406, 1831, 0),   // reach 4
+                    new Point3D(1402, 1852, 0),   // reach 4
+                },
             },
         };
 
         public static void Run(Mobile from)
         {
             Map map = Map.Trammel;
-            NavWaypoint start = Nav.Waypoint("brit-gate-w");
-
-            if (start == null)
-            {
-                Emit(from, "No 'brit-gate-w' waypoint; nothing to scout from.", true);
-                return;
-            }
 
             var report = new List<string>();
-            var json = new StringBuilder(4096);
+            var json = new StringBuilder(8192);
 
             json.Append("{\n");
             json.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
             json.Append("  \"sites\": [\n");
 
-            for (int i = 0; i < Seeds.Length; i++)
+            for (int i = 0; i < Sites.Length; i++)
             {
-                ScoutSite(map, start, Seeds[i], report, json);
+                ScoutSite(map, Sites[i], report, json);
 
-                if (i < Seeds.Length - 1)
+                if (i < Sites.Length - 1)
                 {
                     json.Append(",\n");
                 }
@@ -167,223 +161,206 @@ namespace Server.Custom
                 Log.Error("Could not write {0}: {1}", SnapshotPath, error);
             }
 
-            Emit(from, "[BotWorkScout] wrote " + SnapshotPath, false);
+            Emit(from, "[BotWorkScout] wrote " + SnapshotPath);
 
             foreach (string line in report)
             {
-                Emit(from, "  " + line, false);
+                Emit(from, "  " + line);
             }
         }
 
-        private static void ScoutSite(Map map, NavWaypoint start, Seed seed, List<string> report, StringBuilder json)
+        private static void ScoutSite(Map map, Site site, List<string> report, StringBuilder json)
         {
-            HarvestDefinition definition = BotHarvest.DefinitionFor(seed.Worker);
+            HarvestDefinition definition = BotHarvest.DefinitionFor(site.Worker);
 
-            List<Point3D> harvestable = Harvestable(map, seed.At, definition);
+            // 1. The road in, from an arrival back to whatever already exists.
+            //
+            // Every arrival is tried, not just the first: a face can have one corner walled off by
+            // a cliff or a river while the rest of it is perfectly reachable, and giving up on the
+            // site because arrival[0] happened to be that corner would be throwing away the site
+            // for the sake of the order the list is written in.
+            string attach = null;
+            List<Point3D> legs = null;
 
-            if (harvestable.Count == 0)
+            foreach (Point3D entry in site.Arrivals)
             {
-                report.Add(String.Format("{0}: NOTHING HARVESTABLE within {1} tiles of {2}",
-                    seed.Id, SeedRadius, seed.At));
+                legs = Corridor(map, Surface(map, entry), report, site.Id, out attach);
 
-                json.Append("    {\"id\":").Append(Json.Quote(seed.Id)).Append(",\"harvestable\":0}");
-
-                return;
-            }
-
-            List<Point3D> arrivals = Arrivals(map, harvestable, definition, start.Location);
-
-            if (arrivals.Count == 0)
-            {
-                report.Add(String.Format("{0}: {1} harvestable tile(s) but nowhere to stand",
-                    seed.Id, harvestable.Count));
-
-                json.Append("    {\"id\":").Append(Json.Quote(seed.Id))
-                    .Append(",\"harvestable\":").Append(harvestable.Count).Append(",\"arrivals\":0}");
-
-                return;
-            }
-
-            // Route to the arrival point nearest the town, then keep the rest as arrivals.
-            string attach;
-            List<Point3D> legs =
-                Corridor(map, Surface(map, start.Location), arrivals[0], report, seed.Id, out attach);
-
-            // The approach is the site end of the corridor, which is where a bot plugs back into
-            // the graph - so it is what the face has to stay in reach of.
-            Point3D approach = legs != null && legs.Count > 0 ? legs[0] : arrivals[0];
-
-            Rectangle2D face = Face(arrivals, harvestable, approach);
-
-            report.Add(String.Format(
-                "{0}: {1} harvestable, {2} arrival(s), corridor {3} waypoint(s) attaching at '{4}', face {5}x{6} at {7},{8}",
-                seed.Id, harvestable.Count, arrivals.Count,
-                legs == null ? 0 : legs.Count,
-                attach == null ? "NOTHING" : attach,
-                face.Width, face.Height, face.X, face.Y));
-
-            WriteSite(json, seed, arrivals, legs, face, harvestable.Count, attach);
-        }
-
-        /// <summary>Every tile near the seed that the harvest definition would accept.</summary>
-        private static List<Point3D> Harvestable(Map map, Point3D at, HarvestDefinition definition)
-        {
-            var found = new List<Point3D>();
-
-            if (definition == null)
-            {
-                return found;
-            }
-
-            for (int x = at.X - SeedRadius; x <= at.X + SeedRadius; x++)
-            {
-                for (int y = at.Y - SeedRadius; y <= at.Y + SeedRadius; y++)
-                {
-                    StaticTile[] tiles = map.Tiles.GetStaticTiles(x, y, false);
-                    bool hit = false;
-
-                    for (int i = 0; i < tiles.Length && !hit; i++)
-                    {
-                        if (definition.Validate((tiles[i].ID & 0x3FFF) | 0x4000))
-                        {
-                            found.Add(new Point3D(x, y, tiles[i].Z));
-                            hit = true;
-                        }
-                    }
-
-                    if (hit)
-                    {
-                        continue;
-                    }
-
-                    LandTile land = map.Tiles.GetLandTile(x, y);
-
-                    if (definition.Validate(land.ID))
-                    {
-                        found.Add(new Point3D(x, y, land.Z));
-                    }
-                }
-            }
-
-            return found;
-        }
-
-        /// <summary>
-        /// Standable tiles within harvest range of something harvestable, spread out and sorted
-        /// so the one nearest town comes first — that is the one the corridor aims at.
-        /// </summary>
-        private static List<Point3D> Arrivals(
-            Map map, List<Point3D> harvestable, HarvestDefinition definition, Point3D town)
-        {
-            var seen = new HashSet<int>();
-            var candidates = new List<Point3D>();
-            int range = definition.MaxRange;
-
-            foreach (Point3D tile in harvestable)
-            {
-                for (int dx = -range; dx <= range; dx++)
-                {
-                    for (int dy = -range; dy <= range; dy++)
-                    {
-                        int x = tile.X + dx;
-                        int y = tile.Y + dy;
-                        int key = (x << 16) | (y & 0xFFFF);
-
-                        if (!seen.Add(key))
-                        {
-                            continue;
-                        }
-
-                        int z = NavWalker.ResolveZ(map, new Point3D(x, y, tile.Z));
-
-                        // The same fit the walker needs to stand there: a 16-high humanoid, no
-                        // mobile check (nothing is standing in the wilderness at boot).
-                        if (!map.CanFit(x, y, z, 16, false, false, true))
-                        {
-                            continue;
-                        }
-
-                        candidates.Add(new Point3D(x, y, z));
-                    }
-                }
-            }
-
-            candidates.Sort((a, b) => NavGraph.Chebyshev(a, town).CompareTo(NavGraph.Chebyshev(b, town)));
-
-            var picked = new List<Point3D>();
-
-            foreach (Point3D candidate in candidates)
-            {
-                bool clear = true;
-
-                foreach (Point3D held in picked)
-                {
-                    if (NavGraph.Chebyshev(candidate, held) < ArrivalSpacing)
-                    {
-                        clear = false;
-                        break;
-                    }
-                }
-
-                if (!clear)
-                {
-                    continue;
-                }
-
-                picked.Add(candidate);
-
-                if (picked.Count == ArrivalsPerSite)
+                if (legs != null && attach != null)
                 {
                     break;
                 }
             }
 
-            return picked;
+            if (legs == null || attach == null)
+            {
+                report.Add(site.Id + ": NO CORRIDOR - not written");
+                json.Append("    {\"id\":").Append(Json.Quote(site.Id)).Append(",\"corridor\":false}");
+                return;
+            }
+
+            // 2. A waypoint at every arrival that is not already in reach of one.
+            //
+            // Nav.TryRouteFrom refuses to route from anywhere with no waypoint inside the hop cap,
+            // and a bot works by shuffling around the whole face - so every arrival needs one in
+            // reach or the bot that wanders to it can never leave. A face wider than the hop cap
+            // therefore needs several, which is why this is a loop and not a single approach point.
+            var anchors = new List<Point3D>(legs);
+
+            if (anchors.Count == 0)
+            {
+                anchors.Add(Surface(map, site.Arrivals[0]));
+            }
+
+            var kept = new List<Point3D>();
+            var faceLegs = new List<Point3D>();
+
+            foreach (Point3D arrival in site.Arrivals)
+            {
+                Point3D at = Surface(map, arrival);
+
+                if (Nearest(anchors, at) <= HopCap - 1)
+                {
+                    kept.Add(at);
+                    continue;
+                }
+
+                Point3D host = Closest(anchors, at);
+
+                if (NavGraph.Chebyshev(host, at) > HopCap || !CanWalk(map, host, at))
+                {
+                    report.Add(String.Format(
+                        "{0}: arrival {1} DROPPED - no walkable hop from the face chain", site.Id, at));
+                    continue;
+                }
+
+                anchors.Add(at);
+                faceLegs.Add(at);
+                kept.Add(at);
+            }
+
+            if (kept.Count == 0)
+            {
+                report.Add(site.Id + ": every arrival unreachable - not written");
+                json.Append("    {\"id\":").Append(Json.Quote(site.Id)).Append(",\"corridor\":false}");
+                return;
+            }
+
+            Rectangle2D face = Face(kept, anchors, definition);
+
+            int reach = 0;
+
+            foreach (Point3D arrival in kept)
+            {
+                reach = Math.Max(reach, BotWorkSites.ReachFrom(map, arrival, definition));
+            }
+
+            report.Add(String.Format(
+                "{0}: corridor {1} + {2} face waypoint(s) attaching at '{3}', {4}/{5} arrival(s) kept, "
+                + "best reach {6}, face {7}x{8} at {9},{10}",
+                site.Id, legs.Count, faceLegs.Count, attach, kept.Count, site.Arrivals.Length,
+                reach, face.Width, face.Height, face.X, face.Y));
+
+            WriteSite(json, site, kept, legs, faceLegs, face, attach, reach);
+        }
+
+        private static int Nearest(List<Point3D> points, Point3D to)
+        {
+            int best = Int32.MaxValue;
+
+            foreach (Point3D p in points)
+            {
+                best = Math.Min(best, NavGraph.Chebyshev(p, to));
+            }
+
+            return best;
+        }
+
+        private static Point3D Closest(List<Point3D> points, Point3D to)
+        {
+            Point3D best = points[0];
+            int bestDistance = Int32.MaxValue;
+
+            foreach (Point3D p in points)
+            {
+                int d = NavGraph.Chebyshev(p, to);
+
+                if (d < bestDistance)
+                {
+                    bestDistance = d;
+                    best = p;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>
-        /// A chain of hops from the site back toward town, every one of which MovementPath can
-        /// walk both ways — which is exactly NavAudit's test, so anything emitted here passes it.
+        /// Hops from the site back toward town, every one walkable both ways, stopping the moment
+        /// the existing graph is in reach.
         ///
-        /// SAMPLED FROM THE SITE INWARD, and stopping the moment it can reach the graph that
-        /// already exists. Sampling the other way round is the obvious thing to do and it is
-        /// wrong: it re-walks Britain from the gate and lays a parallel set of waypoints down
-        /// streets that already have them. Growing inward instead means the corridor is only ever
-        /// the part that is genuinely new, and it attaches to whichever town waypoint is really
-        /// closest to the site rather than to whichever one somebody chose as a starting point.
-        ///
-        /// The search underneath is a breadth-first flood over tiles the engine says a mobile can
-        /// stand on, bounded to a corridor around the straight line so it cannot wander off across
-        /// the facet, and refusing any step that climbs more than the engine's own step height.
+        /// Sampled from the SITE INWARD on purpose: the other way round re-walks Britain and lays
+        /// a second set of waypoints down streets that already have them.
         /// </summary>
         private static List<Point3D> Corridor(
-            Map map, Point3D from, Point3D to, List<string> report, string siteId, out string attach)
+            Map map, Point3D from, List<string> report, string siteId, out string attach)
         {
             attach = null;
 
-            List<Point3D> path = Flood(map, from, to);
+            NavWaypoint seed = NearestReachable(map, from);
 
-            if (path == null)
+            if (seed != null)
             {
-                report.Add(siteId + ": NO WALKABLE CORRIDOR from the town");
+                // Already touching the graph: the site needs no corridor at all.
+                attach = seed.Id;
+                return new List<Point3D>();
+            }
+
+            // Aim at SEVERAL candidate waypoints and keep the shortest road.
+            //
+            // Aiming only at the Chebyshev-nearest is the obvious thing and it is wrong: the
+            // closest waypoint as the crow flies can be behind a mountain or a town wall, and the
+            // flood then swings hundreds of tiles around the obstacle to reach that ONE tile when
+            // a slightly-further waypoint was directly approachable. That is how the wood a
+            // hundred tiles south of Britain first came back with a thirty-six hop corridor
+            // entering from the north.
+            List<NavWaypoint> targets = NearestSeveral(map, from, 8);
+
+            if (targets.Count == 0)
+            {
+                report.Add(siteId + ": no waypoints on this facet at all");
                 return null;
             }
 
-            path.Reverse();
+            List<Point3D> path = null;
+            string via = null;
 
-            // The site end is itself a waypoint. Without it the nearest waypoint to a bot
-            // working the face is the first hop UP the corridor, and a face deeper than the hop
-            // cap then contains tiles from which Nav.TryRouteFrom cannot route at all - the bot
-            // finishes its shift, asks for a way home every tick, and is told there is no
-            // waypoint within twelve tiles. That is exactly how the first work probe failed.
-            var legs = new List<Point3D> { path[0] };
+            foreach (NavWaypoint candidate in targets)
+            {
+                List<Point3D> attempt = Flood(map, from, Surface(map, candidate.Location));
+
+                if (attempt != null && (path == null || attempt.Count < path.Count))
+                {
+                    path = attempt;
+                    via = candidate.Id;
+                }
+            }
+
+            if (path == null)
+            {
+                report.Add(siteId + ": NO WALKABLE ROUTE toward any of the "
+                    + targets.Count + " nearest waypoints");
+                return null;
+            }
+
+            Log.Debug("{0}: shortest road is {1} tiles, aiming at '{2}'", siteId, path.Count, via);
+
+            var legs = new List<Point3D>();
             Point3D anchor = path[0];
             int i = 0;
 
             while (i < path.Count - 1)
             {
-                // Can this leg reach the existing graph? If so the corridor is finished, and
-                // everything between here and town already exists.
                 NavWaypoint join = NearestReachable(map, anchor);
 
                 if (join != null)
@@ -396,12 +373,7 @@ namespace Server.Custom
 
                 for (int j = Math.Min(i + HopCap, path.Count - 1); j > i; j--)
                 {
-                    if (NavGraph.Chebyshev(anchor, path[j]) > HopCap)
-                    {
-                        continue;
-                    }
-
-                    if (!CanWalk(map, anchor, path[j]))
+                    if (NavGraph.Chebyshev(anchor, path[j]) > HopCap || !CanWalk(map, anchor, path[j]))
                     {
                         continue;
                     }
@@ -413,7 +385,7 @@ namespace Server.Custom
                 if (best < 0)
                 {
                     report.Add(String.Format(
-                        "{0}: corridor stalled at {1} - no reachable hop within {2} tiles",
+                        "{0}: corridor stalled at {1} - no reachable hop within {2}",
                         siteId, anchor, HopCap));
 
                     return legs;
@@ -427,36 +399,19 @@ namespace Server.Custom
             if (attach == null)
             {
                 NavWaypoint join = NearestReachable(map, anchor);
-
                 attach = join == null ? null : join.Id;
-            }
-
-            if (attach == null)
-            {
-                report.Add(siteId + ": corridor never reached the existing graph");
             }
 
             return legs;
         }
 
-        /// <summary>
-        /// An already-authored waypoint this point can hop to, or null.
-        ///
-        /// Nearest first, so a corridor attaches to the closest piece of road rather than to
-        /// whichever one the store happens to list first.
-        /// </summary>
         private static NavWaypoint NearestReachable(Map map, Point3D from)
         {
             var candidates = new List<NavWaypoint>();
 
             foreach (NavWaypoint waypoint in NavigationSystem.Store.Waypoints)
             {
-                if (waypoint.Map != map)
-                {
-                    continue;
-                }
-
-                if (NavGraph.Chebyshev(waypoint.Location, from) <= HopCap)
+                if (waypoint.Map == map && NavGraph.Chebyshev(waypoint.Location, from) <= HopCap)
                 {
                     candidates.Add(waypoint);
                 }
@@ -476,16 +431,34 @@ namespace Server.Custom
             return null;
         }
 
+        private static List<NavWaypoint> NearestSeveral(Map map, Point3D from, int count)
+        {
+            var all = new List<NavWaypoint>();
+
+            foreach (NavWaypoint waypoint in NavigationSystem.Store.Waypoints)
+            {
+                if (waypoint.Map == map)
+                {
+                    all.Add(waypoint);
+                }
+            }
+
+            all.Sort((a, b) =>
+                NavGraph.Chebyshev(a.Location, from).CompareTo(NavGraph.Chebyshev(b.Location, from)));
+
+            if (all.Count > count)
+            {
+                all.RemoveRange(count, all.Count - count);
+            }
+
+            return all;
+        }
+
         private static List<Point3D> Flood(Map map, Point3D from, Point3D to)
         {
             var queue = new Queue<Point3D>();
             var came = new Dictionary<int, Point3D>();
             var seen = new HashSet<int>();
-
-            int Key(Point3D p)
-            {
-                return (p.X << 16) | (p.Y & 0xFFFF);
-            }
 
             queue.Enqueue(from);
             seen.Add(Key(from));
@@ -519,9 +492,7 @@ namespace Server.Custom
                             continue;
                         }
 
-                        int key = (x << 16) | (y & 0xFFFF);
-
-                        if (!seen.Add(key))
+                        if (!seen.Add((x << 16) | (y & 0xFFFF)))
                         {
                             continue;
                         }
@@ -533,9 +504,9 @@ namespace Server.Custom
                             continue;
                         }
 
-                        // Refuse a step the engine itself would refuse: a climb of more than the
-                        // step height is a cliff, and a flood that ignores it produces a corridor
-                        // that reads walkable tile by tile and is not.
+                        // A climb steeper than the engine's own step height is a cliff. Refusing it
+                        // here is what makes the tool find a switchback up a real slope rather than
+                        // drawing a straight line through one.
                         if (Math.Abs(z - current.Z) > 11)
                         {
                             continue;
@@ -543,7 +514,7 @@ namespace Server.Custom
 
                         var next = new Point3D(x, y, z);
 
-                        came[key] = current;
+                        came[(x << 16) | (y & 0xFFFF)] = current;
 
                         if (x == to.X && y == to.Y)
                         {
@@ -585,129 +556,95 @@ namespace Server.Custom
             return path;
         }
 
+        private static int Key(Point3D p)
+        {
+            return (p.X << 16) | (p.Y & 0xFFFF);
+        }
+
         /// <summary>
-        /// The zone rectangle: the arrivals plus everything harvestable beside them, CLAMPED to
-        /// what the approach waypoint can route from.
+        /// The workable rectangle: the ground beside the arrivals, clamped to what the site's own
+        /// waypoints can route from.
         ///
-        /// The clamp is the load-bearing half. A bot works by shuffling around inside this
-        /// rectangle, and Nav.TryRouteFrom refuses to route from anywhere with no waypoint within
-        /// NavigationSystem.HopMaxTiles (Nav.cs:213). So a face that extends further than the hop
-        /// cap from its approach contains tiles a bot can walk to, mine happily, and then never
-        /// leave - it finishes its shift and asks for a route home every tick, for ever.
-        ///
-        /// Losing a few tiles of rock at the edge is the right trade: they are unreachable by
-        /// definition, and a smaller face that a bot can always walk out of beats a larger one
-        /// with a trap around the rim.
+        /// The clamp is load-bearing. A bot works by shuffling inside this rectangle, and a tile
+        /// further than the hop cap from every waypoint is one it can walk to, mine happily, and
+        /// then never leave.
         /// </summary>
-        private static Rectangle2D Face(List<Point3D> arrivals, List<Point3D> harvestable, Point3D approach)
+        private static Rectangle2D Face(
+            List<Point3D> arrivals, List<Point3D> anchors, HarvestDefinition definition)
         {
             int minX = Int32.MaxValue, maxX = Int32.MinValue;
             int minY = Int32.MaxValue, maxY = Int32.MinValue;
+            int range = (definition == null ? 2 : definition.MaxRange) + 2;
 
-            foreach (Point3D point in arrivals)
+            foreach (Point3D arrival in arrivals)
             {
-                minX = Math.Min(minX, point.X);
-                maxX = Math.Max(maxX, point.X);
-                minY = Math.Min(minY, point.Y);
-                maxY = Math.Max(maxY, point.Y);
-            }
-
-            foreach (Point3D point in harvestable)
-            {
-                bool near = false;
-
-                foreach (Point3D arrival in arrivals)
+                for (int dx = -range; dx <= range; dx++)
                 {
-                    if (NavGraph.Chebyshev(point, arrival) <= 4)
+                    for (int dy = -range; dy <= range; dy++)
                     {
-                        near = true;
-                        break;
+                        int x = arrival.X + dx;
+                        int y = arrival.Y + dy;
+
+                        if (Nearest(anchors, new Point3D(x, y, 0)) > HopCap - 1)
+                        {
+                            continue;
+                        }
+
+                        minX = Math.Min(minX, x);
+                        maxX = Math.Max(maxX, x);
+                        minY = Math.Min(minY, y);
+                        maxY = Math.Max(maxY, y);
                     }
                 }
-
-                if (!near)
-                {
-                    continue;
-                }
-
-                minX = Math.Min(minX, point.X);
-                maxX = Math.Max(maxX, point.X);
-                minY = Math.Min(minY, point.Y);
-                maxY = Math.Max(maxY, point.Y);
             }
-
-            // A little slack so a bot shuffling along the face is not immediately outside it.
-            minX -= 2;
-            minY -= 2;
-            maxX += 2;
-            maxY += 2;
-
-            // ...and then the clamp. One tile inside the cap, so a bot standing on the boundary
-            // is still comfortably in range rather than exactly at it.
-            int reach = HopCap - 1;
-
-            minX = Math.Max(minX, approach.X - reach);
-            maxX = Math.Min(maxX, approach.X + reach);
-            minY = Math.Max(minY, approach.Y - reach);
-            maxY = Math.Min(maxY, approach.Y + reach);
 
             return new Rectangle2D(minX, minY, (maxX - minX) + 1, (maxY - minY) + 1);
         }
 
         private static void WriteSite(
-            StringBuilder json, Seed seed, List<Point3D> arrivals, List<Point3D> legs,
-            Rectangle2D face, int harvestable, string attach)
+            StringBuilder json, Site site, List<Point3D> arrivals, List<Point3D> legs,
+            List<Point3D> faceLegs, Rectangle2D face, string attach, int reach)
         {
-            json.Append("    {\"id\":").Append(Json.Quote(seed.Id));
-            json.Append(",\"name\":").Append(Json.Quote(seed.Name));
-            json.Append(",\"type\":").Append(Json.Quote(seed.Type));
-            json.Append(",\"tag\":").Append(Json.Quote(seed.Tag));
-            json.Append(",\"prefix\":").Append(Json.Quote(seed.Prefix));
-            json.Append(",\"harvestable\":").Append(harvestable);
-            json.Append(",\"attach\":").Append(attach == null ? "null" : Json.Quote(attach));
+            json.Append("    {\"id\":").Append(Json.Quote(site.Id));
+            json.Append(",\"name\":").Append(Json.Quote(site.Name));
+            json.Append(",\"type\":").Append(Json.Quote(site.Type));
+            json.Append(",\"tag\":").Append(Json.Quote(site.Tag));
+            json.Append(",\"prefix\":").Append(Json.Quote(site.Prefix));
+            json.Append(",\"attach\":").Append(Json.Quote(attach));
+            json.Append(",\"reach\":").Append(reach);
             json.Append(",\"zone\":{\"x\":").Append(face.X).Append(",\"y\":").Append(face.Y);
             json.Append(",\"width\":").Append(face.Width).Append(",\"height\":").Append(face.Height).Append("}");
 
-            json.Append(",\"arrivals\":[");
+            Append(json, ",\"arrivals\":", arrivals);
+            Append(json, ",\"corridor\":", legs);
+            Append(json, ",\"face\":", faceLegs);
 
-            for (int i = 0; i < arrivals.Count; i++)
+            json.Append("}");
+        }
+
+        private static void Append(StringBuilder json, string label, List<Point3D> points)
+        {
+            json.Append(label).Append("[");
+
+            for (int i = 0; i < points.Count; i++)
             {
                 if (i > 0)
                 {
                     json.Append(",");
                 }
 
-                json.Append("{\"x\":").Append(arrivals[i].X)
-                    .Append(",\"y\":").Append(arrivals[i].Y)
-                    .Append(",\"z\":").Append(arrivals[i].Z).Append("}");
+                json.Append("{\"x\":").Append(points[i].X)
+                    .Append(",\"y\":").Append(points[i].Y)
+                    .Append(",\"z\":").Append(points[i].Z).Append("}");
             }
 
-            json.Append("],\"waypoints\":[");
-
-            if (legs != null)
-            {
-                for (int i = 0; i < legs.Count; i++)
-                {
-                    if (i > 0)
-                    {
-                        json.Append(",");
-                    }
-
-                    json.Append("{\"x\":").Append(legs[i].X)
-                        .Append(",\"y\":").Append(legs[i].Y)
-                        .Append(",\"z\":").Append(legs[i].Z).Append("}");
-                }
-            }
-
-            json.Append("]}");
+            json.Append("]");
         }
 
         private static bool CanWalk(Map map, Point3D start, Point3D goal)
         {
             if (NavGraph.Chebyshev(start, goal) <= 1)
             {
-                // MovementPath returns no path for an adjacent goal (MovementPath.cs:34), so this
-                // would be a guaranteed false negative. NavAudit skips the same case.
                 return true;
             }
 
@@ -720,20 +657,13 @@ namespace Server.Custom
             return new Point3D(point.X, point.Y, NavWalker.ResolveZ(map, point));
         }
 
-        private static void Emit(Mobile from, string line, bool problem)
+        private static void Emit(Mobile from, string line)
         {
-            if (problem)
-            {
-                Log.Warn(line);
-            }
-            else
-            {
-                Log.Info(line);
-            }
+            Log.Info(line);
 
             if (from != null)
             {
-                from.SendMessage(problem ? 0x25 : 0x40, line);
+                from.SendMessage(0x40, line);
             }
         }
     }

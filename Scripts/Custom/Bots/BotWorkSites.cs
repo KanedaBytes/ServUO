@@ -53,6 +53,24 @@ namespace Server.Custom
     {
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
 
+        /// <summary>
+        /// How many harvestable tiles an arrival point must have in reach to count as a real site.
+        ///
+        /// This number exists because "HarvestDefinition.Validate accepted the tile" turned out to
+        /// mean almost nothing. Stock ServUO's m_MountainAndCaveTiles contains land ids that this
+        /// client's tiledata names 'forest', so the first cut of the 7e sites was four arrivals on
+        /// green land west of Castle Britannia with one to four mineable tiles apiece - every one
+        /// of them Validate-clean, and a miner standing there swings at nothing.
+        ///
+        /// A real face is DENSE. The authored sites reach 11-15; the Britain wood reaches 4,
+        /// because Britain is not ringed by dense forest and no cell within 500 tiles of the bank
+        /// holds more than nine choppable tiles per hundred.
+        /// </summary>
+        public static int MinReach
+        {
+            get { return Config.Get("Custom.BotWorkSiteMinReach", 5); }
+        }
+
         /// <summary>Sites excluded at load, with the reason. Reported by Bots.Work.</summary>
         private static readonly Dictionary<string, string> _excluded =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -65,10 +83,27 @@ namespace Server.Custom
 
         public static int Delivered { get; private set; }
 
+        /// <summary>
+        /// Units actually dug or chopped out of the ground since boot — NOT units delivered.
+        ///
+        /// The two diverge for exactly one reason and it matters: EquipmentTable spawns a gatherer
+        /// with 3-15 of its own good as a working stash, so a bot can deliver a full load having
+        /// mined nothing at all. Deliveries proves the walk; this proves the work.
+        /// </summary>
+        public static int Mined { get; private set; }
+
         public static void NoteDelivery(int amount)
         {
             Deliveries++;
             Delivered += amount;
+        }
+
+        public static void NoteMined(int amount)
+        {
+            if (amount > 0)
+            {
+                Mined += amount;
+            }
         }
 
         public static IEnumerable<KeyValuePair<string, string>> Excluded
@@ -84,6 +119,118 @@ namespace Server.Custom
         public static bool IsExcluded(string destinationId)
         {
             return destinationId != null && _excluded.ContainsKey(destinationId);
+        }
+
+        /// <summary>
+        /// How many harvestable tiles are in reach of this spot.
+        ///
+        /// Deliberately the SAME 5x5 sweep BotHarvest.FindTarget performs, so the number answers
+        /// the only question that matters: standing here, will the bot find something to swing at?
+        /// </summary>
+        public static int ReachFrom(Map map, Point3D at, HarvestDefinition definition)
+        {
+            if (map == null || map == Map.Internal || definition == null)
+            {
+                return 0;
+            }
+
+            int reach = 0;
+            int range = definition.MaxRange;
+
+            for (int dx = -range; dx <= range; dx++)
+            {
+                for (int dy = -range; dy <= range; dy++)
+                {
+                    int x = at.X + dx;
+                    int y = at.Y + dy;
+
+                    if (definition.Validate(map.Tiles.GetLandTile(x, y).ID))
+                    {
+                        reach++;
+                        continue;
+                    }
+
+                    StaticTile[] statics = map.Tiles.GetStaticTiles(x, y, true);
+
+                    for (int i = 0; i < statics.Length; i++)
+                    {
+                        if (definition.Validate((statics[i].ID & 0x3FFF) | 0x4000))
+                        {
+                            reach++;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return reach;
+        }
+
+        /// <summary>The harvest definition a work destination is worked with, or null.</summary>
+        public static HarvestDefinition DefinitionForType(string type)
+        {
+            if (Insensitive.Equals(type, "mine"))
+            {
+                return BotHarvest.DefinitionFor(BotClass.Miner);
+            }
+
+            if (Insensitive.Equals(type, "lumber"))
+            {
+                return BotHarvest.DefinitionFor(BotClass.Lumberjack);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Work sites whose best arrival point cannot reach MinReach harvestable tiles.
+        ///
+        /// Folded into Nav.Data rather than kept here, because this is a fact about the NAV DATA -
+        /// somebody authored a site in the editor and the ground under it is thin - and the person
+        /// who needs to hear it is the one who just edited navigation.json. It is what makes
+        /// hand-authoring further sites safe.
+        /// </summary>
+        public static List<string> ThinSites(Map map)
+        {
+            var thin = new List<string>();
+
+            if (map == null || map == Map.Internal)
+            {
+                return thin;
+            }
+
+            int floor = MinReach;
+
+            foreach (NavDestination destination in Nav.Destinations(map, null, null))
+            {
+                HarvestDefinition definition = DefinitionForType(destination.Type);
+
+                if (definition == null || destination.ArrivalList == null)
+                {
+                    continue;
+                }
+
+                int best = 0;
+
+                foreach (NavArrival arrival in destination.ArrivalList)
+                {
+                    best = Math.Max(best, ReachFrom(map, arrival.Location, definition));
+                }
+
+                if (best < floor)
+                {
+                    thin.Add(String.Format(
+                        "work site '{0}' ({1}): best arrival reaches {2} harvestable tile(s), wants {3}",
+                        destination.Id,
+                        destination.Type,
+                        best,
+                        floor));
+                }
+            }
+
+            thin.Sort(StringComparer.Ordinal);
+
+            return thin;
         }
 
         /// <summary>Every destination type this file governs — the ones a bot goes to in order to work.</summary>
@@ -302,15 +449,20 @@ namespace Server.Custom
                 return "no arrival points authored";
             }
 
+            int best = 0;
+
             foreach (NavArrival arrival in destination.ArrivalList)
             {
-                if (BotHarvest.HasAnything(destination.Map, arrival.Location, definition, definition.MaxRange))
-                {
-                    return null;
-                }
+                best = Math.Max(best, ReachFrom(destination.Map, arrival.Location, definition));
             }
 
-            return "no arrival point has a harvestable tile within " + definition.MaxRange + " tiles";
+            // EXCLUSION is for a site that yields NOTHING; a thin one is a warning, not a
+            // disqualification - Nav.Data reports it through ThinSites and the shard still works
+            // it. Excluding at MinReach would have thrown away the Britain wood, which is thin
+            // because Britain is thin, not because it is wrong.
+            return best > 0
+                ? null
+                : "no arrival point has a harvestable tile within " + definition.MaxRange + " tiles";
         }
 
         /// <summary>

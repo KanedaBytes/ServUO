@@ -75,6 +75,8 @@ namespace Server.Custom
         private static readonly string[] CraftChat = { "craft_talk" };
 
         private CrafterProfile _profile;
+        private NavWalker _walker;
+        private bool _walkingToStation;
         private Point3D _anchor;
         private long _nextCraft;
         private long _nextNeedLine;
@@ -143,7 +145,9 @@ namespace Server.Custom
         /// </summary>
         public override bool CanTransition(PlayerBot bot)
         {
-            return true;
+            // Free once settled - it holds no engine lock between cycles. Not while it is walking
+            // to its bench, though: that is a walker mid-route, exactly as for a Traveler.
+            return !_walkingToStation;
         }
 
         public override void OnAttached(PlayerBot bot)
@@ -158,11 +162,130 @@ namespace Server.Custom
                            : bot.Class == BotClass.Carpenter ? CarpenterChat
                            : CraftChat;
 
-            // Hold the tile. RangeHome 0 with a non-zero Home makes BaseAI.WalkRandomInHome walk
-            // straight back whenever the bot is not standing on it (BaseAI.cs:2573-2578), which
-            // is upstream's drift-back done by the engine instead of by hand. It matters more for
-            // a Smith than for anyone else: the arrival tile was chosen because it is within two
-            // tiles of both the forge and the anvil, and one step off can be one step too far.
+            // A Crafter reached by the arrival handoff is already standing on a validated arrival
+            // tile. One attached by hand - [BotBehavior Crafter - is standing wherever it happened
+            // to be, which for a Smith means "inside the shop, four tiles from the anvil, unable
+            // to work and unable to say why". So: find the station, and walk to it.
+            if (String.IsNullOrEmpty(DestinationId))
+            {
+                DestinationId = FindStation(bot);
+            }
+
+            if (!AtStation(bot))
+            {
+                if (BeginWalkToStation(bot))
+                {
+                    return;
+                }
+
+                Blocked = DestinationId == null
+                    ? "it has no station on this facet"
+                    : "it cannot reach its station";
+            }
+
+            Settle(bot);
+        }
+
+        /// <summary>The station this bot's trade works, as a destination id, or null.</summary>
+        private static string FindStation(PlayerBot bot)
+        {
+            List<NavDestination> usable =
+                BotWorkSites.Available(bot.Map, BotClassHelper.StationFor(bot.Class));
+
+            NavDestination best = null;
+            int bestDistance = Int32.MaxValue;
+
+            foreach (NavDestination candidate in usable)
+            {
+                int distance = NavGraph.Chebyshev(candidate.Location, bot.Location);
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+
+            return best == null ? null : best.Id;
+        }
+
+        /// <summary>Is the bot standing on one of its station's authored arrival tiles?</summary>
+        private bool AtStation(PlayerBot bot)
+        {
+            NavDestination station = DestinationId == null ? null : Nav.Destination(DestinationId);
+
+            if (station == null || station.ArrivalList == null)
+            {
+                return false;
+            }
+
+            foreach (NavArrival arrival in station.ArrivalList)
+            {
+                if (bot.Location == arrival.Location)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool BeginWalkToStation(PlayerBot bot)
+        {
+            if (String.IsNullOrEmpty(DestinationId))
+            {
+                return false;
+            }
+
+            NavRoute route;
+            string error;
+
+            if (!Nav.TryRouteFrom(bot.Location, bot.Map, DestinationId, bot, out route, out error))
+            {
+                Log.Debug("{0} cannot route to its station '{1}': {2}", bot.Name, DestinationId, error);
+                return false;
+            }
+
+            if (_walker == null)
+            {
+                _walker = new NavWalker(bot);
+                _walker.Arrived = OnReachedStation;
+            }
+
+            bot.Commuting = true;
+            _walkingToStation = true;
+            _walker.Follow(route);
+
+            return true;
+        }
+
+        private void OnReachedStation(NavWalker walker)
+        {
+            var bot = walker.Mobile as PlayerBot;
+
+            if (bot == null || bot.Deleted)
+            {
+                return;
+            }
+
+            bot.Commuting = false;
+            _walkingToStation = false;
+
+            Settle(bot);
+        }
+
+        /// <summary>
+        /// Take up the bench: anchor here, face the work, and start the cadence.
+        ///
+        /// Hold the tile with RangeHome 0 and a non-zero Home, which makes BaseAI.WalkRandomInHome
+        /// walk straight back whenever the bot is not standing on it (BaseAI.cs:2573-2578) -
+        /// upstream's drift-back, done by the engine instead of by hand. It matters more for a
+        /// Smith than for anyone else: the arrival tile was chosen because it is within two tiles
+        /// of both the forge and the anvil, and one step off is one step too far.
+        /// </summary>
+        private void Settle(PlayerBot bot)
+        {
+            _anchor = bot.Location;
             bot.Home = _anchor;
             bot.RangeHome = 0;
 
@@ -173,13 +296,14 @@ namespace Server.Custom
 
             if (_profile == null)
             {
-                // Reachable from [BotBehavior Crafter on a class that has no trade. Everything
-                // below reads the profile's bands, so stop here rather than throwing inside a
-                // staff command; Tick's own guard makes it stand there doing nothing, and
-                // GetStatusLine says why.
+                // Reachable from [BotBehavior Crafter on a class with no trade. Everything below
+                // reads the profile's bands, so stop rather than throwing inside a staff command;
+                // Tick's own guard leaves it standing there and GetStatusLine says why.
                 return;
             }
 
+            // The ledger's baseline has to be taken HERE and not in OnAttached: a bot that walks
+            // to its bench first would otherwise bank its starting kit as things it had made.
             _madeSeen = CountMade(bot);
             _exceptionalSeen = CountExceptional(bot);
 
@@ -204,12 +328,26 @@ namespace Server.Custom
 
             bot.Home = Point3D.Zero;
             bot.RangeHome = 0;
+            bot.Commuting = false;
+            _walkingToStation = false;
+
+            if (_walker != null)
+            {
+                _walker.Stop();
+                _walker.Arrived = null;
+                _walker = null;
+            }
         }
 
         public override string GetStatusLine(PlayerBot bot)
         {
             NavDestination destination = DestinationId == null ? null : Nav.Destination(DestinationId);
             string where = destination == null ? "its station" : destination.Name;
+
+            if (_walkingToStation)
+            {
+                return String.Format("walking to {0}", where);
+            }
 
             if (Blocked != null)
             {
@@ -251,6 +389,22 @@ namespace Server.Custom
                 return;
             }
 
+            if (_walkingToStation)
+            {
+                // The same watchdog every walking behaviour here carries: NavWalker calls Stop()
+                // rather than Finish() when a mobile is deleted or lands off-facet, so waiting
+                // only on the callback would leave the bot standing with Commuting still true.
+                if (_walker == null || !_walker.Active)
+                {
+                    BotTickManager.NoteAbandoned();
+                    bot.Commuting = false;
+                    _walkingToStation = false;
+                    Settle(bot);
+                }
+
+                return;
+            }
+
             TrySpeak(bot);
 
             if (_profile == null)
@@ -289,6 +443,9 @@ namespace Server.Custom
                 DrySpell(bot);
                 return;
             }
+
+            // Having SOMETHING is not the same as having enough - see CostOf, below.
+
 
             _drySince = null;
 
@@ -359,6 +516,19 @@ namespace Server.Custom
                 return;
             }
 
+            // Can it AFFORD this? CanCraft answers "is the bench right", never "is there enough
+            // metal" - that check lives inside Craft, where a shortfall just fails quietly. A
+            // smith holding two ingots and reaching for a three-ingot dagger therefore burns an
+            // attempt every cycle and reports nothing; the first fixed work probe caught it doing
+            // that thirty-five times in a row. Ask up front, and go dry instead.
+            int cost = CostOf(entry);
+
+            if (cost > 0 && CrafterStock.Count(bot, _profile) < cost)
+            {
+                DrySpell(bot);
+                return;
+            }
+
             ITool tool = FindTool(bot);
 
             if (tool == null)
@@ -381,6 +551,19 @@ namespace Server.Custom
             Attempts++;
 
             entry.Craft(bot, system, null, tool);
+        }
+
+        /// <summary>How much material one of these costs, across every resource it names.</summary>
+        private static int CostOf(CraftItem entry)
+        {
+            int cost = 0;
+
+            for (int i = 0; i < entry.Resources.Count; i++)
+            {
+                cost += entry.Resources.GetAt(i).Amount;
+            }
+
+            return cost;
         }
 
         /// <summary>

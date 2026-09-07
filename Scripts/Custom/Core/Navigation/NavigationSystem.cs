@@ -700,6 +700,58 @@ namespace Server.Custom
 
         // ---- health ----
 
+        /// <summary>
+        /// Extra data checks contributed by layers above this one.
+        ///
+        /// The navigation layer is Core and knows nothing about bots, but "is there actually any
+        /// ore under this mine?" is a fact about navigation.json and belongs in the health check
+        /// that reads navigation.json. So consumers register an auditor instead of Core reaching
+        /// upward: BotWorkSites registers the work-site reach check, and anything later can add
+        /// its own without this file learning what it is.
+        /// </summary>
+        private static readonly List<Func<IList<string>>> _auditors = new List<Func<IList<string>>>();
+
+        public static void RegisterAuditor(Func<IList<string>> auditor)
+        {
+            if (auditor != null && !_auditors.Contains(auditor))
+            {
+                _auditors.Add(auditor);
+            }
+        }
+
+        private static List<string> RunAuditors()
+        {
+            var found = new List<string>();
+
+            foreach (var auditor in _auditors)
+            {
+                IList<string> lines;
+
+                try
+                {
+                    lines = auditor();
+                }
+                catch (Exception ex)
+                {
+                    // An auditor that throws must not take the health check down with it.
+                    found.Add("an auditor threw: " + ex.Message);
+                    continue;
+                }
+
+                if (lines == null)
+                {
+                    continue;
+                }
+
+                foreach (string line in lines)
+                {
+                    found.Add(line);
+                }
+            }
+
+            return found;
+        }
+
         public static HealthResult BuildHealthResult()
         {
             string loaded = _lastLoadUtc.HasValue
@@ -732,12 +784,18 @@ namespace Server.Custom
                 _routes.Count,
                 loaded);
 
-            if (_dataWarnings.Count > 0)
+            List<string> extra = RunAuditors();
+
+            if (_dataWarnings.Count > 0 || extra.Count > 0)
             {
+                var all = new List<string>(_dataWarnings);
+
+                all.AddRange(extra);
+
                 return HealthResult.Warn(String.Format(
                     "{0} data warning(s) - first: {1}. {2}",
-                    _dataWarnings.Count,
-                    _dataWarnings[0],
+                    all.Count,
+                    all[0],
                     counts));
             }
 

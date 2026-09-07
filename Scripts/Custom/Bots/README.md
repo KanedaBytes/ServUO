@@ -593,26 +593,47 @@ three systems, so a Grandmaster left to run flat out would bury the shard in dag
 `AutoCraftTimer`, the engine's own make-N loop, is **never** used: `AutoCraft.cs:110` bails on
 `NetState == null`, so it would silently do nothing for a bot.
 
-### The sites are authored from the map, not from upstream's coordinates
+### The sites are hand-picked, and the tool is not allowed to choose them
 
-The brief asked for ~40 gathering sites from `uo-offline`. **They do not exist**, and finding that
-out reshaped the session.
+The brief asked for ~40 gathering sites from `uo-offline`. **They do not exist.** Their 40 were
+generated at runtime from their 4,013-node Felucca waypoint graph and were **retired on 2026-07-06**
+to be hand-authored later; because their yield was invented, a bare road node made a perfectly good
+site. Of their three *authored* sites only `MiningSpot 448` is near Britain, and it is a **Felucca**
+site — on Trammel that area holds 110 scattered mineable tiles across a 120×120 box and none within
+18 tiles of their centre.
 
-Their 40 were generated at runtime from their 4,013-node Felucca waypoint graph — any node ≥45 tiles
-from a city and ≥70 from another — and were **retired on 2026-07-06** to be hand-authored later.
-Because their yield was invented, a bare road node made a perfectly good site; with a real harvest
-system a road node yields nothing, so those coordinates are unusable here even if recovered.
+So the sites had to come from our own ground. **The first attempt at that shipped, and was wrong.**
 
-Of their three *authored* sites, only `MiningSpot 448` is near Britain, and it is a **Felucca**
-site. On Trammel — our facet — that area holds 110 scattered mineable tiles across a 120×120 box, at
-most 8 per 10×10 cell, and **none within 18 tiles of their centre**. It is an outcrop field, not a
-mine.
+It let the tool choose, by sweeping for anything `HarvestDefinition.Validate` accepted. That is a
+far weaker test than it sounds:
 
-So the sites come from the ground, validated against the same tile tables the harvest system reads.
-That is not an invention: it is the method `navigation.json`'s own comment already describes for its
-waypoints — *"replaced with coordinates flood-filled from the map itself"*.
+> Stock ServUO's `m_MountainAndCaveTiles` contains land ids — **236–247 among them** — that this
+> client's tiledata names **`'forest'`**. `Validate` accepts them happily.
 
-### `[BotWorkScout`, and why reading the MUL files yourself does not work
+The sweep therefore found scattered forest-transition tiles in the fields west of Castle Britannia
+and called them a mine. Every arrival passed `Validate`. Every arrival had **one to four**
+harvestable tiles in reach. The corridor crossed the castle moat. `[NavAudit` was clean, because the
+geometry genuinely was. And `Bots.Shift` passed, because the miner was hauling the ore
+`EquipmentTable` spawns it with (see below). Four independent checks, all green, all measuring the
+wrong thing.
+
+What real rock looks like, from `[BotOreSweep`:
+
+```
+MINE cell 1450,1520 count 51 dist 170 | rock/556 x27, rock/557 x5, rock/559 x5, ...
+MINE cell 1190,1940 count 100 dist 250 | rock/556 x22, rock/557 x27, rock/558 x20, rock/559 x31
+```
+
+**Land 556–559, named `'rock'`, in cells that saturate at 100/100** — against the one-to-four
+scatter the sweep had settled for. The name is the tell, and density is the measure.
+
+The lesson is in the tool now: `BotWorkScout` **chooses nothing**. Its `Sites` array is hand-picked
+coordinates, verified with `[BotSitePick` and walked in-game before being written down, and the
+tool's only job is the part a human should not do by hand — finding a walkable road back to the
+graph and proving every hop. And `Nav.Data` refuses to let a thin site pass quietly again; see
+below.
+
+### The site tools, and why reading the MUL files yourself does not work
 
 The first cut of this data was derived **offline**, by a script reading `map1LegacyMUL.uop`,
 `statics1.mul` and `tiledata.mul` directly. It looked entirely convincing: every arrival point sat
@@ -651,10 +672,53 @@ Because the last row is *the same test*, anything the scout emits passes the aud
 `navigation.json`**: that file is authored, carries comments and an ordering somebody chose, and a
 generator that rewrote it would quietly become its author.
 
+Four commands, all Administrator, all read-only:
+
+| Command | Answers |
+| --- | --- |
+| `[BotSiteAudit` | what is really under every work-site arrival and corridor waypoint — land id and **name**, statics, walkability, water, and how many harvestable tiles are in reach |
+| `[BotOreSweep [radius]` | where dense harvestable ground actually is, per 10×10 cell, **with the land names** — the command that found `rock/556` |
+| `[BotSitePick <x> <y> [mine\|chop]` | the best places to *stand* near a point, ranked by what is in reach from each |
+| `[BotForgeAudit` | where the anvil and forge really are, and which tiles are within 2 of both |
+
+`[BotSiteAudit` is the one to keep in your head: it is the check that would have caught the first
+set of sites in seconds, and it is now permanent rather than a one-off.
+
+One caveat it states about itself: it reports **distance and Z, never line of sight**.
+`CheckAnvilAndForge` uses `Mobile.InLOS` and there is no mobile in a diagnostic;
+`Map.LineOfSight`'s `Point3D` overload aims at the fixture's own tile and answers false even from
+the tile the anvil stands on — which is how an earlier pass of it managed to report that no tile in
+Britain can reach the Britain anvil. The pessimistic half is exact; the optimistic half is answered
+for real by `CanCraft` the moment a Smith tries, and surfaces through `Blocked`.
+
 It also samples **from the site inward**, stopping the moment a hop can reach the existing graph.
 Sampling from the gate outward is the obvious way round and it is wrong — it re-walks Britain and
 lays a second set of waypoints down streets that already have them. Growing inward cut the three
 corridors from 60 waypoints to 36.
+
+### `Nav.Data` will not let a thin site through again
+
+The check that would have caught the first set of sites is now permanent, and it lives in
+**`Nav.Data`** rather than `Bots.Work` on purpose: "there is no ore under this mine" is a fact about
+`navigation.json`, and the person who needs to hear it is whoever just authored a site in the editor.
+
+Any `mine` or `lumber` destination whose **best** arrival point reaches fewer than
+`Custom.BotWorkSiteMinReach` (default **5**) harvestable tiles warns, naming the site and its actual
+reach. Reach is measured with the very same 5×5 sweep `BotHarvest.FindTarget` performs, so it
+answers the only question that matters: standing here, will the bot find something to swing at?
+
+The navigation layer is Core and knows nothing about bots, so it does not reach upward to ask —
+consumers register an auditor (`NavigationSystem.RegisterAuditor`) and `Bots` registers this one.
+Anything later can add its own without that file learning what it is.
+
+Two deliberate distinctions:
+
+- **Thin warns; empty excludes.** A site with *nothing* in reach is excluded from the destination
+  roll outright, because a bot sent there stands and swings at air. A site that is merely thin is
+  still worked — which is what keeps a legitimately sparse wood usable rather than deleting it for
+  being sparse.
+- **The threshold is a floor on the BEST arrival**, not on every one. A face has thin edges by
+  nature; what matters is whether the site has a good spot at all.
 
 ### A work site has to fit inside the hop cap, or it is a trap
 
@@ -687,29 +751,37 @@ Three things now stand between that and a repeat, deliberately at three differen
    shuffle roll, and the failure it prevents is silent, permanent and looks exactly like a broken
    walker — which is worth a hundred-waypoint scan.
 
-| Site | Type / tag | Face | Harvestable | Arrivals | Corridor |
+| Site | Type / tag | Face | Best arrival reach | Arrivals | Corridor |
 | --- | --- | --- | --- | --- | --- |
-| `brit-mine-north` | `mine` / `mine-north` | 13×18 at 1274,1561 | 32 tiles | 4 | 14 waypoints, joining at `brit-north-8` |
-| `brit-mine-south` | `mine` / `mine-south` | 11×13 at 1278,1677 | 25 tiles | 4 | 15 waypoints, joining at `brit-crier-a` |
-| `brit-lumber-nw` | `lumber` / `lumber-nw` | 14×13 at 1339,1546 | 88 tiles | 4 | 7 waypoints, joining at `brit-north-8` |
-| `brit-forge` | `forge` / `craft town` | 1424,1557 | anvil `0x0FAF` at 1423,1556, forge `0x0FB1` at 1424,1558 | 4 | in town, off `brit-smith-1` |
+| `brit-mine-north` | `mine` / `mine-north` | 14×26 at 1443,1508 | **14**/25 | 5 | **1** waypoint, joining at `brit-inn-1` |
+| `brit-forge` | `forge` / `craft town` | 1424,1557 | anvil `0x0FAF` at 1423,1556, forge `0x0FB1` at 1424,1558 | 4 (2 exclusive, 2 shared) | in town, off `brit-smith-1` |
 
-**36 new waypoints and 36 new edges**, all `wilderness`-tagged — `costTags` already carried
+**One new waypoint and one new edge.** The outcrop north-east of Britain turns out to sit six tiles
+from `brit-inn-1`, so the "corridor" is a single hop — which is the happiest possible outcome and
+was not at all what the first attempt produced. — `costTags` already carried
 `wilderness` at 1.4, so the schema was built for this before there was anything to put in it.
 
-**The corridors go around the mountain, not at it.** That is the single most surprising thing the
-engine had to say, and it is obvious in hindsight: the range *is* what lies due west of the gate, so
-there is no road through it. The route to the north face leaves by the north of town and runs west
-along y≈1510; the route to the south face leaves by the south and runs west along y≈1744. Each one
-attaches to the nearest existing town waypoint rather than starting from the gate, so the only
-waypoints added are the ones that are genuinely new.
+Each corridor attaches to the nearest existing town waypoint rather than starting from the gate, so
+the only waypoints added are ones that are genuinely new. For the outcrop that came to exactly one.
 
-The two mine faces are **distinctly tagged** so `[BotInfo` and the editor's map layer can tell them
-apart — they are on the same range and would otherwise be indistinguishable in a report.
+**Two further sites were picked, verified, and then NOT written**, which is worth recording because
+the reason is a limitation of the tool rather than of the ground:
 
-Thirty-two mineable tiles is a smaller face than it sounds: mining banks are 8×8 and hold 10–34 ore
-apiece, so a 13×18 face is six or so banks, which is a shift's work for one or two miners and not
-more. That is the argument for the third site on the [later](#later) list, not against these two.
+| Site | Ground | Why it is not in the file |
+| --- | --- | --- |
+| `brit-mine-west`, the west cliff (1192,1750 group) | reach **15**, genuine `rock` | the corridor comes back as a **28-hop arc** swinging north-west around the range |
+| `brit-lumber-south`, the wood at 1422,1832 | reach 4 | a **36-hop arc**, for a wood a hundred tiles due south |
+
+Both arcs are real — every hop passes `MovementPath` — but they are the long way round, and the
+cause is that **the corridor flood cannot model a town gate**. `FastAStarAlgorithm` sets
+`MoveImpl.AlwaysIgnoreDoors` for a `BaseCreature` (`FastAStarAlgorithm.cs:93`), so a real bot walks
+through Britain's gates; the flood, working in `map.CanFit`, refuses them and detours until it finds
+open wall. Aiming at the eight nearest waypoints instead of one changed nothing, which is what
+proved it was the gates rather than the target choice.
+
+So those two want a **hand-authored corridor through the west gate and the south bridge** — exactly
+the editor work the [later](#later) list describes, and exactly what the `Nav.Data` reach check now
+makes safe to do.
 
 `brit-forge`'s coordinates are upstream's authored *Britain Forge*, confirmed against
 `Data/Decoration/Britannia/britain.cfg:1327,1338`. Its name is its Stratics one, **The Hammer and
@@ -805,6 +877,43 @@ A crafter that runs out says so — `craft_need`, which is what wires `{mat}` �
 until somebody brings it something**. That is not a gap. It is the motive the whole loop exists to
 create, and upstream papered over it by buying a restock for gold every three minutes.
 
+### Clocking in is a gate, not a formality
+
+A gatherer used to clock in wherever it was standing:
+
+```csharp
+_clockedIn = _site == null || Contains(_site, bot.Location);   // upstream's unpainted-site case
+```
+
+Upstream carried that so an unpainted site still worked. Here it produced a Miner clocked in on the
+**west bridge at 1400,1748**, reporting *"working a work site, 0 swings, carrying 9/120"* — the 9
+being its spawn kit, the 0 swings being the truth.
+
+Clock-in now requires **both**:
+
+1. inside the site's zone, and
+2. at least one harvestable tile inside `BotHarvest.FindTarget`'s own 5×5 sweep.
+
+The second is not redundant. A face has thin edges, and a bot standing on one is inside the zone and
+still swinging at nothing for the length of its shift. Passing the reach test means the *next* swing
+finds a target. A gatherer with no zone at all now says so and walks away rather than miming a shift
+in a field, and the clock-in is logged with the zone and the reach count so "why is it working
+there" has an answer.
+
+### A hand-attached Crafter goes to its bench
+
+`[BotBehavior Crafter` on a Smith standing in the blacksmith's shop used to anchor it *there* — four
+tiles from the anvil, unable to work, reporting only *"cannot work at its station: not beside both a
+forge and an anvil"* with no station to name, because `DestinationId` was null.
+
+`OnAttached` now resolves the nearest station its class works (`BotClassHelper.StationFor`), and if
+the bot is not already on one of that station's arrival tiles it **walks there** through `NavWalker`
+like any other journey — watchdog, `Commuting` flag and all — and only settles when it arrives.
+`CanTransition` is false while it walks, so the lifecycle cannot yank a bot mid-route.
+
+The arrival handoff never had this problem: it delivers a bot already standing on a validated tile.
+This is purely the by-hand path, which is exactly the path a person uses when testing.
+
 ### The pack animal
 
 Fully contained on ServUO, and the reason is worth recording: `SetControlMaster`, `ControlOrder =
@@ -858,7 +967,11 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`, `BankSitter`, `Shopper`, `Crafter`, `Gatherer`) |
 | `[BotLifecycle` | GameMaster | Report the roller, its cadence and the transition tally |
 | `[BotLifecycle on\|off` | GameMaster | Pause the roller, so a behaviour can be watched without it being rolled away |
-| `[BotWorkScout` | Administrator | Sweep for work sites and the roads to them, and write `Data/Live/work-scout.json` for merging into `navigation.json`. An authoring tool, not a runtime one — see above |
+| `[BotWorkScout` | Administrator | Build and verify the road from each authored work site back to the town graph, and write `Data/Live/work-scout.json` for merging into `navigation.json`. An authoring tool, not a runtime one — see above |
+| `[BotSiteAudit` | Administrator | What is really under every work-site arrival and corridor waypoint: land id **and name**, statics, walkability, water, and harvestable tiles in reach |
+| `[BotOreSweep [radius]` | Administrator | Where dense harvestable ground actually is, per 10×10 cell, with the land names |
+| `[BotSitePick <x> <y> [mine\|chop]` | Administrator | The best tiles to stand on near a point, ranked by what is in reach |
+| `[BotForgeAudit` | Administrator | Where the anvil and forge really are, and which tiles are within 2 of both |
 | *(config)* `Custom.BotWorkProbeOnStart` | — | Run the work probe on its own, without the six minutes of walk, lifecycle and chat probes that precede it in `[BotSmoke` |
 | `[BotsReload` | GameMaster | Re-read `bots.json`, the player caps it defaults from, **and the chat corpus** (alias `[ReloadBots`). The corpus reloads either way — a bad edit to one has nothing to do with the other. Also **re-validates the work sites**, so after editing the graph the order is `[NavReload` then `[BotsReload` |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
@@ -920,10 +1033,20 @@ spoken since boot: 3 (0 repl(ies)). Last load 06:29:43Z
 ```
 
 `Bots.Work` — the working-class census: work sites with occupancy against capacity, crafters at
-station, gatherers out and hauling, loads delivered, pack animals live/reaped/released. **Fail** if
-a class has a station the graph does not contain — that class can never work at all, and nothing
-else in the system would say so. **Warn** for a site excluded at load, a crafter blocked at its
-bench, or a `capacity` entry naming a destination that is not there.
+station, gatherers out and hauling, **units mined**, loads delivered, pack animals
+live/reaped/released. **Warn** for a site excluded at load, a crafter blocked at its bench, a
+`capacity` entry naming a destination that is not there, or a class whose station the graph does not
+contain.
+
+That last one is a **Warn and not a Fail**, which is a correction: the Fisherman has no `dock`
+destination because the fishing half is a deliberately severed seam, and failing a health check for
+a planned gap is how people learn to ignore health checks. Lumberjack joins it until the southern
+wood gets its corridor.
+
+**Units mined is reported separately from units delivered on purpose.** They diverge for exactly one
+reason and it is the reason this whole session had to be redone: a gatherer spawns holding 3–15 of
+its own good, so it can deliver a full load having mined nothing. Delivery proves the walk; mined
+proves the work.
 
 ```
 sites: brit-forge 1/4, brit-lumber-nw 0/4, brit-mine-north 1/4, brit-mine-south 0/4.
@@ -982,13 +1105,32 @@ It runs on an **accelerated clamp installed in memory only**, the same disciplin
 keeps: a real shift is 4–8 minutes and a real crafter settles in for 3–6 *hours*, which is right for
 a shard and useless for a probe.
 
-**The smith is stripped of its starter ingots first**, and that is the assertion rather than a
-detail. `EquipmentTable` seeds a fresh smith with 40–90 of them, so a smith left alone would make
-something whether or not the hand-over ever happened, and the probe would pass on a broken delivery.
-Dry, the only ingots it can ever have are the ones the miner brings. (The first version stripped
-them with `ConsumeTotal(typeof(IronIngot), Int32.MaxValue)` — which is all-or-nothing, so it
-consumed *nothing*, returned false, and the probe cheerfully reported ten items made from ore that
-had nothing to do with them. It deletes the items now.)
+**Both bots are stripped of their spawn kit first**, and that is the assertion rather than a detail.
+
+`EquipmentTable` seeds a fresh smith with 40–90 iron ingots, and a fresh **miner with 3–15 IronOre**
+— *"a working stash from the last shift"*. Either one is enough to make the whole cycle look like it
+worked when nothing did:
+
+> The probe was fixed once, for the smith, and shipped still broken for the miner. It then passed
+> against mine faces that had no rock on them at all — the miner walked its spawn kit to the forge,
+> the smith smelted that and crafted, and every assertion the probe had was satisfied. **That is
+> how four green checks hid a feature that had never once mined anything.**
+
+So the probe now asserts what it is actually about:
+
+| Assertion | Guards against |
+| --- | --- |
+| `BotWorkSites.Mined` rose | the miner hauling its spawn kit and mining nothing |
+| the miner was inside its site zone, working, at 12s | clocking in on a bridge |
+| a load was delivered and `HaulPending` cleared | the walk home |
+| the smith stood on a **validated station arrival tile** | crafting somewhere that merely had an anvil |
+| the smith made an item | the trade |
+
+`Mined` is counted by watching the pack grow, because `HarvestSystem.Give` drops ore in
+asynchronously a second after the swing — the same way `CrafterBehavior` notices finished goods.
+
+(The earlier strip used `ConsumeTotal(typeof(IronIngot), Int32.MaxValue)`, which is all-or-nothing:
+it consumed *nothing*, returned false, and left the smith fully stocked. It deletes the items now.)
 
 A **full bench is not a failure**, and separating that from a real fault was the other thing this
 probe taught. `CrafterBehavior.Blocked` means something is wrong — no tool, wrong tool, not beside
@@ -1067,11 +1209,17 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
-- **A third mine, north.** The real northern mountain at ~1480,1210 is 460+ tiles from the bank and
-  wants a corridor of its own out of the north of town — a good deal more than the 33 waypoints this
-  session added for everything. Add its coordinate to `BotWorkScout.Seeds` and the tool will do the
-  work; the reason to bother is that the two faces here are only about six resource banks between
-  them, so a shard running more than a handful of miners will exhaust them.
+- **The two picked-but-unwritten sites**, `brit-mine-west` (1192,1750, reach 15) and
+  `brit-lumber-south` (1422,1832, reach 4). The ground is verified; only the road is missing, and it
+  is missing because the flood cannot walk through a town gate. Hand-author a corridor out through
+  the **west gate** and the **south bridge** in the editor and both light up — the `Nav.Data` reach
+  check and `[BotSiteAudit` are what make that safe to do by hand. **Until the lumber site lands,
+  Lumberjacks have no station** and `Bots.Work` says so.
+- **Two more sites Sean has already scouted**: the **cave at 1263,1251** and the **north mountain at
+  1438,1223**. Same procedure — `[BotSitePick` for the arrivals, then either the scout or a hand
+  corridor.
+- **One mine is not many.** `brit-mine-north` is 14×26 and mining banks are 8×8 holding 10–34 ore, so
+  it is a handful of banks: fine for a miner or two, thin for a shard running a dozen.
 - **Skill gain as a motive** — a Novice at the forge *because* Blacksmithy is rising. Upstream does
   not do this: skills are rolled once at creation from `BotSkillTemplate` and never change, and
   `BotSkillTier` is a static equipment and band-weight band rather than a progression axis. Their

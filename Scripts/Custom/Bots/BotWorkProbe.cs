@@ -43,11 +43,23 @@ namespace Server.Custom
         /// </summary>
         public static readonly TimeSpan Window = TimeSpan.FromSeconds(420.0);
 
-        /// <summary>The shift the miner works before it shoulders the load.</summary>
-        public static readonly TimeSpan Shift = TimeSpan.FromSeconds(30.0);
+        /// <summary>
+        /// The shift the miner works before it shoulders the load.
+        ///
+        /// Long enough to bring home a USABLE load, which is a higher bar than bringing home any
+        /// load at all. Mining yields one ore per swing against a four-second cadence, and the
+        /// cheapest thing a smith makes costs three ingots - so a thirty-second shift delivered two
+        /// ore and the smith then failed thirty-five crafts in a row for want of a third.
+        /// </summary>
+        public static readonly TimeSpan Shift = TimeSpan.FromSeconds(120.0);
 
         private static HealthResult _last;
         private static bool _running;
+
+        /// <summary>Set by the clock-in check: was the miner inside its site's zone and working?</summary>
+        private static bool _clockedInZone;
+
+        private static string _clockInNote;
 
         /// <summary>
         /// A flag of its own, so this probe can be run without the six minutes of walk, lifecycle
@@ -152,6 +164,15 @@ namespace Server.Custom
                     face = site.Location;
                 }
 
+                // STRIP ITS STARTER ORE - the assertion this probe was missing.
+                //
+                // EquipmentTable spawns every Miner with 3-15 IronOre as "a working stash from the
+                // last shift". Left in place, the bot hauls its spawn kit to the forge, the smith
+                // smelts it and crafts, and the probe reports a full working cycle having mined
+                // precisely nothing. That is exactly how it passed against sites with no rock on
+                // them. Dry, the only ore that can reach the smith is ore this miner dug.
+                StripYield(miner);
+
                 miner.MoveToWorld(face, map);
 
                 var gatherer = new GathererBehavior();
@@ -167,13 +188,47 @@ namespace Server.Custom
 
                 List<PlayerBot> captured = bots;
                 int madeBefore = crafter.Made;
+                int minedBefore = BotWorkSites.Mined;
 
-                Timer.DelayCall(Window, () => Report(captured, madeBefore));
+                _clockedInZone = false;
+                _clockInNote = "never checked";
+
+                // Sampled early, while the shift is still running: by the time Report fires the
+                // gatherer has become a Traveler and there is nothing left to ask.
+                Timer.DelayCall(TimeSpan.FromSeconds(12.0), () => CheckClockIn(miner, site));
+
+                Timer.DelayCall(Window, () => Report(captured, madeBefore, minedBefore));
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "Work probe threw during setup.");
                 Finish(bots, HealthResult.Fail("threw during setup: " + ex.Message));
+            }
+        }
+
+        /// <summary>Empty a gatherer of the good it gathers, so only real work can produce any.</summary>
+        private static void StripYield(PlayerBot bot)
+        {
+            Type yield = BotHarvest.YieldFor(bot.Class);
+
+            if (bot.Backpack == null || yield == null)
+            {
+                return;
+            }
+
+            var doomed = new List<Item>();
+
+            foreach (Item item in bot.Backpack.Items)
+            {
+                if (item.GetType() == yield)
+                {
+                    doomed.Add(item);
+                }
+            }
+
+            foreach (Item item in doomed)
+            {
+                item.Delete();
             }
         }
 
@@ -207,6 +262,50 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// Was the miner actually inside its site's work zone, working?
+        ///
+        /// Clock-in now requires the zone AND something in harvest reach, so this is really a
+        /// check that the gate did its job - but asserting it explicitly is what stops the probe
+        /// passing again on a bot that stood on a bridge, which is where the last one was found.
+        /// </summary>
+        private static void CheckClockIn(PlayerBot miner, NavDestination site)
+        {
+            if (miner == null || miner.Deleted)
+            {
+                _clockInNote = "the miner was gone before it could be checked";
+                return;
+            }
+
+            var gatherer = miner.Behavior as GathererBehavior;
+
+            if (gatherer == null)
+            {
+                _clockInNote = "the miner stopped being a Gatherer within 12s (it is a "
+                    + miner.Behavior.SerializableName + ")";
+                return;
+            }
+
+            bool inZone = false;
+
+            foreach (NavZone zone in Nav.ZonesAt(miner.Location, miner.Map))
+            {
+                if (zone.HasTag("mine"))
+                {
+                    inZone = true;
+                    break;
+                }
+            }
+
+            _clockedInZone = inZone && gatherer.IsWorking;
+
+            _clockInNote = String.Format(
+                "at {0}: inZone {1}, working {2}",
+                miner.Location,
+                inZone ? "yes" : "NO",
+                gatherer.IsWorking ? "yes" : "NO");
+        }
+
         private static NavDestination FirstUsable(Map map, BotStation station)
         {
             List<NavDestination> usable = BotWorkSites.Available(map, station);
@@ -214,7 +313,7 @@ namespace Server.Custom
             return usable.Count == 0 ? null : usable[0];
         }
 
-        private static void Report(List<PlayerBot> bots, int madeBefore)
+        private static void Report(List<PlayerBot> bots, int madeBefore, int minedBefore)
         {
             try
             {
@@ -239,6 +338,29 @@ namespace Server.Custom
                     }
 
                     notes.Add("miner ended as " + miner.Behavior.SerializableName);
+                }
+
+                // THE ASSERTION THAT WAS MISSING. Delivery proves the walk; only this proves the
+                // work. A miner that mined nothing can still deliver, because it spawns holding
+                // ore - so without this the probe passes on sites that have no rock at all.
+                int mined = BotWorkSites.Mined - minedBefore;
+
+                if (mined <= 0)
+                {
+                    problems.Add("the miner mined NOTHING - no swing produced ore");
+                }
+                else
+                {
+                    notes.Add(String.Format("{0} unit(s) actually mined", mined));
+                }
+
+                if (!_clockedInZone)
+                {
+                    problems.Add("the miner was not working inside its site zone - " + _clockInNote);
+                }
+                else
+                {
+                    notes.Add("clocked in inside the zone");
                 }
 
                 if (BotWorkSites.Deliveries == 0)
@@ -270,6 +392,18 @@ namespace Server.Custom
                         if (crafter.Blocked != null)
                         {
                             problems.Add("the smith could not work: " + crafter.Blocked);
+                        }
+
+                        // And that it was at a REAL station when it did - a validated forge whose
+                        // arrival tile it is actually standing on, not merely somewhere that
+                        // happened to have an anvil.
+                        if (!OnStationArrival(smith, crafter.DestinationId))
+                        {
+                            problems.Add("the smith crafted away from a validated station arrival tile");
+                        }
+                        else
+                        {
+                            notes.Add("smith was on a validated station tile");
                         }
 
                         if (crafter.IsFull)
@@ -319,6 +453,31 @@ namespace Server.Custom
                 Log.Error(ex, "Work probe threw while reporting.");
                 Finish(bots, HealthResult.Fail("threw while reporting: " + ex.Message));
             }
+        }
+
+        private static bool OnStationArrival(PlayerBot bot, string destinationId)
+        {
+            if (bot == null || destinationId == null || BotWorkSites.IsExcluded(destinationId))
+            {
+                return false;
+            }
+
+            NavDestination station = Nav.Destination(destinationId);
+
+            if (station == null || station.ArrivalList == null)
+            {
+                return false;
+            }
+
+            foreach (NavArrival arrival in station.ArrivalList)
+            {
+                if (bot.X == arrival.X && bot.Y == arrival.Y)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static PlayerBot Find(List<PlayerBot> bots, BotClass cls)

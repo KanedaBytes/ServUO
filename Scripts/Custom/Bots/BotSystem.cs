@@ -81,6 +81,11 @@ namespace Server.Custom
             // Configure.
             BotWorkSites.Validate(Map.Trammel);
 
+            // The reach check lives in Nav.Data, not in Bots.Work: a thin site is a fact about the
+            // navigation data, and the person who needs to hear it is whoever just authored a site
+            // in the editor.
+            NavigationSystem.RegisterAuditor(() => BotWorkSites.ThinSites(Map.Trammel));
+
             HealthCheck.Register("Bots.Population", BuildHealthResult);
             HealthCheck.Register("Bots.Chat", ChatLibrary.BuildHealthResult);
             HealthCheck.Register("Bots.Work", BuildWorkHealthResult);
@@ -475,23 +480,14 @@ namespace Server.Custom
                 hauling);
 
             text.AppendFormat(
-                " {0} load(s) delivered, {1} unit(s). {2} pack animal(s) live, {3} reaped, {4} released.",
+                " {0} unit(s) mined, {1} load(s) delivered carrying {2} unit(s). "
+                + "{3} pack animal(s) live, {4} reaped, {5} released.",
+                BotWorkSites.Mined,
                 BotWorkSites.Deliveries,
                 BotWorkSites.Delivered,
                 BotPackAnimals.LiveCount(),
                 BotPackAnimals.Reaped,
                 BotPackAnimals.Released);
-
-            IList<string> stationless = BotWorkSites.Stationless;
-
-            if (stationless.Count > 0)
-            {
-                return HealthResult.Fail(String.Format(
-                    "{0} class(es) have nowhere to work: {1}. {2}",
-                    stationless.Count,
-                    String.Join("; ", ToArray(stationless)),
-                    text));
-            }
 
             var excluded = new List<string>();
 
@@ -508,6 +504,21 @@ namespace Server.Custom
                     "{0} work site(s) excluded at load: {1}. {2}",
                     excluded.Count,
                     String.Join("; ", ToArray(excluded)),
+                    text));
+            }
+
+            // A class with no station is a WARN, not a Fail. The Fisherman is the only one, it is
+            // a deliberately severed seam rather than a fault - there is no `dock` destination
+            // because the fishing half is a later session - and failing a health check for a
+            // planned gap trains people to ignore it.
+            IList<string> stationless = BotWorkSites.Stationless;
+
+            if (stationless.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} class(es) have nowhere to work: {1}. {2}",
+                    stationless.Count,
+                    String.Join("; ", ToArray(stationless)),
                     text));
             }
 

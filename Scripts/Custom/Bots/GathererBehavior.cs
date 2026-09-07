@@ -73,6 +73,8 @@ namespace Server.Custom
         private long _walkInDeadline;
         private long _nextSwing;
         private int _swings;
+        private int _carriedSeen;
+        private int _mined;
 
         /// <summary>Which site it was sent to, as a nav destination id. Set by the arrival handoff.</summary>
         public string DestinationId { get; set; }
@@ -85,6 +87,21 @@ namespace Server.Custom
         public int Swings
         {
             get { return _swings; }
+        }
+
+        /// <summary>
+        /// How much this shift has actually dug out of the ground.
+        ///
+        /// Not the same question as "how much is it carrying", and the difference is the whole
+        /// reason this field exists. EquipmentTable spawns every Miner with 3-15 IronOre as a
+        /// working stash from its last shift, so a bot that has mined NOTHING still walks into
+        /// town with a pack full of ore, hands it over, and looks from the outside exactly like
+        /// one that worked. That is precisely how the first work probe passed against sites that
+        /// had no rock on them.
+        /// </summary>
+        public int Mined
+        {
+            get { return _mined; }
         }
 
         public GathererBehavior()
@@ -116,15 +133,31 @@ namespace Server.Custom
             base.OnAttached(bot);
 
             _site = ResolveSite(bot);
-            _clockedIn = _site == null || Contains(_site, bot.Location);
+            _carriedSeen = Carried(bot);
 
-            if (!_clockedIn)
+            // NO UNPAINTED-SITE FALLBACK. Upstream's gatherer worked wherever it landed when no
+            // polygon was painted, and that is how a Miner ended up clocked in on the west bridge
+            // at 1400,1748 reporting "0 swings, carrying 9" - the 9 being its spawn kit. A bot
+            // with no zone has nowhere to work, and standing in a field pretending is worse than
+            // walking away.
+            if (_site == null)
             {
-                _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
+                Log.Warn(
+                    "{0} has no work zone at or around '{1}'; it cannot clock in and is leaving.",
+                    bot.Name,
+                    DestinationId ?? "(nowhere)");
+
+                bot.Behavior = BotBehaviors.Create("Traveler");
+                return;
+            }
+
+            if (CanClockIn(bot))
+            {
+                ClockIn(bot);
             }
             else
             {
-                ClockIn(bot);
+                _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
             }
 
             // A gatherer attached directly - by [BotBehavior, or by the probe - stamps its own
@@ -197,11 +230,12 @@ namespace Server.Custom
                 return;
             }
 
-            if (_site != null && !Contains(_site, bot.Location))
+            if (!CanClockIn(bot))
             {
                 if (_clockedIn)
                 {
-                    // Shoved out, or wandered out. Walk back in; the shift clock keeps running.
+                    // Shoved out, or worked the last tile within reach out. Walk back in; the
+                    // shift clock keeps running.
                     _clockedIn = false;
                     _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
                 }
@@ -214,6 +248,8 @@ namespace Server.Custom
             {
                 ClockIn(bot);
             }
+
+            NoticeYield(bot);
 
             TrySpeak(bot);
 
@@ -259,9 +295,63 @@ namespace Server.Custom
             StepAlongTheFace(bot);
         }
 
+        /// <summary>
+        /// Two conditions, and both are load-bearing: INSIDE the site's zone, and something within
+        /// harvest range to actually swing at.
+        ///
+        /// The zone alone is not enough - a face has thin edges, and a bot standing on one clocks
+        /// in and then swings at nothing for the length of its shift. The reach test is the same
+        /// sweep BotHarvest.FindTarget performs, so passing it means the very next swing finds a
+        /// target.
+        /// </summary>
+        private bool CanClockIn(PlayerBot bot)
+        {
+            if (_site == null || !Contains(_site, bot.Location))
+            {
+                return false;
+            }
+
+            HarvestDefinition definition = BotHarvest.DefinitionFor(bot.Class);
+
+            return definition != null
+                && BotWorkSites.ReachFrom(bot.Map, bot.Location, definition) > 0;
+        }
+
+        /// <summary>
+        /// Count what the harvest timer actually delivered since the last tick.
+        ///
+        /// HarvestSystem.Give drops the ore into the pack asynchronously, a second or so after the
+        /// swing, so the only honest way to know a swing produced anything is to watch the pack -
+        /// the same way CrafterBehavior watches for finished goods.
+        /// </summary>
+        private void NoticeYield(PlayerBot bot)
+        {
+            int carried = Carried(bot);
+
+            if (carried > _carriedSeen)
+            {
+                int gained = carried - _carriedSeen;
+
+                _mined += gained;
+                BotWorkSites.NoteMined(gained);
+            }
+
+            _carriedSeen = carried;
+        }
+
         private void ClockIn(PlayerBot bot)
         {
             Release(bot);
+
+            HarvestDefinition definition = BotHarvest.DefinitionFor(bot.Class);
+            int reach = definition == null ? 0 : BotWorkSites.ReachFrom(bot.Map, bot.Location, definition);
+
+            Log.Debug(
+                "{0} clocked in at {1} - inside zone '{2}', {3} harvestable tile(s) in reach.",
+                bot.Name,
+                bot.Location,
+                _site.Id,
+                reach);
 
             _clockedIn = true;
             _nextSwing = Core.TickCount;
@@ -414,23 +504,6 @@ namespace Server.Custom
         {
             Direction direction = (Direction)Utility.Random(8);
 
-            if (_site == null)
-            {
-                // No zone authored for this site - upstream's unpainted case, where a bot simply
-                // works where it landed. The reachability guard still applies: without a zone
-                // there is nothing else keeping it in range of the graph, so this branch needs it
-                // more than the painted one, not less.
-                Point3D free = Step(bot.Location, direction);
-
-                if (CanGetHomeFrom(bot, free))
-                {
-                    bot.Direction = direction;
-                    bot.Move(direction);
-                }
-
-                return;
-            }
-
             Point3D ahead = Step(bot.Location, direction);
 
             if (Contains(_site, ahead) && CanGetHomeFrom(bot, ahead))
@@ -500,8 +573,10 @@ namespace Server.Custom
         /// 40 tiles" for a behaviour restored from a save with no site name. Ours cannot be
         /// restored from a save — a bot is deleted on load — so the fallback here is only for a
         /// gatherer attached by hand, and it asks the same question: what work zone am I standing
-        /// in? A site with no zone authored is not an error; the bot simply works where it lands,
-        /// which is upstream's unpainted-site behaviour.
+        /// in?
+        ///
+        /// Returning null now MEANS SOMETHING: there is no zone, so there is no work, and
+        /// OnAttached walks the bot away rather than letting it mime a shift in a field.
         /// </summary>
         private NavZone ResolveSite(PlayerBot bot)
         {
