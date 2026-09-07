@@ -132,25 +132,41 @@ namespace Server.Custom
 
             TryRun(out summary, out report, out problems);
 
-            Emit(from, summary, problems.Count > 0);
+            // One block, not thirty overhead messages. A thirty-finding audit scrolled its own
+            // summary out of the journal before the last finding arrived, and the summary is the
+            // line you actually want. Report.Send keeps it a message when it is short.
+            var lines = new List<string> { summary };
 
             foreach (string line in report)
             {
-                Emit(from, "  " + line, true);
+                lines.Add("  " + line);
             }
 
             foreach (NavAuditProblem problem in problems)
             {
                 if (problem.Blocked)
                 {
-                    Emit(
-                        from,
-                        "  Note: a waypoint at a closed door is a false positive. Verify before editing.",
-                        true);
+                    lines.Add(
+                        "  Note: a waypoint at a closed door is a false positive. Verify before editing.");
 
                     break;
                 }
             }
+
+            if (from == null)
+            {
+                // Headless - the console path, which has no gump and no journal.
+                Emit(null, summary, problems.Count > 0);
+
+                for (int i = 1; i < lines.Count; i++)
+                {
+                    Emit(null, lines[i], true);
+                }
+
+                return;
+            }
+
+            CommandReport.Send(from, "[NavAudit", lines);
         }
 
         /// <summary>

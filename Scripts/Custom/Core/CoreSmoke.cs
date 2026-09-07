@@ -229,13 +229,12 @@ namespace Server.Custom
                 }
             }
 
-            // ...and to the invoker, when there is one.
+            // ...and to the invoker, when there is one. As a gump: a smoke report is thirty-odd
+            // lines and the verdict is on the last one, which is exactly the line the journal
+            // loses first.
             if (from != null && !from.Deleted)
             {
-                foreach (string line in report)
-                {
-                    from.SendMessage(passed ? 0x40 : 0x25, line);
-                }
+                CommandReport.Send(from, passed ? "[CoreSmoke - PASSED" : "[CoreSmoke - FAILED", report);
             }
         }
 

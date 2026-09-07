@@ -61,14 +61,14 @@ namespace Server.Custom
         [Description("Prints the real land tile, statics and walkability under every work-site arrival and corridor waypoint.")]
         private static void OnCommand(CommandEventArgs e)
         {
-            Run(e.Mobile);
+            Capture(e.Mobile, "[BotSiteAudit", () => Run(e.Mobile));
         }
 
         [Usage("BotOreSweep [radius]")]
         [Description("Sweeps a wide box around Britain for DENSE harvestable ground and names the land tiles, so a real rock face can be told from scattered forest-transition tiles.")]
         private static void OnSweep(CommandEventArgs e)
         {
-            Sweep(e.Mobile, e.Length > 0 ? e.GetInt32(0) : 400);
+            Capture(e.Mobile, "[BotOreSweep", () => Sweep(e.Mobile, e.Length > 0 ? e.GetInt32(0) : 400));
         }
 
         [Usage("BotSitePick <x> <y> [mine|chop]")]
@@ -81,7 +81,9 @@ namespace Server.Custom
                 return;
             }
 
-            Pick(e.Mobile, e.GetInt32(0), e.GetInt32(1), e.Length > 2 && Insensitive.Equals(e.GetString(2), "chop"));
+            Capture(e.Mobile, "[BotSitePick", () =>
+                Pick(e.Mobile, e.GetInt32(0), e.GetInt32(1),
+                    e.Length > 2 && Insensitive.Equals(e.GetString(2), "chop")));
         }
 
         /// <summary>
@@ -348,7 +350,7 @@ namespace Server.Custom
         [Description("Finds every anvil and forge near the smithy and reports which tiles satisfy DefBlacksmithy from both.")]
         private static void OnForge(CommandEventArgs e)
         {
-            Forge(e.Mobile);
+            Capture(e.Mobile, "[BotForgeAudit", () => Forge(e.Mobile));
         }
 
         /// <summary>
@@ -814,14 +816,64 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// Lines collected for the report gump, or null when nobody is capturing.
+        ///
+        /// A plain static because every one of these commands runs on the game thread and none of
+        /// them yields: Capture sets it, the work runs to completion, Capture clears it. Buffering
+        /// here rather than threading a list through forty call sites, which is the same fix done
+        /// forty times and forty chances to miss one.
+        /// </summary>
+        private static List<string> _capture;
+
         private static void Emit(Mobile from, string line)
         {
             Log.Info(line);
+
+            if (_capture != null)
+            {
+                _capture.Add(line);
+                return;
+            }
 
             if (from != null)
             {
                 from.SendMessage(0x40, line);
             }
+        }
+
+        /// <summary>
+        /// Run a command with its output collected into one scrollable report.
+        ///
+        /// These audits print a line per arrival point and per waypoint - a hundred and more, of
+        /// which the interesting ones are somewhere in the middle. In the journal that is a wall
+        /// that has already scrolled past by the time it finishes printing.
+        ///
+        /// A headless run captures nothing and goes to the console, which is where the only
+        /// reader is.
+        /// </summary>
+        private static void Capture(Mobile from, string title, Action work)
+        {
+            if (from == null)
+            {
+                work();
+                return;
+            }
+
+            var lines = new List<string>();
+
+            _capture = lines;
+
+            try
+            {
+                work();
+            }
+            finally
+            {
+                _capture = null;
+            }
+
+            CommandReport.Send(from, title, lines);
         }
     }
 }

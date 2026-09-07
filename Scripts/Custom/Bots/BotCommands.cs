@@ -200,15 +200,17 @@ namespace Server.Custom
 
             BotCaps caps = BotSystem.Caps;
 
+            var lines = new List<string>();
+
             // --- header ---------------------------------------------------------------------
-            from.SendMessage(0x35, String.Format("--- {0} ---", bot.Name));
+            lines.Add(String.Format("--- {0} ---", bot.Name));
 
             if (!String.IsNullOrEmpty(bot.Title))
             {
-                from.SendMessage(0x3B2, String.Format("  {0}", bot.Title));
+                lines.Add(String.Format("  {0}", bot.Title));
             }
 
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "Class: {0}   Tier: {1}",
                 BotClassHelper.DisplayName(bot.Class),
                 BotSkillTierHelper.DisplayName(bot.SkillTier)));
@@ -219,7 +221,7 @@ namespace Server.Custom
                 // "Class Crafter", and the station it works - forge, tailor shop, dock - is
                 // invisible, which is how a Crafter at the forge came to be told it had no
                 // station.
-                from.SendMessage(0x3B2, String.Format(
+                lines.Add(String.Format(
                     "Sub-type: {0}   Works as: {1}",
                     CrafterTypeHelper.DisplayName(bot.CrafterSpec),
                     BotClassHelper.DisplayName(bot.TradeClass)));
@@ -228,7 +230,7 @@ namespace Server.Custom
             // --- what it is doing -----------------------------------------------------------
             PlayerBotBehavior behaviour = bot.Behavior;
 
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "Behavior: {0}",
                 behaviour != null ? behaviour.SerializableName : "no brain"));
 
@@ -238,12 +240,12 @@ namespace Server.Custom
 
                 if (!String.IsNullOrEmpty(status))
                 {
-                    from.SendMessage(0x3B2, String.Format("  {0}", status));
+                    lines.Add(String.Format("  {0}", status));
                 }
 
                 string destination = behaviour.CurrentDestinationId;
 
-                from.SendMessage(0x3B2, String.Format(
+                lines.Add(String.Format(
                     "Destination: {0}", String.IsNullOrEmpty(destination) ? "-" : destination));
 
                 // Leg progress, which is the number that says whether a walker is moving or
@@ -253,7 +255,7 @@ namespace Server.Custom
 
                 if (walker != null && walker.Active && walker.Route != null)
                 {
-                    from.SendMessage(0x3B2, String.Format(
+                    lines.Add(String.Format(
                         "Leg: step {0} of {1}{2}",
                         walker.StepIndex,
                         walker.Route.Count,
@@ -266,7 +268,7 @@ namespace Server.Custom
             // --- stats ----------------------------------------------------------------------
             int statTotal = bot.RawStr + bot.RawDex + bot.RawInt;
 
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "Str/Dex/Int: {0} / {1} / {2}   (total {3} of {4})",
                 bot.RawStr,
                 bot.RawDex,
@@ -274,7 +276,7 @@ namespace Server.Custom
                 statTotal,
                 caps.StatTotal));
 
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "HP: {0}/{1}   Stam: {2}/{3}   Mana: {4}/{5}",
                 bot.Hits, bot.HitsMax,
                 bot.Stam, bot.StamMax,
@@ -284,13 +286,13 @@ namespace Server.Custom
             //
             // What the guards read when they decide whether to attack. Criminal or Murderer true
             // on a freshly spawned bot is a bug, and this block is where you see it.
-            from.SendMessage(0x35, "Notoriety:");
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add("Notoriety:");
+            lines.Add(String.Format(
                 "  Criminal: {0}   Murderer: {1}   Kills: {2}",
                 bot.Criminal, bot.Murderer, bot.Kills));
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "  Karma: {0}   Fame: {1}", bot.Karma, bot.Fame));
-            from.SendMessage(0x3B2, String.Format(
+            lines.Add(String.Format(
                 "  AccessLevel: {0}   Player: {1}", bot.AccessLevel, bot.Player));
 
             // --- skills ---------------------------------------------------------------------
@@ -312,7 +314,7 @@ namespace Server.Custom
 
             if (named.Count == 0)
             {
-                from.SendMessage(0x35, "Skills: none above zero.");
+                lines.Add("Skills: none above zero.");
             }
             else
             {
@@ -321,12 +323,12 @@ namespace Server.Custom
                 named.Sort(
                     delegate(Skill a, Skill b) { return b.Base.CompareTo(a.Base); });
 
-                from.SendMessage(0x35, String.Format(
+                lines.Add(String.Format(
                     "Skills, total {0:0.0} of {1:0.0}:", skillTotal, caps.SkillTotal));
 
                 foreach (Skill skill in named)
                 {
-                    from.SendMessage(0x3B2, String.Format(
+                    lines.Add(String.Format(
                         "  {0}{1:0.0}",
                         (skill.SkillName.ToString() + ":").PadRight(16),
                         skill.Base));
@@ -334,7 +336,7 @@ namespace Server.Custom
             }
 
             // --- personality and the phase clock ---------------------------------------------
-            from.SendMessage(0x3B2, bot.Personality.ToString());
+            lines.Add(bot.Personality.ToString());
 
             if (behaviour != null && bot.Personality.IsAssigned)
             {
@@ -352,7 +354,7 @@ namespace Server.Custom
                 // silly number and finding the bug.
                 if (bot.PhaseClockUnset)
                 {
-                    from.SendMessage(0x35, String.Format(
+                    lines.Add(String.Format(
                         "Phase {0}: CLOCK UNSET - this bot is permanently overdue and the "
                         + "lifecycle will roll it on its next pass.",
                         behaviour.SerializableName));
@@ -361,7 +363,7 @@ namespace Server.Custom
                 {
                     TimeSpan visit = behaviour.VisitExpiresAt.Value - CustomTime.Now;
 
-                    from.SendMessage(String.Format(
+                    lines.Add(String.Format(
                         "Phase {0}: a timed visit, {1:0} second(s) left.",
                         behaviour.SerializableName,
                         visit.TotalSeconds));
@@ -378,7 +380,7 @@ namespace Server.Custom
                         elapsed = phase;
                     }
 
-                    from.SendMessage(String.Format(
+                    lines.Add(String.Format(
                         "Phase {0}: {1:0}s of {2:0}s elapsed, {3:0}s left.",
                         behaviour.SerializableName,
                         elapsed.TotalSeconds,
@@ -386,6 +388,8 @@ namespace Server.Custom
                         left.TotalSeconds > 0 ? left.TotalSeconds : 0));
                 }
             }
+        
+            CommandReport.Send(from, String.Format("[BotInfo {0}", bot.Name), lines);
         }
 
         [Usage("BotLifecycle [on|off]")]
