@@ -341,6 +341,14 @@ namespace Server.Custom
 
             _state = TravelState.Walking;
 
+            // Run the long ones, walk the short ones - upstream's rule at
+            // TravelerBehavior.cs:1927, against its RunThresholdTiles of 25. No mount is granted
+            // here: a bot owns its horse from the moment it spawns, and getting one is a trip to
+            // the stables, not something that happens because it decided to go somewhere.
+            BotMovement.SetPace(
+                bot,
+                BotMovement.PaceForRoute(route) );
+
             BotLog.Note(bot, BotLogKind.Route, "departing for '{0}' ({1}), {2} hop(s)",
                 destination.Id, destination.Name, route.Count);
 
@@ -359,6 +367,11 @@ namespace Server.Custom
             }
 
             bot.Commuting = false;
+
+            // Arrived: stop running. Somebody who has got where they were going slows to a walk
+            // before they do anything else, and a bot still sprinting on the spot outside a shop
+            // is the single most obviously wrong thing about how they used to move.
+            BotMovement.SetPace(bot, BotPace.Walk);
 
             BotLog.Note(bot, BotLogKind.Arrive, "arrived at '{0}' ({1},{2})", _destinationId, bot.X, bot.Y);
 

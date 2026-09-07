@@ -384,6 +384,14 @@ namespace Server.Custom
             builder.Append(",\"class\":").Append(Json.Quote(BotClassHelper.DisplayName(bot.TradeClass)));
             builder.Append(",\"tier\":").Append(Json.Quote(bot.SkillTier.ToString()));
 
+            // How fast it is actually moving, and on what. Both are otherwise unobservable from
+            // outside the process: "is that bot running?" could only be answered by timing it
+            // across two snapshots, which a town jam or a bend in the road makes a lie. The step
+            // delay is the number BaseAI.DoMoveImpl derives the run flag from, so this is the
+            // same value the engine is acting on rather than an inference about it.
+            builder.Append(",\"stepMs\":").Append((int)Math.Round(bot.CurrentSpeed * 1000.0));
+            builder.Append(",\"mounted\":").Append(bot.Mounted ? "true" : "false");
+
             if (behaviour != null)
             {
                 builder.Append(",\"status\":").Append(Json.Quote(Safe(behaviour, bot)));

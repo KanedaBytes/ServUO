@@ -264,6 +264,9 @@ namespace Server.Custom
                 return;
             }
 
+            // Standing at a counter, not riding at one.
+            BotMovement.Settle(bot);
+
             // Stand NEAR where it arrived, not exactly on it.
             //
             // This is upstream's PickScatteredHome and the reason for it is worth keeping with it:

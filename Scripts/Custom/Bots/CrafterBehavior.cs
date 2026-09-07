@@ -160,6 +160,9 @@ namespace Server.Custom
         {
             base.OnAttached(bot);
 
+            // Working a forge or a loom, on foot.
+            BotMovement.Settle(bot);
+
             _profile = CrafterProfiles.For(bot);
             _anchor = bot.Location;
 

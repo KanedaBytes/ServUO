@@ -188,7 +188,7 @@ namespace Server.Custom
                 return 0.0;
             }
 
-            tiles = RouteTiles(route);
+            tiles = BotMovement.RouteTiles(route);
 
             double half = config.DistanceHalfTiles;
 
@@ -198,33 +198,6 @@ namespace Server.Custom
             }
 
             return 1.0 / (1.0 + (tiles / half));
-        }
-
-        /// <summary>
-        /// The length of a route in tiles, summed hop by hop.
-        ///
-        /// Not the step count, which counts a twelve-tile hop and a one-tile hop the same, and not
-        /// NavRoute.Cost, which is weighted by road tags for the SEARCH and so is not a distance
-        /// at all - a road hop costs 0.9 of what it measures.
-        /// </summary>
-        private static int RouteTiles(NavRoute route)
-        {
-            if (route == null || route.Steps == null || route.Steps.Count < 2)
-            {
-                return 0;
-            }
-
-            int tiles = 0;
-
-            for (int i = 1; i < route.Steps.Count; i++)
-            {
-                Point3D a = route.Steps[i - 1].Point;
-                Point3D b = route.Steps[i].Point;
-
-                tiles += Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
-            }
-
-            return tiles;
         }
 
         /// <summary>

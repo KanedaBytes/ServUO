@@ -402,6 +402,86 @@ floor cannot make one bank the only place anybody goes. **Bots already routing t
 the floor.** Validated at load: a floor larger than the destination's authored arrival points warns
 (`brit-bank` has four).
 
+### Bots move at a player's pace, and ride
+
+Every bot moved at exactly half a second a step, which is the one speed nothing in UO moves at.
+The half-second was `SpeedInfo.MaxDelay`: `GetSpeedsNew` derives a creature's speed from its Dex,
+`PassiveSpeed` is twice `ActiveSpeed`, and `TransformMoveDelay` clamps the result to 0.5
+(`Scripts/Mobiles/AI/SpeedInfo.cs:14,18-42,54-74`). Every bot sat on that clamp, which is why they
+all moved alike whatever their Dex and why none ever played a run animation.
+
+The delay is not decoration - `BaseAI.DoMoveImpl` derives the run flag from it
+(`Scripts/Mobiles/AI/BaseAI.cs:2336-2343`):
+
+```
+delay   = TransformMoveDelay(CurrentSpeed) * 1000
+running = CanRun && (mounted ? delay < Mobile.WalkMount : delay < Mobile.WalkFoot)
+```
+
+so 200ms on foot is a run and 400ms is a walk, exactly as for a player.
+
+**The four delays are the engine's, not ours.** uo-offline aliases them
+(`using MoveDelays = Server.Movement.Movement`, `CustomBots/Behaviors/TravelerBehavior.cs:23` and
+`AdventurerBehavior.cs:28`) - not a local shadow, it resolves to ModernUO's
+`Server/Mobiles/Movement.cs:18-36`, whose defaults are 400 / 200 / 200 / 100. ServUO holds the
+identical four at `Server/Mobile.cs:3063-3071`. `BotMovement.DelayFor` reads them from there, so a
+shard that retunes movement retunes its bots with it.
+
+| | foot | mount |
+| --- | --- | --- |
+| walk | `Mobile.WalkFoot` 400ms | `Mobile.WalkMount` 200ms |
+| run | `Mobile.RunFoot` 200ms | `Mobile.RunMount` 100ms |
+
+Selected upstream at `CustomBots/Behaviors/TravelerBehavior.cs:3228-3238`, and here in
+`BotMovement.DelayFor`, on the same two axes.
+
+**Carried over verbatim:**
+
+- **Run the long ones.** `running = forceRunning || dist > RunThresholdTiles`, with the threshold
+  25 (`TravelerBehavior.cs:1803,1918-1927`).
+- **Most bots own a horse.** A 70% roll at spawn, excluding Fishermen and gatherers
+  (`PlayerBot.cs:743-753`). Class only - there is **no tier component upstream**, and none was
+  invented here.
+- **The mount pool and its weighting.** Horse four times, then the three ostards and a llama
+  (`BotMountHelper.cs:28-43`); 75% keep their coat, 25% take a muted hue (`:50-54`); five attempts
+  (`:66-100`). Pack beasts are absent - nobody rides one.
+- **The stables ritual.** A Tamer at the stables stables a horse it has 40% of the time, or claims
+  one 60% of the time if it has none (`TravelerBehavior.cs:2399-2425`).
+- **Gatherers work on foot** (`GathererBehavior.cs:108-119,258-268`) and **the mount does not
+  survive its rider** (`PlayerBot.cs:779,856`).
+
+**Where we deviate, and why:**
+
+- **The threshold is measured over the whole route, not one hop.** Upstream's "leg" runs between
+  destination waypoints and can be long; a leg here is one graph hop, capped at
+  `Custom.NavHopMaxTiles` = 12, so `dist > 25` could never once be true and no bot would ever run.
+  The route is what one of their legs corresponds to.
+- **Speed is set on the creature, not by a per-behaviour step timer.** Upstream owns its own
+  `_stepTimer` and calls `StepOnce`; we drive `BaseCreature.ActiveSpeed` / `PassiveSpeed` /
+  `CurrentSpeed` and let `BaseAI.DoMoveImpl` do what it does for every other creature. Both speeds
+  are written, because `BaseAI` picks between them by its own `ActionType` and a commuting bot is
+  "wandering" as far as it is concerned - setting only `ActiveSpeed` left it on the clamp again.
+  `CurrentSpeed` is only written when it changes: the setter restarts the AI think timer
+  (`BaseAI.cs:3031-3037`), and writing it every tick would stop and restart that timer ten times a
+  second and the bot would never think.
+- **`NavWalker` drives at 100ms, not 250ms.** Its tick was documented as a ceiling that costs
+  nothing, and that is true only while it sits above everything underneath it. At 250ms a bot told
+  to run at 200ms on foot, or 100ms mounted, was held to 250 - so the ceiling *was* the speed. It
+  is now `Mobile.RunMount`, the fastest step the engine defines, and the per-walker `MoveTo` is
+  gated on `BaseAI.NextMove` so ticking two and a half times as often does not run a
+  `MovementPath` two and a half times as often.
+- **Bots settle at a bank, a station and a shop.** `BotMovement.Settle` dismounts and drops to a
+  walk. Upstream gives a mount up only at the stables, on death, or before swinging a pick, so its
+  BankSitters stand at the counter mounted. Here that reads wrong for the reason the arrival points
+  already do: a mounted bot is a bigger obstacle in a crowd that jams, and a bank full of horses is
+  not what a bank looks like.
+
+**Verifying it.** The live snapshot carries `stepMs` and `mounted` per bot, and the editor's Bots
+panel reads them back as "running, mounted (100ms/step)". Both are otherwise unobservable from
+outside the process: timing a bot across two snapshots measures the town jam and the bends in the
+road, not its speed. Measured on a live shard, mounted bots report 100ms and unmounted 200ms while
+travelling - `Mobile.RunMount` and `Mobile.RunFoot` exactly.
+
 ### Work sites are weighted by how far they actually are
 
 Weighting had no distance term at all, so a Miner weighed a face on the far side of the map exactly

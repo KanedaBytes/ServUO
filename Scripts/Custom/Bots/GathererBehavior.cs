@@ -450,17 +450,12 @@ namespace Server.Custom
             _nextSwing = Core.TickCount;
 
             // Mining refuses a mounted digger outright (Mining.cs:501), and a mounted bot plays no
-            // swing animation either. Nothing mounts a bot yet; this is the guard for when
-            // something does.
-            if (bot.Mounted)
-            {
-                var mount = bot.Mount;
-
-                if (mount != null)
-                {
-                    mount.Rider = null;
-                }
-            }
+            // swing animation either. Something does mount a bot now, so this is load-bearing
+            // rather than a guard - and it removes the animal rather than only clearing the
+            // rider, which the old form left standing in the mine for ever.
+            //
+            // Working is walking pace: shuffling along a rock face is not a journey.
+            BotMovement.Settle(bot);
 
             BotPackAnimals.SpawnFor(bot);
         }
@@ -568,6 +563,9 @@ namespace Server.Custom
 
             bot.Commuting = true;
             _walkingIn = true;
+
+            // The commute is a journey; the shift is not. Same rule the Traveler uses.
+            BotMovement.SetPace(bot, BotMovement.PaceForRoute(route));
 
             BotLog.Note(bot, BotLogKind.Route, "walking in to '{0}', {1} hop(s) from {2},{3}",
                 DestinationId, route.Count, bot.X, bot.Y);

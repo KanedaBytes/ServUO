@@ -283,6 +283,16 @@ namespace Server.Custom
             RangeHome = 0;
 
             LiveRegistry.Register(this);
+
+            // A bot owns its horse from the moment it exists (upstream PlayerBot.cs:743-753), but
+            // it cannot be given one here: Rider= needs the mount in the world on the same map,
+            // and in the constructor there is no map yet.
+            //
+            // Deferred by one tick rather than hung off OnAfterSpawn, which only fires for the
+            // spawner path - [SpawnBot, the probes and the population all call MoveToWorld
+            // directly and would never have been given a mount at all. Same idiom the ephemeral
+            // NPCs use for the same reason: the world is ready on the next tick, not this one.
+            Timer.DelayCall(TimeSpan.Zero, BotMovement.RollMount, this);
         }
 
         public PlayerBot(Serial serial)
@@ -422,6 +432,11 @@ namespace Server.Custom
         {
             base.OnDeath(c);
 
+            // The mount does not survive its rider. Upstream dismounts in OnBeforeDeath
+            // (PlayerBot.cs:779); ServUO has no such hook, so it happens here - after the corpse
+            // is built, which is the only ordering difference.
+            BotMovement.Dismount(this);
+
             // Player=true mobiles ghost rather than vanish (Mobile.cs:4229), and there is no
             // death layer yet to haunt, walk to a healer and run back for the corpse. Delete on a
             // short delay rather than inline, so the death packets and the corpse have finished
@@ -511,6 +526,10 @@ namespace Server.Custom
             // seconds anyway, but leaving a llama standing in a field for ten seconds after the
             // miner vanished is exactly the kind of loose end that becomes a stray.
             BotPackAnimals.Release(this);
+
+            // And so does the horse, for the same reason: a mount whose rider was deleted is an
+            // orphan nothing owns and nothing reaps. Upstream does this at PlayerBot.cs:856.
+            BotMovement.Dismount(this);
 
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);

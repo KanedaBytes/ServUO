@@ -839,6 +839,21 @@ function renderBotDetail(bot) {
 
     dom.botDetail.append(name, kind, status);
 
+    // How it is moving, named rather than left as a number. The step delay is what
+    // BaseAI.DoMoveImpl derives the run flag from, so 200 on foot IS running - but nobody reads
+    // it that way at a glance, and "is that one running or walking?" is the question this panel
+    // exists to answer without timing a bot across two snapshots.
+    if (typeof bot.stepMs === 'number') {
+        const pace = document.createElement('div');
+        const running = bot.stepMs <= (bot.mounted ? 100 : 200);
+
+        pace.className = 'muted';
+        pace.textContent = `${running ? 'running' : 'walking'}`
+            + `${bot.mounted ? ', mounted' : ', on foot'} (${bot.stepMs}ms/step)`;
+
+        dom.botDetail.append(pace);
+    }
+
     if (bot.dest) {
         const dest = document.createElement('div');
 

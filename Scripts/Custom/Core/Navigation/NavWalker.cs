@@ -63,11 +63,17 @@ namespace Server.Custom
         private static readonly CustomLogger Log = CustomLogger.For("Nav");
 
         /// <summary>
-        /// How often walkers are driven. This is a ceiling, not the movement rate: DoMove has
+        /// How often walkers are driven. A ceiling, not the movement rate: BaseAI.DoMoveImpl has
         /// its own NextMove gate derived from the creature's speed, so driving faster than the
-        /// creature can walk costs nothing but makes movement smooth.
+        /// creature can step costs nothing but makes movement smooth.
+        ///
+        /// It WAS the movement rate, though, and quietly. At 250ms nothing could step faster than
+        /// four times a second, so a bot set to a player's run - 200ms on foot, 100ms mounted -
+        /// was held to 250ms and ran at less than half the speed it had been told to. A ceiling
+        /// only costs nothing while it is above everything underneath it. 100ms is the fastest
+        /// step the engine defines (Mobile.RunMount), so nothing is capped by this again.
         /// </summary>
-        private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(0.25);
+        private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(0.10);
 
         /// <summary>How long one hop may take before it counts as failed.</summary>
         private static readonly TimeSpan HopTimeout = TimeSpan.FromSeconds(20.0);
@@ -370,10 +376,24 @@ namespace Server.Custom
 
             BaseAI ai = _mobile.AIObject;
 
-            if (ai != null)
+            if (ai == null)
             {
-                ai.MoveTo(_goal, Run, range);
+                return;
             }
+
+            // Only ask for a step when the creature is due one. MoveTo runs a MovementPath, which
+            // is the expensive half of this tick, and driving at 100ms rather than 250ms would
+            // otherwise run it two and a half times as often for every walker on the shard. The
+            // creature's own NextMove is exactly the right clock: it is what DoMoveImpl would
+            // check anyway, one subtraction earlier.
+            //
+            // Wraparound-safe: compare by subtraction, never a < b.
+            if (Core.TickCount - ai.NextMove < 0)
+            {
+                return;
+            }
+
+            ai.MoveTo(_goal, Run, range);
         }
 
         private void Advance()
