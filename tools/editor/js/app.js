@@ -25,8 +25,8 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, drawRoute, BEHAVIOR_COLORS,
-    hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
+    hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode, syncDerived
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
@@ -69,6 +69,18 @@ const state = {
     // The last [NavAudit result, drawn over the edges.
     audit: null,
 
+    // The ids of the current unsaved corridor proposal, so it can be replaced or edited as a
+    // unit. Null once it has been saved or discarded.
+    //
+    // The walked path itself is deliberately NOT kept. It was drawn as a polyline once, and the
+    // moment a proposed waypoint was dragged the road stayed where the probe had walked while the
+    // point moved away from it - two pictures of the same road disagreeing. The hops are edges
+    // now, derived from the waypoints like every other edge, so there is only one picture.
+    proposal: null,
+
+    // What the shard last said about individual hops, by edge id.
+    hopFlags: null,
+
     // The Bots panel: which bot is open, and the last log the shard wrote.
     botLog: null,
     selectedBot: null,
@@ -76,7 +88,6 @@ const state = {
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
     worksitesVisible: false,
-    route: null,
 
     selected: null,
     hovered: null,
@@ -821,6 +832,223 @@ function renderBotDetail(bot) {
     dom.botDetail.append(events);
 }
 
+/**
+ * Everything a corridor proposal can be edited with, without reaching for another tool.
+ *
+ * A proposal is ordinary waypoint and edge records, so dragging already works; what these add is
+ * the two operations that would otherwise mean deleting an edge, deleting a point, and drawing two
+ * more by hand - and the re-verification that makes an edit trustworthy rather than hopeful.
+ */
+
+/** The edges of the proposal that touch this waypoint. */
+function hopsTouching(waypointId) {
+    return state.shapes.filter((shape) =>
+        shape.layer === 'nav-edges'
+        && (shape.props.from === waypointId || shape.props.to === waypointId));
+}
+
+/**
+ * Remove a waypoint and join what it was between.
+ *
+ * Deleting a point out of a road otherwise leaves a gap: its two hops go with it and the road is
+ * in two pieces. Relinking is what makes "this waypoint is unnecessary" a single action rather
+ * than three, and it is the common edit - the search proposes a point every ten tiles whether or
+ * not the road bends there.
+ */
+function deleteAndRelink(shape) {
+    const id = shape.props.id;
+    const touching = hopsTouching(id);
+
+    const neighbours = [];
+
+    for (const hop of touching) {
+        const other = hop.props.from === id ? hop.props.to : hop.props.from;
+
+        if (!neighbours.includes(other)) {
+            neighbours.push(other);
+        }
+    }
+
+    pushOp({ op: 'delete', shapeId: shape.id, shape });
+
+    for (const hop of touching) {
+        removeShape(hop);
+    }
+
+    removeShape(shape);
+
+    // Only an interior point relinks. An end has one neighbour and nothing to join it to, which
+    // is correct: deleting the end of a road shortens the road.
+    if (neighbours.length === 2) {
+        const a = state.shapes.find((s) => s.layer === 'nav' && s.props.id === neighbours[0]);
+        const b = state.shapes.find((s) => s.layer === 'nav' && s.props.id === neighbours[1]);
+
+        if (a && b) {
+            const edge = buildShape('edge', {}, state.facet.name,
+                { points: [a.points[0], b.points[0]] },
+                { ids: [neighbours[0], neighbours[1]] });
+
+            createShape(edge);
+
+            if (state.proposal) {
+                state.proposal.add(edge.id);
+            }
+
+            verifyHops([edge]);
+        }
+    }
+
+    state.selected = null;
+    showProperties(null);
+    fillLists(state.shapes);
+    syncDerived(state.shapes);
+    updateToolbar();
+    requestRender();
+
+    setStatus(neighbours.length === 2
+        ? `Removed ${id} and joined its neighbours.`
+        : `Removed ${id}.`, 'ok');
+}
+
+/**
+ * Put a waypoint in the middle of a hop, splitting it in two.
+ *
+ * The other half of the same idea: the search puts points at a fixed spacing, so a road that has
+ * to bend around something usually needs one MORE point exactly where the bend is. Double-clicking
+ * the hop is where somebody is already looking when they notice.
+ */
+function insertOnHop(edge, worldX, worldY) {
+    const from = edge.props.from;
+    const to = edge.props.to;
+
+    const x = Math.floor(worldX);
+    const y = Math.floor(worldY);
+
+    // Z is taken from the hop's own end rather than assumed flat: a road on a slope has a real Z
+    // at every point, and a new point at 0 would be underground.
+    const z = edge.points[0][2] || 0;
+
+    const id = nextId(x, y, state.facet.name, state.shapes);
+
+    const waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
+        state.facet.name, { points: [[x, y, z]] }, {});
+
+    waypoint.points = [[x, y, z]];
+
+    pushOp({ op: 'delete', shapeId: edge.id, shape: edge });
+    removeShape(edge);
+
+    createShape(waypoint);
+
+    const left = buildShape('edge', {}, state.facet.name,
+        { points: [[0, 0, 0], [0, 0, 0]] }, { ids: [from, id] });
+    const right = buildShape('edge', {}, state.facet.name,
+        { points: [[0, 0, 0], [0, 0, 0]] }, { ids: [id, to] });
+
+    createShape(left);
+    createShape(right);
+
+    if (state.proposal) {
+        state.proposal.add(waypoint.id);
+        state.proposal.add(left.id);
+        state.proposal.add(right.id);
+    }
+
+    syncDerived(state.shapes);
+    verifyHops([left, right]);
+
+    setStatus(`Inserted ${id} into that hop.`, 'ok');
+    requestRender();
+}
+
+/**
+ * Ask the shard whether these hops are walkable, and colour them by the answer.
+ *
+ * The browser cannot answer this - it has no map data and no movement rules - and an edit that
+ * merely looked plausible is exactly what the corridor tool exists to stop somebody saving. The
+ * probe drives the same real BaseCreature the proposal was built with, so a hop that passes here
+ * passes for the same reason the original ones did.
+ */
+async function verifyHops(edges) {
+    const pairs = [];
+
+    for (const edge of edges) {
+        if (!edge.points || edge.points.length < 2) {
+            continue;
+        }
+
+        pairs.push(`${edge.points[0][0]},${edge.points[0][1]}`);
+        pairs.push(`${edge.points[1][0]},${edge.points[1][1]}`);
+    }
+
+    if (pairs.length === 0) {
+        return;
+    }
+
+    try {
+        const dropped = await api.request('nav-hop', `verify ${pairs.join(' ')}`);
+
+        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+
+        const answer = await api.hops();
+        const flags = new Map(state.hopFlags || []);
+
+        answer.hops.forEach((hop, index) => {
+            if (edges[index]) {
+                flags.set(edges[index].id, hop.ok);
+            }
+        });
+
+        state.hopFlags = flags;
+        setHopFlags(flags);
+
+        const bad = answer.hops.filter((hop) => !hop.ok).length;
+
+        if (bad > 0) {
+            setStatus(`${bad} hop(s) the engine will not walk - shown in red.`, 'error');
+        }
+
+        requestRender();
+    } catch (error) {
+        setStatus(`Could not verify that hop: ${error.message}`, 'warn');
+    }
+}
+
+/**
+ * Pull a point onto the nearest made road.
+ *
+ * Shift-drag, because it is the same gesture as a drag and the modifier says "and tidy it up".
+ * Which tiles are road is a fact about the client's tiledata, so the shard answers it - the same
+ * classification the search weights by, rather than a second opinion that could disagree.
+ */
+async function snapToRoad(shape) {
+    const [x, y] = shape.points[0];
+
+    try {
+        const dropped = await api.request('nav-hop', `snap ${x},${y}`);
+
+        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+
+        const answer = await api.hops();
+
+        if (!answer.snap) {
+            setStatus('No road within reach of that point.', 'warn');
+            return;
+        }
+
+        shape.points = [answer.snap.slice()];
+        markDirty(shape);
+        syncDerived(state.shapes);
+
+        verifyHops(hopsTouching(shape.props.id));
+
+        setStatus(`Snapped ${shape.props.id} to the road at ${answer.snap[0]},${answer.snap[1]}.`, 'ok');
+        requestRender();
+    } catch (error) {
+        setStatus(`Could not snap: ${error.message}`, 'warn');
+    }
+}
+
 function requestRender() {
     if (pending) {
         return;
@@ -844,10 +1072,6 @@ function render() {
     }
 
     drawShapes(ctx, view, state.shapes, state.visible, state.selected, state.hovered, matchingShapes());
-
-    if (state.route) {
-        drawRoute(ctx, view, state.route);
-    }
 
     if (state.worksitesVisible) {
         worksites.draw(ctx, view);
@@ -1227,6 +1451,30 @@ function createShape(shape) {
     setStatus(`Created ${shape.id}. Save to write it.`, 'ok');
 }
 
+/**
+ * Take a shape out without the ceremony deleteSelected performs.
+ *
+ * Same bookkeeping - unsaved records simply stop existing, saved ones become a pending delete -
+ * but no selection change, no status line and no undo entry, because the callers are batch
+ * operations that push one undo entry of their own. Splitting this out is what lets a proposal be
+ * replaced, or a waypoint relinked, without four status lines flashing past.
+ */
+function removeShape(shape) {
+    state.shapes = state.shapes.filter((s) => s.id !== shape.id);
+
+    if (state.created.has(shape.id)) {
+        state.created.delete(shape.id);
+    } else {
+        state.deleted.set(shape.id, shape);
+    }
+
+    state.dirty.delete(shape.id);
+
+    if (state.proposal) {
+        state.proposal.delete(shape.id);
+    }
+}
+
 function deleteSelected() {
     const shape = state.selected;
 
@@ -1317,21 +1565,21 @@ function toolClick(worldX, worldY) {
         return true;
     }
 
-    // Two bare points, unlike 'pair', which collects two existing shapes. A road may start and
-    // end anywhere - the whole reason for it is usually that there are no waypoints out there yet.
-    if (tool.kind === 'pair-points') {
+    // Bare points, unlike 'pair' and 'chain', which collect existing shapes. A road may start
+    // and end anywhere - the whole reason for wanting one is usually that there are no waypoints
+    // out there yet - and the points between the ends are VIA points, steering it by hand.
+    //
+    // Steering matters because the search optimises for cost, and cheapest is not always the road
+    // somebody has in mind: two ways round a building can differ by a handful of tiles and by a
+    // great deal of sense.
+    if (tool.kind === 'point-chain') {
         state.draft.points.push([x, y, 0]);
 
-        if (state.draft.points.length === 1) {
-            setHint(tool.hint2);
-            requestRender();
-            return true;
-        }
+        setHint(state.draft.points.length === 1
+            ? tool.hint2
+            : `${state.draft.points.length} point(s). Click more, or press Enter to route it.`);
 
-        const [a, b] = state.draft.points;
-
-        cancelTool();
-        proposeCorridor(a, b);
+        requestRender();
         return true;
     }
 
@@ -1424,56 +1672,87 @@ async function confirmModal(title, detail) {
 }
 
 /**
- * Ask the shard to walk a road, then offer its hops as waypoints and edges.
+ * Ask the shard to walk a road through every point given, and offer it as waypoints and edges.
  *
- * NOTHING IS SAVED HERE, and nothing is even created until the author says so. The shard returns
- * a road it has verified - every hop walked by a real creature, doors and gates included - and
- * this turns that into ordinary unsaved waypoint and edge records, which behave exactly like
- * hand-placed ones: draggable, deletable, undoable, and written only by an explicit save.
+ * NOTHING IS SAVED HERE, and nothing is created until the author says so. Each consecutive pair is
+ * routed as its own leg and the legs are joined, so a via point is a hard constraint the road must
+ * pass through rather than a hint the search may ignore.
  *
  * A road the shard could not finish still draws. "It reaches the gate and stops" is a different
  * problem from "it never leaves town", and seeing where it stopped is most of the diagnosis.
  */
-async function proposeCorridor(a, b) {
-    setStatus('Asking the shard to walk that road...', 'ok');
-
-    let answer;
-
-    try {
-        const body = `${a[0]},${a[1]} ${b[0]},${b[1]} ${state.facet.name}`;
-        const dropped = await api.request('nav-route', body);
-        const ack = await api.awaitAck('nav-route', { nonce: dropped.nonce, timeoutMs: 120000 });
-
-        answer = await api.route();
-        setStatus(ack.message, answer.ok ? 'ok' : 'error');
-    } catch (error) {
-        setStatus(`The shard could not walk that road: ${error.message}`, 'error');
+async function proposeCorridor(points) {
+    if (!(await confirmReplaceProposal())) {
         return;
     }
 
-    state.route = answer;
-    requestRender();
+    const legs = [];
+    let hops = [];
+    let tiles = 0;
+    let complete = true;
+    let failure = null;
 
-    if (!answer.hops || answer.hops.length < 2) {
-        showBanner(`No road: ${answer.error || 'the shard walked nothing'}`);
+    for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1];
+        const b = points[i];
+
+        setStatus(`Walking leg ${i} of ${points.length - 1}...`, 'ok');
+
+        let answer;
+
+        try {
+            const body = `${a[0]},${a[1]} ${b[0]},${b[1]} ${state.facet.name}`;
+            const dropped = await api.request('nav-route', body);
+
+            await api.awaitAck('nav-route', { nonce: dropped.nonce, timeoutMs: 120000 });
+            answer = await api.route();
+        } catch (error) {
+            setStatus(`The shard could not walk leg ${i}: ${error.message}`, 'error');
+            return;
+        }
+
+        legs.push({ tiles: (answer.points || []).length, ok: answer.ok, error: answer.error });
+        tiles += (answer.points || []).length;
+
+        if (!answer.ok) {
+            complete = false;
+            failure = answer.error;
+        }
+
+        // The joint is dropped rather than kept twice: the end of one leg and the start of the
+        // next are the same tile, and two waypoints on it would be a zero-length hop.
+        const legHops = answer.hops || [];
+
+        hops = hops.length === 0 ? legHops.slice() : hops.concat(legHops.slice(1));
+    }
+
+    if (hops.length < 2) {
+        showBanner(`No road: ${failure || 'the shard walked nothing'}`);
         return;
     }
 
-    const count = answer.hops.length;
+    const summary = legs.length === 1
+        ? `${tiles} tiles, ${hops.length} waypoints proposed`
+        : `${legs.length} legs, ${tiles} tiles in total, ${hops.length} waypoints proposed`;
+
     const proceed = await confirmModal(
         'Propose this road?',
-        `${answer.points.length} tiles walked, ${count} waypoints proposed`
-        + `${answer.ok ? ', every hop verified' : `. NOT complete: ${answer.error}`}`
+        `${summary}${complete ? ', every hop verified' : `. NOT complete: ${failure}`}`
         + '. Created unsaved - drag, edit or delete them, then Save to write them.');
 
     if (!proceed) {
         return;
     }
 
+    createProposal(hops);
+}
+
+/** Turn a verified hop list into unsaved waypoint and edge records. */
+function createProposal(hops) {
     const created = [];
     let previous = null;
 
-    for (const [x, y, z] of answer.hops) {
+    for (const [x, y, z] of hops) {
         const id = nextId(x, y, state.facet.name, [...state.shapes, ...created]);
 
         const waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
@@ -1497,7 +1776,50 @@ async function proposeCorridor(a, b) {
         createShape(shape);
     }
 
-    setStatus(`Proposed ${count} waypoint(s) and ${count - 1} edge(s). Save to write them.`, 'ok');
+    // Remembered so the tool can offer to replace it, and so editing knows which records are a
+    // proposal rather than part of the authored graph.
+    state.proposal = new Set(created.map((shape) => shape.id));
+
+    syncDerived(state.shapes);
+    setStatus(`Proposed ${hops.length} waypoint(s). Drag to adjust, then Save.`, 'ok');
+    requestRender();
+}
+
+/**
+ * Ask before throwing away a proposal that has not been saved.
+ *
+ * A road is several minutes of walking and adjusting, and the second corridor somebody draws is
+ * usually the one meant to REPLACE the first - but not always, and losing the first silently is
+ * the kind of thing that is only noticed after the save.
+ */
+async function confirmReplaceProposal() {
+    const live = [...(state.proposal || [])].filter((id) => state.created.has(id));
+
+    if (live.length === 0) {
+        state.proposal = null;
+        return true;
+    }
+
+    const replace = await confirmModal(
+        'Replace the current proposal?',
+        `${live.length} unsaved record(s) from the last road will be discarded.`);
+
+    if (!replace) {
+        return false;
+    }
+
+    for (const id of live) {
+        const shape = state.shapes.find((candidate) => candidate.id === id);
+
+        if (shape) {
+            removeShape(shape);
+        }
+    }
+
+    state.proposal = null;
+    syncDerived(state.shapes);
+
+    return true;
 }
 
 /** The Site tool's one modal, taken early. See the comment in toolClick. */
@@ -1530,6 +1852,19 @@ async function askForSite(x, y) {
 
 function finishTool() {
     const tool = state.tool;
+
+    if (tool && tool.kind === 'point-chain') {
+        if (tool !== state.tool || state.draft.points.length < 2) {
+            setStatus('A road needs at least a start and an end.', 'error');
+            return;
+        }
+
+        const points = state.draft.points.map(([x, y]) => [x, y]);
+
+        cancelTool();
+        proposeCorridor(points);
+        return;
+    }
 
     if (tool && tool.kind === 'site' && tool.phase === 2) {
         if (tool.arrivals.length === 0) {
@@ -1798,6 +2133,12 @@ function wireInput() {
             }
 
             moveShape(drag.shape, dx, dy);
+
+            // Re-derived on every frame of the drag, not just at the end: a hop that only caught
+            // up on mouse-up would make the road look broken for the length of the gesture.
+            if (drag.shape.layer === 'nav') {
+                syncDerived(state.shapes);
+            }
             drag.originX += dx;
             drag.originY += dy;
         }
@@ -1837,8 +2178,19 @@ function wireInput() {
 
         markDirty(drag.shape);
 
+        // Shift means "and put it on the road". Checked at the END of the drag, not the start, so
+        // the modifier can be decided after seeing where the point landed.
+        if (drag.shape.layer === 'nav' && event.shiftKey) {
+            snapToRoad(drag.shape);
+        } else if (drag.shape.layer === 'nav') {
+            verifyHops(hopsTouching(drag.shape.props.id));
+        }
+
         // Moving a waypoint changes the coverage field and every edge length that touches it.
         if (drag.shape.layer === 'nav') {
+            // The edges are pictures of ids, so they have to be redrawn from where the waypoint
+            // is NOW. Without this the dot moves and its hops stay pointing at where it was.
+            syncDerived(state.shapes);
             coverage.invalidate();
 
             if (state.coverageVisible) {
@@ -1847,6 +2199,19 @@ function wireInput() {
         }
 
         requestRender();
+    });
+
+    // Double-clicking a hop puts a point in it. The gesture is on the hop rather than in a menu
+    // because it needs a POSITION - where in the hop the new point goes - and a menu would have
+    // thrown that away by the time it was chosen.
+    canvas.addEventListener('dblclick', (event) => {
+        const [worldX, worldY] = worldAt(event);
+        const hit = pick(view, state.shapes, state.visible, worldX, worldY);
+
+        if (hit && hit.layer === 'nav-edges' && isWritable(hit)) {
+            event.preventDefault();
+            insertOnHop(hit, worldX, worldY);
+        }
     });
 
     canvas.addEventListener('wheel', (event) => {
@@ -1868,6 +2233,15 @@ function wireInput() {
             items.push({ label: 'Centre on this', run: () => { select(hit); centerOnShape(hit); } });
 
             if (isWritable(hit)) {
+                // Relinking is offered for any waypoint with two hops, proposal or not: leaving a
+                // road in two pieces is never what somebody deleting a middle point meant.
+                if (hit.layer === 'nav' && hopsTouching(hit.props.id).length === 2) {
+                    items.push({
+                        label: 'Delete and relink',
+                        run: () => deleteAndRelink(hit)
+                    });
+                }
+
                 items.push({ label: 'Delete', run: () => { select(hit); deleteSelected(); } });
             }
 

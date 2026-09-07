@@ -137,6 +137,37 @@ all — three bands rather than a gradient, because the author's decision is thr
 useless. Probe points draw hollow, so a tile being considered never looks like one already
 authored.
 
+### Editing a proposal
+
+A proposal is ordinary waypoint and edge records, so dragging works because dragging works. Three
+things are added on top, and the fourth is a bug fix that mattered more than any of them.
+
+**The hops are derived, not drawn.** The first version drew the probe's walked path as a polyline,
+so dragging a proposed waypoint moved the dot and left the road where the probe had walked - two
+pictures of the same road, disagreeing. An edge IS two waypoint ids; the line between them is a
+picture of that, and `syncDerived` now redraws every edge and route from where its waypoints are
+NOW, on every frame of a drag. The tile-by-tile zigzag is gone entirely: a hop is a straight line
+between two points, which is also what the bot will be asked to walk.
+
+That staleness was not new and was not confined to proposals - every hand-placed edge in the graph
+had it, and `app.js` even carried a comment about "every edge length that touches it" while only
+invalidating the coverage overlay.
+
+- **Right-click a point → Delete and relink.** Deleting a point out of a road otherwise leaves it
+  in two pieces; this joins what it was between. Offered for any waypoint with exactly two hops,
+  proposal or not. An end has one neighbour and nothing to join, so deleting it shortens the road,
+  which is correct.
+- **Double-click a hop → insert a point.** The search proposes a point every ten tiles whether or
+  not the road bends there, so a bend usually needs one more exactly where it is. The gesture is on
+  the hop because it needs a POSITION, and a menu would have thrown that away.
+- **Shift-drag → snap to the nearest road.** Which tiles are road is a fact about the client's
+  tiledata, so the shard answers it, using the same classification the search weights by rather
+  than a second opinion that could disagree.
+
+**Every edit re-verifies.** Any hop that moves is walked again by a real `BaseCreature` through
+`nav-hop`, and drawn green or red. An edit that merely looked plausible is exactly what this tool
+exists to stop somebody saving.
+
 ## Tiles
 
 `export-tiles.ps1` renders a pyramid at `tiles/<facet>/<z>/<x>/<y>.png`, 256px, level 0 = the
@@ -520,6 +551,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
 | `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
+| `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`; answers to `Data/Live/nav-hop.json` |
 | `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |
 
 **`save` exists because there is no other way to save from outside the game.** ServUO's console

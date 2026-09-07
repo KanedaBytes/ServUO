@@ -48,7 +48,8 @@ const FILES = {
     navAudit: path.join(REPO_ROOT, 'Data', 'Live', 'nav-audit.json'),
     siteReach: path.join(REPO_ROOT, 'Data', 'Live', 'site-reach.json'),
     navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json'),
-    botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json')
+    botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json'),
+    navHop: path.join(REPO_ROOT, 'Data', 'Live', 'nav-hop.json')
 };
 
 /**

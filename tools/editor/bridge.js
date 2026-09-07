@@ -375,6 +375,11 @@ const ROUTES = {
      * Written beside entities.json and on the same timer, so a bot the map is drawing always has
      * a history to show. Read-only, like every Data/Live file.
      */
+    /** Per-hop walkability and road snaps, for editing a proposal without re-walking it. */
+    '/api/hops': (request, response) => {
+        sendJson(response, 200, readJson(whitelist.FILES.navHop) || { hops: [], snap: null });
+    },
+
     '/api/botlog': (request, response) => {
         sendJson(response, 200, readJson(whitelist.FILES.botLog) || { utc: null, bots: [] });
     },

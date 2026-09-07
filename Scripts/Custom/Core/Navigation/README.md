@@ -178,6 +178,26 @@ which is why two new edges across a mountain face passed `[NavAudit` first time.
 waypoint cannot cover a zone 26 tiles deep inside a 12-tile cap; the worst tile is now 9 tiles from
 a waypoint rather than 21.
 
+### The corridor search prefers roads
+
+`NavCorridor` weights each tile by what kind of ground it is - road 1, grass and sand 3, forest 4,
+anything else 3, all in `Config/Custom.cfg`. A road is no shorter than the grass beside it, but it
+is where a road GOES, and a corridor laid across open country is one nobody would ever have walked.
+
+Weighting rather than restricting keeps it a preference: the search still crosses a field when a
+field is the only way through, it just will not do so to save two tiles. Measured on the three
+authored roads, with the weights flattened to 1 for the comparison:
+
+| road | flat | weighted |
+| --- | --- | --- |
+| west gate to the west cliff | 315 tiles, **28%** on roads | 319 tiles, **78%** |
+| south bridge to the wood | 154 tiles, **45%** on roads | 184 tiles, **83%** |
+
+**The first attempt to measure that reported 100% for both**, because `IsRoad` was written as
+"costs no more than a road" - true of every tile the moment the weights are equal. The
+classification is a fact about the tile and the cost is a policy about it; only the second belongs
+in config, and they are separate functions now.
+
 **`RungFired` is an optional callback beside `Arrived`**, raised at the same moment with the rung
 and the reason. It exists so a consumer can record recovery in its own diagnostics — the bots'
 event log subscribes to it — without this layer learning what a consumer is. That is the same

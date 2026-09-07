@@ -91,9 +91,9 @@ export const TOOLS = {
     corridor: {
         layer: 'nav',
         label: 'Corridor',
-        kind: 'pair-points',
+        kind: 'point-chain',
         hint: 'Click where the road starts. Esc cancels.',
-        hint2: 'Click where it should end. The shard walks it.',
+        hint2: 'Click via points to steer it, then the end. Enter finishes.',
         title: 'Corridor',
         fields: []
     },

@@ -59,6 +59,7 @@ export const api = {
     reach: () => request('GET', '/api/reach'),
     route: () => request('GET', '/api/route'),
     botlog: () => request('GET', '/api/botlog'),
+    hops: () => request('GET', '/api/hops'),
     spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
 

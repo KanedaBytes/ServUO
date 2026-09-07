@@ -352,9 +352,71 @@ namespace Server.Custom
                     // from "it never leaves town", and the editor draws both.
                     message = walked
                         ? String.Format(
-                            "walked {0} tile(s); {1} hop(s), every one verified", route.Count, hops.Count)
+                            "walked {0} tile(s), {1}% on roads; {2} hop(s), every one verified",
+                            route.Count, NavCorridor.RoadFraction(facet, route), hops.Count)
                         : String.Format("{0} ({1} tile(s) walked)", routeError, route.Count);
 
+                    return true;
+                }
+
+                // The two questions a hand-edited proposal asks, in one request: "is this hop
+                // walkable" and "where is the nearest road". Body is
+                //   "verify x1,y1 x2,y2 [x3,y3 x4,y4 ...]"  - pairs, each a hop
+                //   "snap x,y"                              - one point to pull onto a road
+                // Both may appear. Answers go to Data/Live/nav-hop.json.
+                case "nav-hop":
+                {
+                    string[] words = (body ?? "").Split(
+                        new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    var pairs = new List<Point3D>();
+                    Point3D? snap = null;
+                    bool snapping = false;
+
+                    foreach (string word in words)
+                    {
+                        if (word.StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        if (word.IndexOf(',') < 0)
+                        {
+                            snapping = word.Equals("snap", StringComparison.OrdinalIgnoreCase);
+                            continue;
+                        }
+
+                        int comma = word.IndexOf(',');
+                        int x, y;
+
+                        if (!Int32.TryParse(word.Substring(0, comma), out x)
+                            || !Int32.TryParse(word.Substring(comma + 1), out y))
+                        {
+                            continue;
+                        }
+
+                        if (snapping)
+                        {
+                            snap = new Point3D(x, y, 0);
+                            snapping = false;
+                        }
+                        else
+                        {
+                            pairs.Add(new Point3D(x, y, 0));
+                        }
+                    }
+
+                    string json = NavCorridor.ProbeHops(Map.Trammel, pairs, snap);
+                    string hopWriteError;
+
+                    if (!AtomicFile.Write("Data/Live/nav-hop.json", json, out hopWriteError))
+                    {
+                        message = hopWriteError;
+                        return false;
+                    }
+
+                    message = String.Format(
+                        "{0} hop(s) probed{1}", pairs.Count / 2, snap == null ? "" : ", snap answered");
                     return true;
                 }
 

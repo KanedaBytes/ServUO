@@ -79,13 +79,11 @@ namespace Server.Custom
         /// <summary>How many times a road may be re-floated around a step the engine refuses.</summary>
         private const int RepairAttempts = 6;
 
+        /// <summary>How far a shift-drag looks for a road. Beyond this the author meant it.</summary>
+        private const int RoadSnapRadius = 12;
+
         /// <summary>
-        /// The most a mobile may climb in one step. `Movement.StepHeight` (Movement.cs:11), which
-        /// is private, so it is repeated here rather than reached for - and cited, so the next
-        /// person can check it rather than trust it.
-        /// </summary>
-        /// <summary>
-        /// The most the flood will climb between adjacent tiles.
+        /// The most the search will climb between adjacent tiles.
         ///
         /// BotWorkScout's number, kept so the two tools agree about what a cliff is - and
         /// deliberately NOT the engine's StepHeight of 2 (Movement.cs:11). Both were tried. At 2
@@ -98,6 +96,158 @@ namespace Server.Custom
         /// re-floods around anything it refuses.
         /// </summary>
         private const int ClimbLimit = 11;
+
+        /// <summary>
+        /// What one tile of each kind of ground costs the search.
+        ///
+        /// A road is no shorter than the grass beside it, but it is where a road GOES, and a
+        /// corridor laid across open country is one nobody would ever have walked. Weighting the
+        /// search rather than restricting it keeps that a preference: it still crosses a field
+        /// when a field is the only way through, it just will not do so to save two tiles.
+        ///
+        /// Classified by the land tile's NAME, which is what [BotOreSweep leans on and for the
+        /// same reason: this client's tiledata is the authority on what a tile actually is, and
+        /// the id ranges are not contiguous enough to hard-code. An unknown name costs Other, so
+        /// ground nobody has classified is neither preferred nor avoided.
+        /// </summary>
+        private static int CostOf(Map map, int x, int y)
+        {
+            switch (GroundAt(map, x, y))
+            {
+                case Ground.Road: return Config.Get("Custom.NavRoadCostRoad", 1);
+                case Ground.Grass: return Config.Get("Custom.NavRoadCostGrass", 3);
+                case Ground.Sand: return Config.Get("Custom.NavRoadCostSand", 3);
+                case Ground.Forest: return Config.Get("Custom.NavRoadCostForest", 4);
+            }
+
+            return Config.Get("Custom.NavRoadCostOther", 3);
+        }
+
+        private enum Ground
+        {
+            Other,
+            Road,
+            Grass,
+            Sand,
+            Forest
+        }
+
+        /// <summary>
+        /// What KIND of ground this is, independent of what it currently costs.
+        ///
+        /// Separated from the cost for a reason that cost a wrong measurement: IsRoad was written
+        /// as "costs no more than a road", which is true of every tile the moment the weights are
+        /// equal. Flattening them to check the weighting was doing anything duly reported every
+        /// road as 100% on roads - a metric defined in terms of the thing it was measuring. The
+        /// classification is a fact about the tile; the cost is a policy about it, and only the
+        /// second belongs in config.
+        /// </summary>
+        private static Ground GroundAt(Map map, int x, int y)
+        {
+            string name;
+
+            try
+            {
+                name = TileData.LandTable[map.Tiles.GetLandTile(x, y).ID & 0x3FFF].Name;
+            }
+            catch
+            {
+                return Ground.Other;
+            }
+
+            if (name == null)
+            {
+                return Ground.Other;
+            }
+
+            if (Has(name, "road") || Has(name, "cobble") || Has(name, "dirt") || Has(name, "pave"))
+            {
+                return Ground.Road;
+            }
+
+            if (Has(name, "grass"))
+            {
+                return Ground.Grass;
+            }
+
+            if (Has(name, "sand"))
+            {
+                return Ground.Sand;
+            }
+
+            if (Has(name, "forest") || Has(name, "jungle"))
+            {
+                return Ground.Forest;
+            }
+
+            return Ground.Other;
+        }
+
+        private static bool Has(string name, string part)
+        {
+            return name.IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// What share of a walked road is actually on made ground, 0 to 100.
+        ///
+        /// The one number that says whether the cost weighting did anything. Without it "the path
+        /// got four tiles longer" is the only evidence, and that is equally consistent with the
+        /// weighting working and with it doing nothing while the search order shifted.
+        /// </summary>
+        public static int RoadFraction(Map map, IList<Point3D> path)
+        {
+            if (map == null || path == null || path.Count == 0)
+            {
+                return 0;
+            }
+
+            int on = 0;
+
+            for (int i = 0; i < path.Count; i++)
+            {
+                if (IsRoad(map, path[i].X, path[i].Y))
+                {
+                    on++;
+                }
+            }
+
+            return (on * 100) / path.Count;
+        }
+
+        /// <summary>True when this tile reads as a made road. The editor's shift-drag snaps to it.</summary>
+        public static bool IsRoad(Map map, int x, int y)
+        {
+            return GroundAt(map, x, y) == Ground.Road;
+        }
+
+        /// <summary>
+        /// One entry in the search frontier, ordered by cost and then by tile.
+        ///
+        /// A SortedSet needs a TOTAL order: comparing on cost alone would make two tiles of equal
+        /// cost compare equal and the set would silently keep only one of them. The key is the
+        /// tie-break, which is why this is a struct with an explicit CompareTo.
+        /// </summary>
+        private struct PathNode : IComparable<PathNode>
+        {
+            public readonly int Cost;
+            public readonly int Key;
+            public readonly Point3D Point;
+
+            public PathNode(int cost, int key, Point3D point)
+            {
+                Cost = cost;
+                Key = key;
+                Point = point;
+            }
+
+            public int CompareTo(PathNode other)
+            {
+                int byCost = Cost.CompareTo(other.Cost);
+
+                return byCost != 0 ? byCost : Key.CompareTo(other.Key);
+            }
+        }
 
         /// <summary>
         /// A humanoid stand-in for the bot that will walk this road.
@@ -200,12 +350,15 @@ namespace Server.Custom
                 return false;
             }
 
-            var queue = new Queue<Point3D>();
+            // Dijkstra, not breadth-first, because the tiles are no longer all worth the same.
+            // A plain queue finds the fewest STEPS; weighting the ground and still popping in
+            // insertion order would compute a cost and then not use it.
+            var frontier = new SortedSet<PathNode>();
             var came = new Dictionary<int, Point3D>();
-            var seen = new HashSet<int>();
+            var best = new Dictionary<int, int>();
 
-            queue.Enqueue(start);
-            seen.Add(Key(start));
+            frontier.Add(new PathNode(0, Key(start), start));
+            best[Key(start)] = 0;
 
             int minX = Math.Min(start.X, goal.X) - Margin;
             int maxX = Math.Max(start.X, goal.X) + Margin;
@@ -216,10 +369,21 @@ namespace Server.Custom
             Point3D hit = Point3D.Zero;
             int visited = 0;
 
-            while (queue.Count > 0 && !found && visited < MaxTiles)
+            while (frontier.Count > 0 && !found && visited < MaxTiles)
             {
-                Point3D current = queue.Dequeue();
+                PathNode node = frontier.Min;
+                frontier.Remove(node);
+
+                Point3D current = node.Point;
                 visited++;
+
+                int currentCost;
+
+                // A stale entry: a cheaper way to this tile turned up after it was queued.
+                if (!best.TryGetValue(node.Key, out currentCost) || currentCost < node.Cost)
+                {
+                    continue;
+                }
 
                 for (int dx = -1; dx <= 1 && !found; dx++)
                 {
@@ -238,14 +402,11 @@ namespace Server.Custom
                             continue;
                         }
 
-                        if (!seen.Add((x << 16) | (y & 0xFFFF)))
-                        {
-                            continue;
-                        }
-
                         int z = NavWalker.ResolveZ(map, new Point3D(x, y, current.Z));
 
-                        if (banned != null && banned.Contains((x << 16) | (y & 0xFFFF)))
+                        int key = (x << 16) | (y & 0xFFFF);
+
+                        if (banned != null && banned.Contains(key))
                         {
                             continue;
                         }
@@ -269,9 +430,20 @@ namespace Server.Custom
                             continue;
                         }
 
+                        // A diagonal costs the same as an orthogonal step, as it does to the
+                        // mobile: UO movement is eight-directional and a diagonal is one step.
+                        int cost = currentCost + CostOf(map, x, y);
+                        int known;
+
+                        if (best.TryGetValue(key, out known) && known <= cost)
+                        {
+                            continue;
+                        }
+
                         var next = new Point3D(x, y, z);
 
-                        came[(x << 16) | (y & 0xFFFF)] = current;
+                        best[key] = cost;
+                        came[key] = current;
 
                         if (x == goal.X && y == goal.Y)
                         {
@@ -280,7 +452,7 @@ namespace Server.Custom
                             break;
                         }
 
-                        queue.Enqueue(next);
+                        frontier.Add(new PathNode(cost, key, next));
                     }
                 }
             }
@@ -468,6 +640,125 @@ namespace Server.Custom
                     probe.Delete();
                 }
             }
+        }
+
+        /// <summary>
+        /// Answer the two questions a hand-edited proposal asks: is this hop walkable, and where
+        /// is the nearest road?
+        ///
+        /// Both are things only the shard can answer - the browser has no map data and no movement
+        /// rules - and both are asked while somebody is dragging, so they are one cheap request
+        /// rather than a re-walk of the whole road. Verification drives the same real BaseCreature
+        /// the proposal was built with, so a hop that passes here passes for the same reason.
+        /// </summary>
+        public static string ProbeHops(Map map, IList<Point3D> pairs, Point3D? snapNear)
+        {
+            var builder = new StringBuilder(512);
+
+            builder.Append("{\n  \"utc\": \"").Append(DateTime.UtcNow.ToString("o"));
+            builder.Append("\",\n  \"hops\": [");
+
+            CorridorProbe probe = null;
+
+            try
+            {
+                if (map != null && map != Map.Internal)
+                {
+                    probe = new CorridorProbe();
+
+                    for (int i = 0; pairs != null && i + 1 < pairs.Count; i += 2)
+                    {
+                        Point3D a = Resolve(map, pairs[i]);
+                        Point3D b = Resolve(map, pairs[i + 1]);
+
+                        if (i > 0)
+                        {
+                            builder.Append(",");
+                        }
+
+                        builder.Append("{\"ax\":").Append(a.X).Append(",\"ay\":").Append(a.Y);
+                        builder.Append(",\"bx\":").Append(b.X).Append(",\"by\":").Append(b.Y);
+                        builder.Append(",\"ok\":").Append(Pathable(map, probe, a, b) ? "true" : "false");
+                        builder.Append("}");
+                    }
+                }
+
+                builder.Append("],\n  \"snap\": ");
+
+                Point3D found;
+
+                if (snapNear != null && map != null && map != Map.Internal
+                    && TrySnapRoad(map, snapNear.Value, out found))
+                {
+                    builder.Append("[").Append(found.X).Append(",").Append(found.Y);
+                    builder.Append(",").Append(found.Z).Append("]");
+                }
+                else
+                {
+                    builder.Append("null");
+                }
+
+                builder.Append("\n}\n");
+            }
+            finally
+            {
+                if (probe != null)
+                {
+                    probe.Delete();
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static Point3D Resolve(Map map, Point3D point)
+        {
+            return new Point3D(point.X, point.Y, NavWalker.ResolveZ(map, point));
+        }
+
+        /// <summary>
+        /// The nearest MADE road tile a mobile can stand on, for the editor's shift-drag.
+        ///
+        /// Asks GroundAt rather than CostOf, so it keeps meaning the same thing when somebody
+        /// retunes the weights. Defining "road" as "costs no more than a road" made every tile a
+        /// road the moment the weights were flattened, which is how a measurement of the weighting
+        /// came back reporting 100% of every route was already on roads.
+        /// </summary>
+        private static bool TrySnapRoad(Map map, Point3D near, out Point3D found)
+        {
+            found = Point3D.Zero;
+
+            for (int radius = 0; radius <= RoadSnapRadius; radius++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dy) != radius)
+                        {
+                            continue;
+                        }
+
+                        int x = near.X + dx;
+                        int y = near.Y + dy;
+
+                        if (!IsRoad(map, x, y))
+                        {
+                            continue;
+                        }
+
+                        int z = NavWalker.ResolveZ(map, new Point3D(x, y, near.Z));
+
+                        if (CanStand(map, x, y, z))
+                        {
+                            found = new Point3D(x, y, z);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

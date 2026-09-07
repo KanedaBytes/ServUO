@@ -182,6 +182,71 @@ function drawLabels(ctx, view, drawn, selected, hovered, matches) {
  */
 let audited = new Set();
 
+/**
+ * Re-derive every drawn line that is really made of ids.
+ *
+ * An edge IS two waypoint ids and a route IS a list of them - the line between them is a picture
+ * of the data, not the data. Projecting them once at load left that picture frozen: dragging a
+ * waypoint moved the dot and left its edges behind, pointing at where it used to be. The proposal
+ * from the corridor tool made it obvious because it is nothing but waypoints and edges, but the
+ * same staleness was there for every hand-placed edge in the graph.
+ *
+ * Called after anything that moves, creates or deletes a waypoint. Cheap: one pass to index and
+ * one to rewrite, over shapes already in memory.
+ */
+export function syncDerived(shapes) {
+    const points = new Map();
+
+    for (const shape of shapes) {
+        if (shape.layer === 'nav' && shape.points && shape.points.length > 0) {
+            points.set(shape.props.id, shape.points[0]);
+        }
+    }
+
+    for (const shape of shapes) {
+        if (shape.layer === 'nav-edges') {
+            const a = points.get(shape.props.from);
+            const b = points.get(shape.props.to);
+
+            if (a && b) {
+                shape.points = [a.slice(), b.slice()];
+            }
+
+            continue;
+        }
+
+        if (shape.layer === 'nav-routes') {
+            const list = String(shape.props.waypoints || '')
+                .split(' ')
+                .filter(Boolean)
+                .map((id) => points.get(id))
+                .filter(Boolean);
+
+            if (list.length >= 2) {
+                shape.points = list.map((point) => point.slice());
+            }
+        }
+    }
+}
+
+/** edge id -> true when the shard has walked it since it was last moved, false when it refused. */
+let hopFlags = new Map();
+
+/**
+ * Record what the shard said about a hop, so an edited proposal shows its own state.
+ *
+ * Separate from the audit flags above, which are about the SAVED graph. A proposal is not in the
+ * file yet, so [NavAudit has nothing to say about it, and the author still needs to know whether
+ * the hop they just dragged is one a bot can walk.
+ */
+export function setHopFlags(flags) {
+    hopFlags = flags || new Map();
+}
+
+export function clearHopFlags() {
+    hopFlags = new Map();
+}
+
 export function setAuditFlags(problems) {
     audited = new Set(
         (problems || [])
@@ -202,6 +267,12 @@ function hopColor(shape) {
 
     if (shape.props && shape.props.kind === 'gate') {
         return null;
+    }
+
+    // A hop the shard has just walked for us wins over everything: it is the most specific and
+    // most recent thing anybody knows about this edge.
+    if (hopFlags.size > 0 && hopFlags.has(shape.id)) {
+        return hopFlags.get(shape.id) ? '#7bd88f' : '#ff7a6b';
     }
 
     // An edge the audit could not walk is red regardless of length. Length is a proxy the editor
@@ -448,55 +519,6 @@ export const BEHAVIOR_COLORS = {
     Gatherer: '#7bd88f',
     Idle: '#9a8c98'
 };
-
-/**
- * The road nav-route last walked: the tiles as a thin line, the proposed hops as dots.
- *
- * Drawn whether or not the road completed. A partial road is the most useful thing on the screen
- * when one fails - seeing that it reaches the gate and stops is most of the diagnosis, and a tool
- * that drew nothing on failure would be hiding its own best evidence.
- */
-export function drawRoute(ctx, view, route) {
-    if (!route || !route.points || route.points.length === 0 || route.map !== view.facet.name) {
-        return;
-    }
-
-    ctx.save();
-
-    // Amber for a road with a step the engine refused, so a proposal can never be mistaken for a
-    // verified one at a glance.
-    const color = route.ok ? 'rgba(123, 216, 143, .85)' : 'rgba(255, 212, 121, .9)';
-
-    ctx.beginPath();
-
-    for (let i = 0; i < route.points.length; i++) {
-        const [sx, sy] = view.toScreen(route.points[i][0] + 0.5, route.points[i][1] + 0.5);
-
-        if (i === 0) {
-            ctx.moveTo(sx, sy);
-        } else {
-            ctx.lineTo(sx, sy);
-        }
-    }
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    for (const [x, y] of route.hops || []) {
-        const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
-
-        ctx.beginPath();
-        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(0, 0, 0, .7)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-    }
-
-    ctx.restore();
-}
 
 export function drawEntities(ctx, view, entities) {
     const width = ctx.canvas.clientWidth;
