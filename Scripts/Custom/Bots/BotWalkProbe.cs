@@ -34,7 +34,18 @@ namespace Server.Custom
         public static readonly TimeSpan DisperseWindow = TimeSpan.FromSeconds(45.0);
 
         private static HealthResult _last;
+
+        private static BotProbeClock _clock;
+        private static Timer _watch;
+
+        private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2.0);
         private static bool _running;
+
+        /// <summary>True while this probe is mid-run. Read by [BotSmoke to advance the chain.</summary>
+        public static bool IsRunning
+        {
+            get { return _running; }
+        }
 
         public static HealthResult BuildHealthResult()
         {
@@ -104,13 +115,54 @@ namespace Server.Custom
 
                 List<PlayerBot> captured = bots;
 
-                Timer.DelayCall(ConvergeWindow, () => Disperse(captured, destinations, target));
+                // The CONVERGE stage can end early - the contention it exists to manufacture has
+                // happened once every bot has arrived. The DISPERSE stage that follows cannot, and
+                // deliberately does not: "nobody got stuck" is an absence, and absence needs the
+                // whole window to establish.
+                _clock = new BotProbeClock(ConvergeWindow + DisperseWindow);
+
+                _watch = Timer.DelayCall(PollInterval, PollInterval, 0, () =>
+                {
+                    if (!AllArrived(captured) && _clock.Elapsed < ConvergeWindow)
+                    {
+                        return;
+                    }
+
+                    if (_watch != null)
+                    {
+                        _watch.Stop();
+                        _watch = null;
+                    }
+
+                    Disperse(captured, destinations, target);
+                });
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "Walk probe threw during setup.");
                 Finish(bots, HealthResult.Fail("threw during setup: " + ex.Message));
             }
+        }
+
+        /// <summary>Has every bot finished its walk to the converge target?</summary>
+        private static bool AllArrived(List<PlayerBot> bots)
+        {
+            foreach (PlayerBot bot in bots)
+            {
+                if (bot == null || bot.Deleted)
+                {
+                    continue;
+                }
+
+                var traveler = bot.Behavior as TravelerBehavior;
+
+                if (traveler != null && traveler.IsTravelling)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static void Disperse(
@@ -162,103 +214,139 @@ namespace Server.Custom
 
         private static void Report(List<PlayerBot> bots)
         {
-            var counts = new int[NavWalker.RungCount];
-            int stuck = 0;
-            int alive = 0;
-            int travelling = 0;
-
-            for (int i = 0; i < bots.Count; i++)
+            // WRAPPED SO Finish ALWAYS RUNS - this is a real leak, not a hypothetical one.
+            //
+            // Everything below runs before the single Finish at the end: walker and rung
+            // accessors, BotCrowds.BelowFloor, list indexing, string formatting. A throw anywhere
+            // in it used to skip Finish entirely, which left _running true for the life of the
+            // process AND left BotLifecycle.Override and IntervalOverride installed - a shard
+            // stuck on a ten-second lifecycle cadence and 15-30s phase clamps, silently, until
+            // restart.
+            //
+            // That is exactly the failure BotLifecycle's own comment claims to prevent: "Held in
+            // memory rather than written to bots.json so a probe that dies mid-run cannot leave
+            // the shard permanently accelerated." The in-memory half was done; the always-restore
+            // half was not.
+            //
+            // catch, not a bare finally: a logged failure becomes a red health check somebody
+            // sees, where a rethrow into a Timer callback becomes a console line nobody reads.
+            // The finally is belt to that brace, in case Finish itself throws.
+            try
             {
-                PlayerBot bot = bots[i];
+                var counts = new int[NavWalker.RungCount];
+                int stuck = 0;
+                int alive = 0;
+                int travelling = 0;
 
-                if (bot.Deleted)
+                for (int i = 0; i < bots.Count; i++)
                 {
-                    continue;
+                    PlayerBot bot = bots[i];
+
+                    if (bot.Deleted)
+                    {
+                        continue;
+                    }
+
+                    alive++;
+
+                    var traveler = bot.Behavior as TravelerBehavior;
+
+                    if (traveler == null)
+                    {
+                        continue;
+                    }
+
+                    NavWalker walker = traveler.Walker;
+
+                    if (walker == null)
+                    {
+                        continue;
+                    }
+
+                    for (int rung = 0; rung < NavWalker.RungCount; rung++)
+                    {
+                        counts[rung] += walker.RungsFired((StuckRung)rung);
+                    }
+
+                    if (traveler.IsTravelling)
+                    {
+                        travelling++;
+                    }
+
+                    // STUCK is the walker's own answer, not a guess from the outside.
+                    //
+                    // "Still walking when the window closed" is NOT stuck - it is the normal steady
+                    // state, because a Traveler that arrives lingers and then departs again of its own
+                    // accord. The first version of this probe used that test and reported five stuck
+                    // bots that were simply getting on with it.
+                    //
+                    // A walker above rung None has timed out without getting closer and is mid-
+                    // recovery, which is exactly the condition worth failing on.
+                    if (walker.Active && walker.CurrentRung != StuckRung.None)
+                    {
+                        stuck++;
+                    }
                 }
 
-                alive++;
+                string rungs = String.Format(
+                    "rungs: repath {0}, sidestep {1}, door {2}, skip {3}, teleport {4}",
+                    counts[(int)StuckRung.Repath],
+                    counts[(int)StuckRung.Sidestep],
+                    counts[(int)StuckRung.Door],
+                    counts[(int)StuckRung.SkipWaypoint],
+                    counts[(int)StuckRung.Teleport]);
 
-                var traveler = bot.Behavior as TravelerBehavior;
+                int teleports = counts[(int)StuckRung.Teleport];
 
-                if (traveler == null)
+                HealthResult result;
+
+                if (teleports > 0)
                 {
-                    continue;
+                    // Same verdict as production: reaching the top rung means the ladder could not
+                    // recover and a mobile was moved. The Warn naming the edge has already been
+                    // logged by NavWalker itself.
+                    result = HealthResult.Fail(String.Format(
+                        "in {0} - {1} teleport(s), the ladder ran out on {2} live bot(s). {3}",
+                        _clock.Describe(),
+                        teleports,
+                        alive,
+                        rungs));
+                }
+                else if (stuck > 0)
+                {
+                    result = HealthResult.Warn(String.Format(
+                        "in {0} - {1} of {2} bot(s) mid-recovery when the window closed ({3} travelling). {4}",
+                        _clock.Describe(),
+                        stuck,
+                        alive,
+                        travelling,
+                        rungs));
+                }
+                else
+                {
+                    result = HealthResult.Ok(String.Format(
+                        "in {0} - {1} bot(s) walked, none stuck, no teleports ({2} still travelling, "
+                        + "which is normal). {3}",
+                        _clock.Describe(),
+                        alive,
+                        travelling,
+                        rungs));
                 }
 
-                NavWalker walker = traveler.Walker;
-
-                if (walker == null)
-                {
-                    continue;
-                }
-
-                for (int rung = 0; rung < NavWalker.RungCount; rung++)
-                {
-                    counts[rung] += walker.RungsFired((StuckRung)rung);
-                }
-
-                if (traveler.IsTravelling)
-                {
-                    travelling++;
-                }
-
-                // STUCK is the walker's own answer, not a guess from the outside.
-                //
-                // "Still walking when the window closed" is NOT stuck - it is the normal steady
-                // state, because a Traveler that arrives lingers and then departs again of its own
-                // accord. The first version of this probe used that test and reported five stuck
-                // bots that were simply getting on with it.
-                //
-                // A walker above rung None has timed out without getting closer and is mid-
-                // recovery, which is exactly the condition worth failing on.
-                if (walker.Active && walker.CurrentRung != StuckRung.None)
-                {
-                    stuck++;
-                }
-            }
-
-            string rungs = String.Format(
-                "rungs: repath {0}, sidestep {1}, door {2}, skip {3}, teleport {4}",
-                counts[(int)StuckRung.Repath],
-                counts[(int)StuckRung.Sidestep],
-                counts[(int)StuckRung.Door],
-                counts[(int)StuckRung.SkipWaypoint],
-                counts[(int)StuckRung.Teleport]);
-
-            int teleports = counts[(int)StuckRung.Teleport];
-
-            HealthResult result;
-
-            if (teleports > 0)
+                Finish(bots, result);
+                    }
+            catch (Exception ex)
             {
-                // Same verdict as production: reaching the top rung means the ladder could not
-                // recover and a mobile was moved. The Warn naming the edge has already been
-                // logged by NavWalker itself.
-                result = HealthResult.Fail(String.Format(
-                    "{0} teleport(s) - the ladder ran out on {1} live bot(s). {2}",
-                    teleports,
-                    alive,
-                    rungs));
+                Log.Error(ex, "Probe threw while reporting.");
+                Finish(bots, HealthResult.Fail("threw while reporting: " + ex.Message));
             }
-            else if (stuck > 0)
+            finally
             {
-                result = HealthResult.Warn(String.Format(
-                    "{0} of {1} bot(s) mid-recovery when the window closed ({2} travelling). {3}",
-                    stuck,
-                    alive,
-                    travelling,
-                    rungs));
+                // Unconditional, and after the catch: whatever happened above, the shard
+                // does not stay accelerated.
+                BotLifecycle.Override = null;
+                BotLifecycle.IntervalOverride = null;
             }
-            else
-            {
-                result = HealthResult.Ok(String.Format(
-                    "{0} bot(s) walked, none stuck, no teleports ({1} still travelling, which is normal). {2}",
-                    alive,
-                    travelling,
-                    rungs));
-            }
-
-            Finish(bots, result);
         }
 
         private static NavDestination PickBusiest(List<NavDestination> destinations)
@@ -334,6 +422,12 @@ namespace Server.Custom
         /// </summary>
         private static void Finish(List<PlayerBot> bots, HealthResult result)
         {
+            if (_watch != null)
+            {
+                _watch.Stop();
+                _watch = null;
+            }
+
             _last = result;
             _running = false;
 

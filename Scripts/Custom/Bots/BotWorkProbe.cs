@@ -56,6 +56,21 @@ namespace Server.Custom
         private static HealthResult _last;
         private static bool _running;
 
+        /// <summary>True while this probe is mid-run. Read by [BotSmoke to advance the chain.</summary>
+        public static bool IsRunning
+        {
+            get { return _running; }
+        }
+
+        /// <summary>How long this run has taken, against its timeout. Reported either way.</summary>
+        private static BotProbeClock _clock;
+
+        /// <summary>The poll that watches for the assertion; stopped by Finish.</summary>
+        private static Timer _watch;
+
+        /// <summary>How often to ask whether the cycle has finished.</summary>
+        private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2.0);
+
         /// <summary>Set by the clock-in check: was the miner inside its site's zone and working?</summary>
         private static bool _clockedInZone;
 
@@ -197,7 +212,23 @@ namespace Server.Custom
                 // gatherer has become a Traveler and there is nothing left to ask.
                 Timer.DelayCall(TimeSpan.FromSeconds(12.0), () => CheckClockIn(miner, site));
 
-                Timer.DelayCall(Window, () => Report(captured, madeBefore, minedBefore));
+                // POLL, do not sleep. The window is a timeout now: the moment the miner has
+                // mined, hauled and handed over and the smith has made something, there is nothing
+                // left to learn by waiting, and the run that first passed had done all of it about
+                // two minutes into a seven-minute window.
+                _clock = new BotProbeClock(Window);
+
+                _watch = Timer.DelayCall(PollInterval, PollInterval, 0, () =>
+                {
+                    bool done = Satisfied(captured, madeBefore, minedBefore);
+
+                    if (!done && !_clock.Expired)
+                    {
+                        return;
+                    }
+
+                    Report(captured, madeBefore, minedBefore);
+                });
             }
             catch (Exception ex)
             {
@@ -260,6 +291,34 @@ namespace Server.Custom
             {
                 item.Delete();
             }
+        }
+
+        /// <summary>
+        /// Is every assertion already true? Then there is nothing left to wait for.
+        ///
+        /// Deliberately the SAME conditions Report checks, so an early exit can never pass a run
+        /// that the full report would have failed - it only skips the waiting. Anything Report
+        /// judges that is not here (a crafter blocked, the smith off its station) simply means the
+        /// probe runs to timeout and fails there, which is the safe direction.
+        /// </summary>
+        private static bool Satisfied(List<PlayerBot> bots, int madeBefore, int minedBefore)
+        {
+            PlayerBot miner = Find(bots, BotClass.Miner);
+            PlayerBot smith = Find(bots, BotClass.Smith);
+
+            if (miner == null || miner.Deleted || smith == null || smith.Deleted)
+            {
+                return false;
+            }
+
+            var crafter = smith.Behavior as CrafterBehavior;
+
+            return _clockedInZone
+                && BotWorkSites.Mined > minedBefore
+                && !miner.HaulPending
+                && BotWorkSites.Deliveries > 0
+                && crafter != null
+                && crafter.Made > madeBefore;
         }
 
         /// <summary>
@@ -438,7 +497,8 @@ namespace Server.Custom
                 if (problems.Count > 0)
                 {
                     Finish(bots, HealthResult.Fail(String.Format(
-                        "{0} problem(s): {1}. {2}",
+                        "in {0} - {1} problem(s): {2}. {3}",
+                        _clock.Describe(),
                         problems.Count,
                         String.Join("; ", problems.ToArray()),
                         summary)));
@@ -446,7 +506,8 @@ namespace Server.Custom
                     return;
                 }
 
-                Finish(bots, HealthResult.Ok("a full cycle completed - " + summary));
+                Finish(bots, HealthResult.Ok(String.Format(
+                    "in {0} - a full cycle completed - {1}", _clock.Describe(), summary)));
             }
             catch (Exception ex)
             {
@@ -495,6 +556,14 @@ namespace Server.Custom
 
         private static void Finish(List<PlayerBot> bots, HealthResult result)
         {
+            // First, and before anything that can throw: a poll left running would keep reporting
+            // over the top of this one for the life of the process.
+            if (_watch != null)
+            {
+                _watch.Stop();
+                _watch = null;
+            }
+
             _last = result;
             _running = false;
 

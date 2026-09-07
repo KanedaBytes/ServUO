@@ -98,8 +98,27 @@ namespace Server.Custom
                 PlayerMobile capturedLeader = leader;
                 PlayerBot capturedBot = bot;
 
-                Timer.DelayCall(window, () =>
+                // Report the moment it joins, not when the clock runs out. A bot answering
+                // instantly is the bug this probe was written to catch, so it still WAITS for the
+                // delay - it just stops sleeping through the remainder once the answer is in.
+                var clock = new BotProbeClock(window);
+                Timer watch = null;
+
+                watch = Timer.DelayCall(TimeSpan.FromSeconds(1.0), TimeSpan.FromSeconds(1.0), 0, () =>
                 {
+                    bool joined = !capturedBot.Deleted && Party.Get(capturedBot) != null;
+
+                    if (!joined && !clock.Expired)
+                    {
+                        return;
+                    }
+
+                    if (watch != null)
+                    {
+                        watch.Stop();
+                        watch = null;
+                    }
+
                     HealthResult result;
 
                     if (capturedBot.Deleted)
@@ -113,9 +132,9 @@ namespace Server.Custom
                         if (party == null)
                         {
                             result = HealthResult.Fail(String.Format(
-                                "still not in a party {0:0.#}s after the invite (bot.Party is {1}). "
+                                "still not in a party after {0} (bot.Party is {1}). "
                                 + "The DeclineTimer will refuse it at 30s.",
-                                window.TotalSeconds,
+                                clock.Describe(),
                                 capturedBot.Party == null ? "null" : capturedBot.Party.GetType().Name));
                         }
                         else if (!party.Contains(capturedBot))
@@ -129,8 +148,8 @@ namespace Server.Custom
                         else
                         {
                             result = HealthResult.Ok(String.Format(
-                                "invite accepted within {0:0.#}s, well inside the 30s decline timer",
-                                window.TotalSeconds));
+                                "invite accepted in {0}, well inside the 30s decline timer",
+                                clock.Describe()));
                         }
                     }
 
@@ -316,36 +335,83 @@ namespace Server.Custom
             // reports separately through Bots.Party rather than holding this result open.
             RunPartyProbe(map, location);
 
-            // Five travellers, deliberately made to contend, reporting through Bots.Travel. This
-            // is what exercises rungs 2-5 of the recovery ladder; a lone walker recovers at rung 1
-            // every time and leaves the rest unproven.
-            BotWalkProbe.Run(map, location);
-
-            // The lifecycle probe runs after the walk probe rather than alongside it: both spawn
-            // bots that compete for the same arrival points, and a stuck reading from one would
-            // be indistinguishable from contention caused by the other.
-            TimeSpan afterWalk =
-                BotWalkProbe.ConvergeWindow + BotWalkProbe.DisperseWindow + TimeSpan.FromSeconds(10.0);
-
-            Timer.DelayCall(afterWalk, () => BotLifeProbe.Run(map, location));
-
-            // Last, and alone. The chat probe spawns a PlayerMobile listener, and a player
-            // standing in the middle of the walk or lifecycle probes would set every one of their
-            // bots talking - harmless, but it makes three overlapping console logs unreadable.
-            // Its own silence stage also needs the room genuinely empty to mean anything.
-            TimeSpan afterLife = afterWalk + BotLifeProbe.Window + TimeSpan.FromSeconds(10.0);
-
-            Timer.DelayCall(afterLife, () => BotChatProbe.Run(map, location));
-
-            // The work probe goes last of all, and it is the only one that does not spawn at
-            // `location`: its bots start at a mine face and a forge, which are the two places the
-            // other probes never go. It still waits its turn, because a Miner walking a haul back
-            // into town would collide with the chat probe's deliberately empty room.
-            Timer.DelayCall(
-                afterLife + BotChatProbe.SpeakWindow + BotChatProbe.SilenceWindow + TimeSpan.FromSeconds(10.0),
-                () => BotWorkProbe.Run(map, location));
+            // THE CHAIN ADVANCES ON COMPLETION, NOT ON A STOPWATCH.
+            //
+            // It used to be four Timer.DelayCall hops at fixed offsets computed from the probes'
+            // own windows, which meant the chain took the sum of the windows whatever happened -
+            // 13m35s, measured to within a few seconds across three runs. Now each probe reports
+            // the moment its assertion is satisfied, so waiting a fixed offset would have thrown
+            // the entire saving away.
+            //
+            // The probes still run strictly one at a time, which is the reason they were staggered
+            // in the first place: they spawn bots that compete for the same arrival points, and a
+            // stuck reading from one would be indistinguishable from contention caused by another.
+            // The chat probe in particular needs the room to itself - it spawns a PlayerMobile
+            // listener, and its silence stage means nothing with other bots talking nearby.
+            RunChain(map, location);
 
             return _last;
+        }
+
+        /// <summary>
+        /// Run the four asynchronous probes one after another, each starting when the last has
+        /// reported.
+        ///
+        /// A two-second poll rather than a completion callback, because the probes report from
+        /// several places each - a normal path, a catch, a timeout - and threading a callback
+        /// through every one of them is more surface than a flag read. The gap between probes is
+        /// the poll interval rather than the ten-second cushions the old fixed schedule needed.
+        /// </summary>
+        private static void RunChain(Map map, Point3D location)
+        {
+            var stage = 0;
+            Timer chain = null;
+
+            chain = Timer.DelayCall(TimeSpan.Zero, TimeSpan.FromSeconds(2.0), 0, () =>
+            {
+                switch (stage)
+                {
+                    case 0:
+                        BotWalkProbe.Run(map, location);
+                        stage = 1;
+                        return;
+
+                    case 1:
+                        if (BotWalkProbe.IsRunning) { return; }
+                        BotLifeProbe.Run(map, location);
+                        stage = 2;
+                        return;
+
+                    case 2:
+                        if (BotLifeProbe.IsRunning) { return; }
+                        BotChatProbe.Run(map, location);
+                        stage = 3;
+                        return;
+
+                    case 3:
+                        if (BotChatProbe.IsRunning) { return; }
+
+                        // The work probe is the only one that does not spawn at `location`: its
+                        // bots start at a mine face and a forge, which are the two places the
+                        // others never go. It still waits its turn, because a Miner walking a haul
+                        // back into town would collide with the chat probe's empty room.
+                        BotWorkProbe.Run(map, location);
+                        stage = 4;
+                        return;
+
+                    default:
+                        if (BotWorkProbe.IsRunning) { return; }
+
+                        if (chain != null)
+                        {
+                            chain.Stop();
+                            chain = null;
+                        }
+
+                        Log.Info("Bot smoke chain complete.");
+                        return;
+                }
+            });
         }
 
         /// <summary>

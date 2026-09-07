@@ -602,6 +602,11 @@ site. Of their three *authored* sites only `MiningSpot 448` is near Britain, and
 site — on Trammel that area holds 110 scattered mineable tiles across a 120×120 box and none within
 18 tiles of their centre.
 
+> **Re-checked against their September 2026 release (`fe18a469`)** and unchanged: still exactly
+> three authored sites, `GatherSpots.cs` still the retired stub. This paragraph is the load-bearing
+> premise of everything below it, so it is worth knowing it survived the update rather than having
+> to re-derive it.
+
 So the sites had to come from our own ground. **The first attempt at that shipped, and was wrong.**
 
 It let the tool choose, by sweeping for anything `HarvestDefinition.Validate` accepted. That is a
@@ -1147,6 +1152,68 @@ Bot work probe PASSED - a full cycle completed - miner ended as Traveler,
 The Smith is **placed** at the forge rather than walked there. That half of the journey is the
 Traveler's and `Bots.Travel` already proves it; spending two minutes of the window on a walk that is
 covered elsewhere would only make this flakier.
+
+### Probes report when they are done, not when the clock runs out
+
+Every probe used to sleep its whole window through a one-shot `Timer.DelayCall(Window, Report)`,
+whether or not the thing it was testing had finished in the first thirty seconds. Measured across
+three consecutive chains, each ran its configured window to within two seconds — walk 90/92/92
+against 45+45, life 181/183/181 against 180, chat 92/92/90 against 60+30, work 424/426/423 against
+420. **789 seconds of window per chain**, of which the work probe was 54%; and in the run that
+passed, the smith had crafted its item about two minutes in.
+
+So probes poll now and report the moment their assertion holds; the window became a **timeout**
+rather than a sleep, and `[BotSmoke`'s chain advances **on completion** rather than on a stopwatch —
+waiting a fixed offset between probes would have thrown the whole saving away.
+
+**A knob to divide the world's clocks was considered and rejected.** Scaling `NavWalker`'s move
+delay, the harvest swing interval and the craft delay would have saved *nothing* on its own, because
+the window was the cost rather than the work — and it would have made the probes test timings the
+shard does not run. Production timings are the point.
+
+Two stages deliberately keep their full window, and it is not an oversight: the chat probe's 30s
+**silence** stage and the walk probe's 45s **disperse** stage are *absence* assertions — "nobody
+spoke", "nobody got stuck" — and absence cannot be established early.
+
+Every report now carries **elapsed against timeout**:
+
+```
+Bot work probe PASSED in 2m04s of 7m00s - a full cycle completed - 12 unit(s) actually mined ...
+```
+
+That is as much the point as the speed. A work probe that passes in 2m04s and later passes in 6m50s
+has regressed, and the old reports could not show it.
+
+Measured over a full chain afterwards: **8m17s against 13m35s**, and the honesty of the numbers is
+worth as much as the saving —
+
+```
+Bot party probe PASSED - invite accepted in 4s of 7s
+Bot walk  probe PASSED - in 1m32s of 1m30s      <- never exits early; bots were still travelling
+Bot life  probe        - in 3m04s of 3m00s      <- never exits early; churn bar not met
+Bot chat  probe PASSED - in 34s of 1m30s
+Bot work  probe PASSED - in 2m59s of 7m00s
+```
+
+Almost all of it is the work probe. The walk and life probes ran their windows out because their
+conditions genuinely were not met early — which is the point of printing elapsed against timeout
+rather than assuming the saving applies everywhere.
+
+### The probe leak, which was real
+
+`BotWalkProbe.Report` and `BotLifeProbe.Report` were not wrapped, and both do substantial work —
+walker and rung accessors, `BotCrowds.BelowFloor`, list indexing — before their single `Finish` at
+the end. A throw anywhere in there skipped `Finish`, which left `_running` true for the life of the
+process **and left `BotLifecycle.Override` and `IntervalOverride` installed**: a shard stuck on a
+ten-second lifecycle cadence and 15–30s phase clamps, silently, until restart.
+
+That was live, and it is exactly the failure `BotLifecycle`'s own comment claims to prevent —
+*"Held in memory rather than written to bots.json so a probe that dies mid-run cannot leave the
+shard permanently accelerated."* The in-memory half was done; the always-restore half was not.
+
+Both are now `try` / `catch` into a failing `Finish`, plus a `finally` that clears the overrides
+unconditionally. Catch rather than a bare finally because a logged failure becomes a red health
+check somebody sees, where a rethrow into a `Timer` callback becomes a console line nobody reads.
 
 ### What the work layer did to the lifecycle probe
 

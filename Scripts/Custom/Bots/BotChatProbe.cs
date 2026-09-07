@@ -53,7 +53,18 @@ namespace Server.Custom
         public static readonly TimeSpan SilenceWindow = TimeSpan.FromSeconds(30.0);
 
         private static HealthResult _last;
+
+        private static BotProbeClock _clock;
+        private static Timer _watch;
+
+        private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2.0);
         private static bool _running;
+
+        /// <summary>True while this probe is mid-run. Read by [BotSmoke to advance the chain.</summary>
+        public static bool IsRunning
+        {
+            get { return _running; }
+        }
 
         public static HealthResult BuildHealthResult()
         {
@@ -126,7 +137,27 @@ namespace Server.Custom
                     bot.Name,
                     SpeakWindow.TotalSeconds);
 
-                Timer.DelayCall(SpeakWindow, () => CheckSpoke(bot, listener));
+                // The SPEAK stage ends the moment a line is heard - that is the whole assertion.
+                // The SILENCE stage after it keeps its full window, because proving a bot stayed
+                // quiet is an absence and cannot be established early.
+                _clock = new BotProbeClock(SpeakWindow + SilenceWindow);
+
+                _watch = Timer.DelayCall(PollInterval, PollInterval, 0, () =>
+                {
+                    if (bot != null && !bot.Deleted && bot.SpeechLines == 0
+                        && _clock.Elapsed < SpeakWindow)
+                    {
+                        return;
+                    }
+
+                    if (_watch != null)
+                    {
+                        _watch.Stop();
+                        _watch = null;
+                    }
+
+                    CheckSpoke(bot, listener);
+                });
             }
             catch (Exception ex)
             {
@@ -341,11 +372,14 @@ namespace Server.Custom
 
                 int since = bot.SpeechLines - spokenBefore;
 
+                // The speak stage ends as soon as a line is heard, so quoting SpeakWindow here
+                // would claim a minute the probe did not spend. The silence stage always runs its
+                // full window - absence needs it - so that one is quoted as configured.
                 string summary = String.Format(
-                    "{0} line(s) with a listener in {1:0}s, {2} without one in {3:0}s. "
+                    "in {0} - {1} line(s) with a listener, then {2} in the {3:0}s silence stage. "
                     + "corpus {4} wired / {5} reserved / {6} unknown",
+                    _clock == null ? "?" : _clock.Describe(),
                     spokenBefore,
-                    SpeakWindow.TotalSeconds,
                     since,
                     SilenceWindow.TotalSeconds,
                     ChatLibrary.WiredLines,
@@ -427,6 +461,15 @@ namespace Server.Custom
             return behaviour == null || behaviour.ChatCategories == null
                 ? "0"
                 : behaviour.ChatCategories.Length.ToString();
+        }
+
+        private static void StopWatch()
+        {
+            if (_watch != null)
+            {
+                _watch.Stop();
+                _watch = null;
+            }
         }
 
         private static void Finish(PlayerBot bot, PlayerMobile listener, HealthResult result)

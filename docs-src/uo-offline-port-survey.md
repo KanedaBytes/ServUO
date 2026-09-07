@@ -8,8 +8,21 @@ Written before step 6 (the bot-mobile layer), as the survey `nav-format-comparis
 
 **Purpose: decide what to port, in what order, and what it costs — not to plan the port itself.**
 
-Source read: `E:\dev\UO\uo-offline-server`, installed from `Klein187/uo-offline` @ `91848d8`
-(`uo-offline-version.json`). The brief's folder names do not match the tree; they resolve as:
+## Status
+
+| | |
+| --- | --- |
+| **Surveyed** | `Klein187/uo-offline` @ `91848d8`, installed 2026-09-05, then at `E:\dev\UO\uo-offline-server` |
+| **Current reference** | `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` — @ `fe18a469`, installed 2026-09-06, on ModernUO `0.15.6.145-4-ge7f85d404` |
+| **Ported so far** | sessions 1–5 (shard steps 6–8 and 7d/7e): identity, movement, lifecycle, speech, work |
+| **Stale below** | four modules rewritten by their September 2026 release — see §5 |
+
+**Every line count and file count in §1 was taken at `91848d8` and has not been re-taken.** The
+relative paths in the table below are still correct under the new root; only the root moved.
+
+Source read: `C:\Users\sean.GEKKOSTATE\uo-modernuo` (was `E:\dev\UO\uo-offline-server`),
+installed from `Klein187/uo-offline` (`uo-offline-version.json`). The brief's folder names do not
+match the tree; they resolve as:
 
 | Brief | Actual |
 | --- | --- |
@@ -416,6 +429,28 @@ for two of those three** — `ChatLibrary` is the only genuinely new foundation.
 
 Everything beyond 6e — Adventurer, PK, dungeons, economy, parties, guilds, taming, housing,
 treasure hunts — is a **separate layer** and out of scope for this ordering, as the brief asks.
+
+### Re-survey these four before porting them
+
+Their **September 2026 release (`fe18a469`)** substantially rewrote four modules that this port has
+not reached. The counts in §1 are stale for these specifically, and the portability judgements in §2
+were made against code that no longer exists in that form. Measured against the `91848d8` tree:
+
+| Module | Then → now | What changed |
+| --- | --- | --- |
+| **Resurrection** | `Behaviors/GhostBehavior.cs` 147 → **573**; **new** `BotResurrectAid.cs` (408) and `Behaviors/GhostExitBehavior.cs` (483); `BotDeathManager.cs` 605 → 793 | Ghosts now seek a healer NPC, a real ankh, or a willing bot — Magery ≥ 80 plus reagents, or Healing/Anatomy ≥ 80 plus a bandage. Blue helps blue; a red is helped only by another red or a partymate. Their header notes the old "a wandering healer found them" timer was ~17 of 19 resurrections in one soak and is gone |
+| **Party formation** | `BotPartySystem.cs:140-145` — new `RecruitMin = 2` / `RecruitMax = 4` (was a hardcoded `RandomMinMax(1, 3)`); `RecruitRange` 20 → 30; `Behaviors/PartyMemberBehavior.cs` 89 → 169 | Leader + 2–4 = **3–5 members**. Their own file header still says "1-3 answer" and is stale — do not port the comment |
+| **Combat kiting** | `Behaviors/AdventurerBehavior.cs` 2636 → **3522**; kite block rewritten ~2900-3045 | Crowd-aware standoff widening (retreat from the pack's centroid, not the target), and a `KiteBreakGrace` of 2.5s during which a retreating bot walks rather than rooting itself casting |
+| **Gossip** | `BotEventJournal.cs` 422 → **806** | Repeat-killer gossip at 3+ murders by one actor, and conversational replies — a bystander answers the gossiper from the new `Gossip/react_*.txt`. `red` sightings deliberately down-weighted 2.0 → 0.8 |
+
+Also new, and a **prerequisite for the resurrection and gossip sessions**: the corpus grew from 123
+flat `.txt` + 22 in `Gossip/` to **143 + 24**, adding `ghost_plea`, `res_offer`, `res_fail`,
+`party_lead_taken`, `pk_loot`, `pk_prize` and seven `Gossip/react*` files. Nothing was removed, so
+`Data/Custom/BotChat/` is still a valid subset — but it wants refreshing before either lands.
+
+Not changed, and worth knowing because a later session may hope otherwise: **the gather sites are
+still exactly three** (`MiningSpot` 2, `LumberSpot` 1, `GatherSpot` 0) and `GatherSpots.cs` is still
+the retired stub.
 
 Session 6a is deliberately the whole visible payoff of the class/tier/equipment model with none of
 its behaviour, because that is the part that is pure translation and proves the language-level and
