@@ -536,6 +536,21 @@ namespace Server.Custom
         [JsonProperty("id")]
         public string Id { get; set; }
 
+        /// <summary>
+        /// An optional human name for the editor to draw instead of the id. Empty means show the id.
+        ///
+        /// OPTIONAL, and NullValueHandling.Ignore is load-bearing rather than tidiness: JsonConfig
+        /// serializes nulls by default, so without it the first save would stamp `"name": ""` onto
+        /// all seventy-odd existing waypoints and turn a one-line edit into a whole-file diff.
+        ///
+        /// A waypoint is not a destination. Most of them are road nodes whose id ('brit-plaza-4')
+        /// is the most useful thing to show, so this stays absent for the great majority and is
+        /// worth setting only where a human name genuinely reads better than the id - the corridor
+        /// out to a work site, say, where 'West gate road 3' says something the id does not.
+        /// </summary>
+        [JsonProperty("name", NullValueHandling = NullValueHandling.Ignore)]
+        public string Name { get; set; }
+
         [JsonProperty("map")]
         public string MapName { get; set; }
 

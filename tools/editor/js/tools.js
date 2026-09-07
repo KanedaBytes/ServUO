@@ -74,6 +74,7 @@ export const TOOLS = {
         fields: [
             { key: 'id', label: 'Id', required: true },
             { key: 'tags', label: 'Tags (space separated)', value: 'town road' },
+            { key: 'name', label: 'Display name (optional)' },
             { key: 'arrivalRange', label: 'Arrival range (0 = walker default)', value: '0' }
         ]
     },

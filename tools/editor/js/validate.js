@@ -43,7 +43,7 @@ const ID = /^[A-Za-z0-9._-]+$/;
  */
 export const KEYS = {
     costTags: ['tag', 'multiplier'],
-    waypoints: ['id', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note'],
+    waypoints: ['id', 'name', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note'],
     edges: ['from', 'to', 'kind', 'tags', 'note'],
     destinations: ['id', 'name', 'type', 'map', 'x', 'y', 'z', 'tags', 'waypoints', 'note'],
     arrivals: ['destination', 'x', 'y', 'z', 'exclusive', 'waypoints', 'note'],

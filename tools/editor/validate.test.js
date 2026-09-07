@@ -93,14 +93,27 @@ test('the fixture itself is clean, or every other test below means nothing', () 
     assert.deepStrictEqual(warnings, []);
 });
 
-test('the shipped files produce no fatals and no warnings', () => {
-    // The shard agrees: health.json's Nav.Data check reads Ok, not Warn. If this ever fires, the
-    // question is whether validate.js grew a wrong rule or the data grew a real problem - and the
-    // answer is in the message, which is phrased the same way the shard phrases it.
+// The shipped data carries exactly ONE known warning, and it is listed here rather than the
+// assertion being loosened to "no unexpected warnings". An exact list still fails on anything new;
+// a `.filter()` would quietly swallow the next one.
+//
+// brit-forge's four arrival points were all made exclusive to stop NavArrivals scattering a smith
+// two tiles off its anvil, which CheckAnvilAndForge then refuses - it was failing the work probe
+// about half the time. Exclusivity buys exactness at the cost of three of the four standing spots,
+// which is what this warning is saying, and it is a STOPGAP: the real fix is an `exact` flag on an
+// arrival (no scatter, but not reserved), which is a schema change. Delete this entry when it lands.
+const KNOWN_WARNINGS = [
+    "destination 'brit-forge' has 4 exclusive arrival point(s) but only 0 shared one(s)"
+];
+
+test('the shipped files produce no fatals and only the known warnings', () => {
+    // The shard agrees: health.json's Nav.Data check reports the same single line. If this ever
+    // fires, the question is whether validate.js grew a wrong rule or the data grew a real problem
+    // - and the answer is in the message, which is phrased the same way the shard phrases it.
     const { fatal, warnings } = validate.validate(shipped(), {});
 
     assert.deepStrictEqual(fatal.map((p) => p.message), []);
-    assert.deepStrictEqual(warnings.map((p) => p.message), []);
+    assert.deepStrictEqual(warnings.map((p) => p.message), KNOWN_WARNINGS);
 });
 
 // ---- the anti-drift guards ---------------------------------------------------------------------

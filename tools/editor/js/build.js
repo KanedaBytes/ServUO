@@ -22,14 +22,19 @@ export function buildShape(key, props, map, draft, context = {}) {
     switch (key) {
         case 'waypoint':
             return {
-                ...common, id: `wp:${props.id}`, kind: 'point', label: props.id,
+                ...common, id: `wp:${props.id}`, kind: 'point', label: props.name || props.id,
                 points: [[point[0], point[1], 0]],
                 props: {
                     id: props.id,
+                    // Omitted when blank rather than written empty: the schema marks name
+                    // NullValueHandling.Ignore, and a created record never contains a blank
+                    // optional field.
+                    ...(props.name ? { name: props.name } : {}),
                     arrivalRange: Number(props.arrivalRange) || 0,
                     tags: props.tags || ''
                 },
                 fields: [
+                    { key: 'name', label: 'Display name', type: 'string' },
                     { key: 'tags', label: 'Tags', type: 'string' },
                     { key: 'arrivalRange', label: 'Arrival range', type: 'int' }
                 ]

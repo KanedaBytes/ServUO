@@ -550,6 +550,17 @@ pets stabled for the length of the sentence.
   BOMs, `-NoNewline` flattens a whole file onto one line, and the round-trip corrupts non-ASCII
   (an em dash becomes `â€"`). Use the editor tools or Python for anything textual; keep PowerShell
   for running processes.
+- **Line endings are not uniform in this tree, and two tests compare raw bytes.** `core.autocrlf`
+  is `true`, so `.cs` files check out **CRLF** — but `Data/Custom/*.json` and the fixtures in
+  `Data/Custom/golden/` sit in the working tree as **LF**, because the shard's own writer
+  (`AtomicFile.Write`) put them there after checkout and `git diff` normalises, so nothing ever
+  complains. `compact.js` writes LF too, which is why `project.test.js`'s *"unproject with no edits
+  is the identity"* and *"the shipped file is canonical"* fail the moment a JSON file becomes CRLF.
+  **Check with `head -c 4 <file> | xxd -p` before and after editing data files** — `7b0a` is LF,
+  `7b0d0a` is CRLF. `grep -c $'\r'` lies in Git Bash. A Python round-trip that reads text and
+  writes with `newline=''` silently flattens CRLF to LF; the reverse — an editor that normalises to
+  the platform convention — silently converts an LF data file to CRLF. Both have cost a debugging
+  detour here. Read and write bytes (`open(p,'rb')` / `'wb'`) when touching these files.
 
 ## 16. Commit checkpoints
 

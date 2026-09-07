@@ -70,10 +70,11 @@ function projectNavigation(nav) {
             id: `wp:${wp.id}`,
             kind: 'point',
             map: wp.map,
-            label: wp.id,
+            label: wp.name || wp.id,
             points: [[wp.x, wp.y, wp.z]],
             props: { id: wp.id, ...extraProps(wp, MODELLED.waypoint) },
             fields: [
+                { key: 'name', label: 'Display name', type: 'string' },
                 { key: 'tags', label: 'Tags', type: 'string' },
                 { key: 'arrivalRange', label: 'Arrival range', type: 'int' }
             ]
@@ -395,10 +396,10 @@ function project(files) {
 
 const TEMPLATES = {
     waypoint: {
-        keys: ['id', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note'],
+        keys: ['id', 'name', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note'],
         geometry: ['map', 'x', 'y', 'z'],
         defaults: { arrivalRange: 0, tags: '' },
-        omitWhenBlank: ['note']
+        omitWhenBlank: ['name', 'note']
     },
     edge: {
         keys: ['from', 'to', 'kind', 'tags', 'note'],

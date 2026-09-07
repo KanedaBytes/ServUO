@@ -37,15 +37,15 @@ JSON arrays: `JsonConfig.SerializeCompact` only collapses a container whose chil
 scalars, so a nested `"tags": [...]` would expand its record over eight lines.
 
 ```json
-{"id":"brit-bank-2","map":"Trammel","x":1434,"y":1697,"z":0,"arrivalRange":6,"tags":"town road bank"}
+{"id":"brit-bank-2","name":"Bank plaza","map":"Trammel","x":1434,"y":1697,"z":0,"arrivalRange":6,"tags":"town road bank"}
 {"from":"brit-bank-0","to":"brit-bank-2","kind":"walk","tags":"road"}
-{"id":"brit-bank","name":"Britain Bank","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded","waypoints":"brit-bank-2 brit-bank-0"}
+{"id":"brit-bank","name":"First Bank Of Britain","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded","waypoints":"brit-bank-2 brit-bank-0"}
 {"destination":"brit-bank","x":1437,"y":1694,"z":0,"exclusive":false,"waypoints":"brit-bank-2"}
 ```
 
 | Section | What it is |
 | --- | --- |
-| `waypoints` | Graph nodes. `arrivalRange` overrides the walker's arrival tolerance — set it to 1 for a doorway at an unusual Z where the mobile must step on the exact tile |
+| `waypoints` | Graph nodes. `arrivalRange` overrides the walker's arrival tolerance — set it to 1 for a doorway at an unusual Z where the mobile must step on the exact tile. `name` is **optional** and is only a label for the editor: absent means show the id, which for a road node like `brit-plaza-4` is the more useful thing, so most waypoints have none |
 | `edges` | **Explicit links only, never derived from proximity.** `kind` is `walk` or `gate` |
 | `destinations` | Places worth going to. `type` is a free token (`bank`, `tavern`, `shop`, `home`, `gate`, `guard`, `work`, `wander`) |
 | `arrivals` | Standable tiles at a destination — a separate concept from the destination's own centre |
@@ -115,8 +115,8 @@ take it offline:
   rather than handed to a consumer that would walk into the gap.
 - **`Nav.Data` warnings** (quality): destination with no arrival points; over-cap edge or route
   leg; more than one walk-connected component on a facet with destinations in both; a destination
-  with no arrival point within the hop cap of a waypoint; a waypoint with no edges; a failing
-  self-test.
+  with no arrival point within the hop cap of a waypoint, **or with any individual arrival beyond
+  it** (see below); a waypoint with no edges; a failing self-test.
 
 ## Stuck recovery
 

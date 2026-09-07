@@ -474,6 +474,14 @@ it resolves yet. Each line is classified once, at load:
 | **reserved** | every token is known, one or more unwired | counted, **never enters a pool** |
 | **unknown** | a token nobody registered — a typo | counted, **Warn** |
 
+`{place}` and `{dest}` read `NavDestination.Name` straight out of `navigation.json` and needed no
+code change to start saying Britain's real building names — *"I'm off to The Cleaver"*, *"meet me
+at First Bank Of Britain"*. That is the whole point of the naming pass: the names were already
+being spoken, they were just placeholders. Sixteen destinations took their Stratics name; the mage
+shop kept its generic one because the nearest atlas entry is 22 tiles away and may simply be a
+different building, and ten records (the houses, the gates, the crier's stand, the outcrop) have no
+atlas entry at all.
+
 Ownership: `{place}` `{dest}` → nav (**wired**, from `NavDestination.Name`); `{name}` → identity
 (**wired**); `{mat}` → crafting (**wired** since 7e, from `CrafterProfile.MaterialNoun`);
 `{price}` `{item}` `{short}` → economy; `{pet}` → taming; `{dungeon}` → adventurer;
