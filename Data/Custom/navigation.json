@@ -293,7 +293,8 @@
     {"id":"brit-guard-west","name":"West gate guard post","type":"guard","map":"Trammel","x":1399,"y":1625,"z":28,"tags":"guarded","waypoints":"brit-gate-w"},
     {"id":"brit-crier-west","name":"West crier's stand","type":"work","map":"Trammel","x":1420,"y":1697,"z":0,"tags":"town","waypoints":"brit-crier-1"},
     {"id":"brit-forge","name":"The Hammer and Anvil (forge)","type":"forge","map":"Trammel","x":1424,"y":1557,"z":30,"tags":"craft town","waypoints":"brit-smith-1"},
-    {"id":"brit-mine-north","name":"The Northern Outcrop","type":"mine","map":"Trammel","x":1449,"y":1521,"z":39,"tags":"mine-north wilderness","waypoints":"brit-minenorth-1"}
+    {"id":"brit-mine-north","name":"The Northern Outcrop","type":"mine","map":"Trammel","x":1449,"y":1521,"z":39,"tags":"mine-north wilderness","waypoints":"brit-minenorth-1"},
+    {"id":"brit-mine-west","name":"West Cliff Mine","type":"mine","map":"Trammel","x":1191,"y":1748,"z":0,"tags":"mine-west","waypoints":"wp-23"}
   ],
   "arrivals": [
     {"destination":"brit-bank","x":1437,"y":1694,"z":0,"exclusive":false,"waypoints":"brit-bank-2"},
@@ -369,7 +370,11 @@
     {"destination":"brit-mine-north","x":1452,"y":1529,"z":35,"exclusive":false,"waypoints":"brit-minenorth-1"},
     {"destination":"brit-mine-north","x":1448,"y":1522,"z":45,"exclusive":false,"waypoints":"brit-minenorth-1"},
     {"destination":"brit-mine-north","x":1450,"y":1512,"z":40,"exclusive":false,"waypoints":"brit-minenorth-1"},
-    {"destination":"brit-mine-north","x":1447,"y":1527,"z":32,"exclusive":false,"waypoints":"brit-minenorth-1"}
+    {"destination":"brit-mine-north","x":1447,"y":1527,"z":32,"exclusive":false,"waypoints":"brit-minenorth-1"},
+    {"destination":"brit-mine-west","x":1192,"y":1750,"z":0,"exclusive":false,"waypoints":"wp-23"},
+    {"destination":"brit-mine-west","x":1195,"y":1754,"z":0,"exclusive":false,"waypoints":"wp-23"},
+    {"destination":"brit-mine-west","x":1196,"y":1776,"z":0,"exclusive":false,"waypoints":"wp-23"},
+    {"destination":"brit-mine-west","x":1193,"y":1779,"z":0,"exclusive":false,"waypoints":"wp-23"}
   ],
   "zones": [
     {"id":"brit-town","map":"Trammel","x":1416,"y":1498,"width":324,"height":279,"tags":"town britain guarded"},
@@ -378,7 +383,8 @@
     {"id":"brit-bank-quarter","map":"Trammel","x":1418,"y":1668,"width":30,"height":34,"tags":"bank britain"},
     {"id":"brit-market-quarter","map":"Trammel","x":1440,"y":1655,"width":40,"height":32,"tags":"market britain"},
     {"id":"brit-plaza-quarter","map":"Trammel","x":1455,"y":1600,"width":40,"height":50,"tags":"plaza britain"},
-    {"id":"brit-mine-north-face","map":"Trammel","x":1443,"y":1508,"width":14,"height":26,"tags":"mine wilderness work"}
+    {"id":"brit-mine-north-face","map":"Trammel","x":1443,"y":1508,"width":14,"height":26,"tags":"mine wilderness work"},
+    {"id":"brit-mine-west-face","map":"Trammel","x":1191,"y":1743,"width":9,"height":41,"tags":"mine wilderness work"}
   ],
   "routes": [
     {"id":"brit-watch-north","map":"Trammel","mode":"cycle","waypoints":"brit-plaza-1 brit-plaza-2 brit-plaza-2b brit-plaza-3 brit-plaza-2b brit-plaza-2"},
