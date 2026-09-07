@@ -52,7 +52,13 @@ const FILES = {
     siteReach: path.join(REPO_ROOT, 'Data', 'Live', 'site-reach.json'),
     navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json'),
     botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json'),
-    navHop: path.join(REPO_ROOT, 'Data', 'Live', 'nav-hop.json')
+    navHop: path.join(REPO_ROOT, 'Data', 'Live', 'nav-hop.json'),
+
+    // Authoring input, not live data: uo-offline's navigation converted into our schema.
+    // Read-only by construction - resolveSave has no entry for it, so the save endpoint
+    // cannot name it however the request is spelled.
+    reference: path.join(
+        REPO_ROOT, 'Data', 'Custom', 'reference', 'uo-offline-nav.trammel.json')
 };
 
 /**

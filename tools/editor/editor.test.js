@@ -657,7 +657,10 @@ test('at the default Britain view the labels are landmarks, not a fifth of every
         measureText: (t) => ({ width: t.length * 6 }),
         fillText: () => drawn++, fillRect: () => {}, strokeRect: () => {}, arc: () => {},
         beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, closePath: () => {},
-        stroke: () => {}, fill: () => {}
+        stroke: () => {}, fill: () => {},
+        // draw() brackets every shape in save/restore so the reference layer's line dash cannot
+        // leak onto the next shape.
+        save: () => {}, restore: () => {}, setLineDash: () => {}
     };
 
     shapes.draw(ctx, view, world, visible, null, null, null);

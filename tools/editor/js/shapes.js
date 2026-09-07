@@ -68,6 +68,22 @@ export const LAYERS = {
         label: 'GG spawners', color: '#ff6fd8', file: null, reload: 'spawn-reload',
         labelAt: 1.0, labelPriority: 4
     },
+    // uo-offline's data, drawn OVER ours and never confusable with it: dimmer, and dashed where
+    // an authored edge is solid. Labels on hover only, for the stock-spawner reason - there are
+    // 3952 of these and the label pass is not for context.
+    reference: {
+        label: 'uo-offline waypoints', color: '#6b7a8f', file: null, reload: null,
+        labelAt: Infinity, labelPriority: 0
+    },
+    'reference-edges': {
+        label: 'uo-offline roads', color: '#5a6675', file: null, reload: null,
+        labelAt: Infinity, labelPriority: 0
+    },
+    'reference-destinations': {
+        label: 'uo-offline places', color: '#9c8f7a', file: null, reload: null,
+        labelAt: Infinity, labelPriority: 0
+    },
+
     'spawners-stock': {
         // 2,572 on Trammel alone, loaded by viewport and never written. Labels on hover only -
         // they are context, and 2,572 names in the label pass is the thing being avoided.
@@ -78,7 +94,12 @@ export const LAYERS = {
 };
 
 /** Layers the editor draws but never writes. */
-export const READ_ONLY_LAYERS = new Set(['spawners-stock', 'entities']);
+export const READ_ONLY_LAYERS = new Set([
+    'spawners-stock', 'entities', 'reference', 'reference-edges', 'reference-destinations']);
+
+/** Layers whose shapes come from /api/reference. Read-only, and never saved. */
+export const REFERENCE_LAYERS = new Set([
+    'reference', 'reference-edges', 'reference-destinations']);
 
 /** Layers whose shapes come from /api/spawners rather than /api/shapes. */
 export const SPAWNER_LAYERS = new Set(['spawners', 'spawners-stock']);
@@ -119,9 +140,12 @@ export function draw(ctx, view, shapes, visible, selected, hovered, matches) {
         // filter is to find one thing among the others, not to remove the others.
         const dimmed = matches !== null && !matches.has(shape);
 
+        // save/restore rather than resetting by hand: drawShape returns from eight places, and the
+        // reference style sets a line dash that would otherwise leak onto whatever is drawn next.
+        ctx.save();
         ctx.globalAlpha = dimmed ? 0.22 : 1;
         drawShape(ctx, view, shape, shape === selected, shape === hovered);
-        ctx.globalAlpha = 1;
+        ctx.restore();
 
         drawn.push({ shape, dimmed });
     }
@@ -350,6 +374,16 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     ctx.lineWidth = isSelected ? 2 : isHovered ? 2 : 1;
     ctx.strokeStyle = isSelected ? '#ffffff' : isHovered ? '#cfe4ff' : hopColor(shape) || color;
     ctx.fillStyle = color;
+
+    // Reference records are somebody else's data drawn over ours, and the one thing that must
+    // never happen is mistaking one for the other while editing. Dashed and half-opacity says
+    // "this is not yours" at a glance, without needing the layer list to be read.
+    const isReference = REFERENCE_LAYERS.has(shape.layer);
+
+    if (isReference) {
+        ctx.setLineDash(isSelected || isHovered ? [] : [4, 3]);
+        ctx.globalAlpha *= isSelected || isHovered ? 0.9 : 0.55;
+    }
 
     if (shape.kind === 'rect') {
         const [x, y, w, h] = shape.rect;

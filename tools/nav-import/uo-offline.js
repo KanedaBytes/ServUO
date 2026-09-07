@@ -91,6 +91,20 @@ const DUNGEON_X = 5120;
  */
 const LOSTLANDS_Y = 2300;
 
+/**
+ * Every reference id is namespaced, and that is a safety property rather than a naming taste.
+ *
+ * Their waypoints are called things like `WP 157`, which slugifies to `wp-157` - and `wp-<n>` is
+ * exactly what our own corridor tool mints for an unnamed road waypoint. Before this prefix, 23
+ * reference ids collided with ids already in navigation.json, among them `wp-1`: ours at
+ * 1381,1750 on the west road, theirs a different tile at 1564,1687. Adopting one would have
+ * overwritten authored data, which is the one thing Adopt must never do.
+ *
+ * A prefix makes that impossible by construction instead of by a check somebody has to remember,
+ * and it keeps the reference visibly distinct in the editor's own id lists.
+ */
+const PREFIX = 'uo-';
+
 /** Our ids are `[a-z0-9-]`, so their display names have to be minted into one. */
 function slugify(name) {
     const slug = String(name || '')
@@ -101,8 +115,16 @@ function slugify(name) {
     return slug || 'wp';
 }
 
-/** A slug nothing else has taken. Their names collide once case and punctuation are gone. */
-function uniqueId(base, taken) {
+/**
+ * A slug nothing else has taken. Their names collide once case and punctuation are gone.
+ *
+ * Renames are RECORDED, not merely performed. `Britain Bank` is both a waypoint and a destination
+ * in their data, so the destination becomes `uo-britain-bank-2` - and Adopt has to know that the
+ * id it is copying is not always the slug of the name beside it, or a later re-import that
+ * happens to order two colliding records the other way round would quietly repoint an adopted
+ * edge at the wrong record.
+ */
+function uniqueId(base, taken, renamed) {
     if (!taken.has(base)) {
         taken.add(base);
         return base;
@@ -113,6 +135,11 @@ function uniqueId(base, taken) {
 
         if (!taken.has(candidate)) {
             taken.add(candidate);
+
+            if (renamed) {
+                renamed.push(`${base} -> ${candidate}`);
+            }
+
             return candidate;
         }
     }
@@ -151,7 +178,7 @@ function readJson(file) {
  * report, touches no files. That is what lets the tests drive it with fixtures.
  */
 function convert(sources, { map = 'Trammel' } = {}) {
-    const report = { unmapped: [], counts: {} };
+    const report = { unmapped: [], renamed: [], counts: {} };
     const taken = new Set();
 
     // --- waypoints ------------------------------------------------------------------------
@@ -159,7 +186,7 @@ function convert(sources, { map = 'Trammel' } = {}) {
     const waypoints = [];
 
     for (const source of sources.waypoints) {
-        const id = uniqueId(slugify(source.Name), taken);
+        const id = uniqueId(PREFIX + slugify(source.Name), taken, report.renamed);
         const tags = regionTag(source.X, source.Y);
 
         byName.set(source.Name, id);
@@ -235,7 +262,7 @@ function convert(sources, { map = 'Trammel' } = {}) {
             continue;
         }
 
-        const id = uniqueId(slugify(source.Name), taken);
+        const id = uniqueId(PREFIX + slugify(source.Name), taken, report.renamed);
 
         // A Dungeon field wins over the coordinate: ten of their dungeon records sit at x < 5120
         // because a dungeon ENTRANCE is on the overworld, and the strip rule alone misses all ten.
@@ -285,7 +312,7 @@ function convert(sources, { map = 'Trammel' } = {}) {
                 report.unmapped.push(
                     `destination '${source.Name}': polygon has ${source.Polygon.length} point(s), needs 3`);
             } else {
-                zones.push(polyZone(uniqueId(`${id}-area`, taken), source.Polygon, map,
+                zones.push(polyZone(uniqueId(`${id}-area`, taken, report.renamed), source.Polygon, map,
                     tagsFrom(mapped.type, region)));
             }
         }
@@ -299,7 +326,7 @@ function convert(sources, { map = 'Trammel' } = {}) {
         }
 
         zones.push(polyZone(
-            uniqueId(slugify(source.Name), taken),
+            uniqueId(PREFIX + slugify(source.Name), taken, report.renamed),
             source.Points,
             map,
             tagsFrom(source.Kind ? slugify(source.Kind) : '', source.Type ? slugify(source.Type) : '')));
@@ -418,6 +445,15 @@ function main() {
         console.log(`  ${key.padEnd(14)} ${value}`);
     }
 
+    if (report.renamed.length > 0) {
+        console.log(`
+${report.renamed.length} id(s) renamed to avoid a collision:`);
+
+        for (const line of report.renamed) {
+            console.log(`  ${line}`);
+        }
+    }
+
     if (report.unmapped.length > 0) {
         console.log(`\n${report.unmapped.length} record(s) not mapped:`);
 
@@ -436,7 +472,7 @@ function main() {
 }
 
 module.exports = {
-    convert, serialize, slugify, uniqueId, regionTag, polyZone,
+    convert, serialize, slugify, uniqueId, regionTag, polyZone, PREFIX,
     TYPES, DROPPED_TYPES, DUNGEON_X, LOSTLANDS_Y
 };
 

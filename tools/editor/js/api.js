@@ -54,6 +54,18 @@ export const api = {
         bbox
             ? `/api/spawners?bbox=${bbox.x},${bbox.y},${bbox.width},${bbox.height}`
             : '/api/spawners'),
+    /**
+     * The uo-offline reference inside a box, for the regions whose toggles are on.
+     *
+     * Bbox and regions both go on the wire because 3952 waypoints is not a payload to send on
+     * every pan and then filter in the browser - the 1988 dungeon ones would be serialised only
+     * to be dropped.
+     */
+    reference: (bbox, regions) => request(
+        'GET',
+        `/api/reference?regions=${encodeURIComponent(regions.join(','))}`
+            + (bbox ? `&bbox=${bbox.x},${bbox.y},${bbox.width},${bbox.height}` : '')),
+
     entities: () => request('GET', '/api/entities'),
     audit: () => request('GET', '/api/audit'),
     reach: () => request('GET', '/api/reach'),

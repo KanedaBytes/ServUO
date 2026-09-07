@@ -40,6 +40,7 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `js/build.js` | A finished tool to a shape - the seam between the browser and the writer |
 | `js/worksites.js` | The work-site overlay: reach, candidates and which tiles are taken |
 | `js/audit.js` | What `[NavAudit` found, in words |
+| `reference.js` | uo-offline's converted data as shapes - bbox-loaded, read-only |
 | `js/live.js` | The Live panel's line and snapshot age |
 | `spawnxml.js` | Source-preserving reader and writer for XmlSpawner's spawn XML |
 | `objects2.js` | The `<Objects2>` micro-format: what a spawner spawns |
@@ -104,6 +105,33 @@ or its key is not there.
 A template rather than copying the shape of a sibling record, because `restricted-zones.json` ships
 as `{"zones": []}` and has no sibling to copy — and a donor that happened to carry a `note` would
 give every new record a `"note": ""`.
+
+## The uo-offline reference layer
+
+`Data/Custom/reference/uo-offline-nav.trammel.json` is 3952 waypoints and 4291 edges converted
+from uo-offline (see that directory's README). It is **authoring input, not shard data** — the
+shard never loads it, and the Adopt step is the only thing that turns any of it into
+`navigation.json`.
+
+**Read-only by construction, not by convention.** `whitelist.resolveSave` serves the `WRITABLE`
+table and the spawn files; `reference` is in neither, so there is no spelling of a save request
+that reaches it. A test asserts that.
+
+**Bbox-loaded, exactly as the stock spawners are**, and for the same arithmetic: 4364 shapes is a
+grey smear that costs a megabyte to draw. One difference is worth knowing, because it was a bug
+first: a null bbox means *omit* the stock spawners, but it would mean *the whole overworld* here,
+so `refreshReference` drops what it has and asks for nothing below the zoom floor rather than
+asking for everything.
+
+The regions go on the wire too. Overworld is on by default; **dungeon (1988 waypoints) and Lost
+Lands (43) are separate toggles**, off, because Adopt refuses both until those steps exist and
+serialising them to have the browser drop them is the work the bbox is there to avoid.
+
+Drawn dashed and at half opacity, labels on hover only. The one thing that must never happen is
+mistaking somebody else's road for one of ours while editing, so the difference is visible without
+reading the layer list. Every reference edge carries its length in `props.tiles`, because **56% of
+them are longer than the hop cap** and that is the fact that decides whether adopting one is a copy
+or a re-walk.
 
 ## The work-site overlay and the Site tool
 

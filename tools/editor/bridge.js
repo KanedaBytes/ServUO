@@ -22,6 +22,7 @@ const crypto = require('crypto');
 const compact = require('./compact.js');
 const { project, unproject } = require('./project.js');
 const spawners = require('./spawners.js');
+const reference = require('./reference.js');
 const whitelist = require('./whitelist.js');
 
 const DEFAULT_PORT = 8081;
@@ -303,6 +304,30 @@ const ROUTES = {
      * `total` comes back too, so the layer count can read "N in view / 2,572 total" and the number
      * never looks like the whole.
      */
+    /**
+     * The uo-offline reference inside a box.
+     *
+     * Bbox-loaded for the same reason the stock spawners are: 3952 waypoints and 4291 edges are
+     * not drawable at facet scale, and serialising the 1988 dungeon ones on every pan to have the
+     * browser drop them is work nobody asked for. The regions the caller wants are named in the
+     * query, so a toggle that is off costs nothing on the wire.
+     */
+    '/api/reference': (request, response) => {
+        const url = new URL(request.url, `http://${HOST}`);
+        const bbox = parseBbox(url.searchParams.get('bbox'));
+        const facet = url.searchParams.get('facet') || 'Trammel';
+        const regions = (url.searchParams.get('regions') || 'overworld')
+            .split(',')
+            .map((token) => token.trim())
+            .filter(Boolean);
+
+        sendJson(response, 200, {
+            ...reference.project(bbox, { regions, facet }),
+            ...reference.summary(),
+            bbox: bbox || null
+        });
+    },
+
     '/api/spawners': (request, response) => {
         const url = new URL(request.url, `http://${HOST}`);
         const bbox = parseBbox(url.searchParams.get('bbox'));

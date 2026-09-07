@@ -119,7 +119,7 @@ test('an edge is written once per pair, however many times they name it', () => 
 
     assert.strictEqual(doc.edges.length, 2);
     assert.deepStrictEqual(
-        doc.edges.map((e) => `${e.from}>${e.to}`).sort(), ['a>b', 'a>c']);
+        doc.edges.map((e) => `${e.from}>${e.to}`).sort(), ['uo-a>uo-b', 'uo-a>uo-c']);
 
     for (const edge of doc.edges) {
         assert.strictEqual(edge.kind, 'walk');
@@ -143,16 +143,16 @@ test('a gather spot is dropped and says so; a dungeon entrance is kept and tagge
 
 test('arrivals flatten out of the destination and keep their approach waypoints', () => {
     const { doc } = uo.convert(fixture());
-    const arrival = doc.arrivals.find((a) => a.destination === 'a-bank');
+    const arrival = doc.arrivals.find((a) => a.destination === 'uo-a-bank');
 
     assert.ok(arrival, 'the arrival did not survive the flattening');
     assert.strictEqual(arrival.exclusive, false);
-    assert.deepStrictEqual(arrival.waypoints.split(' ').sort(), ['a', 'b']);
+    assert.deepStrictEqual(arrival.waypoints.split(' ').sort(), ['uo-a', 'uo-b']);
 });
 
 test('a polygon becomes a poly zone with a bounding box our schema can reject on', () => {
     const { doc } = uo.convert(fixture());
-    const zone = doc.zones.find((z) => z.id === 'a-yard');
+    const zone = doc.zones.find((z) => z.id === 'uo-a-yard');
 
     assert.strictEqual(zone.shape, 'poly');
     assert.strictEqual(zone.points, '0,0 10,0 10,10');
@@ -167,7 +167,49 @@ test('the facet is stamped, because their records carry none', () => {
     assert.ok(doc.destinations.every((d) => d.map === 'Felucca'));
 });
 
+test('every reference id is namespaced, so it cannot collide with an authored one', () => {
+    // The reason this exists: their waypoints are named `WP 157`, which slugifies to `wp-157`,
+    // and `wp-<n>` is exactly what our corridor tool mints. Before the prefix, 23 reference ids
+    // collided with ids already in navigation.json - including `wp-1`, ours on the west road at
+    // 1381,1750 and theirs a different tile at 1564,1687.
+    const { doc } = uo.convert(fixture());
+
+    for (const key of ['waypoints', 'destinations', 'zones']) {
+        for (const record of doc[key]) {
+            assert.ok(record.id.startsWith(uo.PREFIX), `${record.id} is not namespaced`);
+        }
+    }
+});
+
 // --- the committed reference file ------------------------------------------------------------
+
+test('no reference id collides with one already in navigation.json', () => {
+    // The guard that makes "Adopt never overwrites an authored record" structural rather than a
+    // check somebody has to remember to write.
+    const doc = JSON.parse(fs.readFileSync(REFERENCE, 'utf8'));
+    const ours = JSON.parse(fs.readFileSync(
+        path.join(__dirname, '..', '..', 'Data', 'Custom', 'navigation.json'), 'utf8'));
+
+    const authored = new Set();
+
+    for (const key of ['waypoints', 'destinations', 'zones']) {
+        for (const record of ours[key]) {
+            authored.add(record.id);
+        }
+    }
+
+    const clash = [];
+
+    for (const key of ['waypoints', 'destinations', 'zones']) {
+        for (const record of doc[key]) {
+            if (authored.has(record.id)) {
+                clash.push(record.id);
+            }
+        }
+    }
+
+    assert.deepStrictEqual(clash, [], 'adopting one of these would overwrite authored data');
+});
 
 test('the shipped reference file is well formed and internally consistent', () => {
     const raw = fs.readFileSync(REFERENCE);

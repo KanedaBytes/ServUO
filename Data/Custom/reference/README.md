@@ -46,10 +46,10 @@ before this converter and unchanged by it. The decisions that are not a straight
   carry no facet field at all. Felucca and Trammel share terrain, so every coordinate is valid on
   both — and our world is on Trammel, where a walk edge has to be for anything to reach it. A
   Felucca conversion later sits beside this file rather than over it.
-- **Ids are minted from their names**, which are their identity. `Britain Bank` becomes
-  `britain-bank`, uniquified with a numeric suffix on collision — including across kinds, because
-  `Nav.TryRoute` accepts an id naming a waypoint *or* a destination. Their name is kept verbatim as
-  the display `name`.
+- **Ids are minted from their names and namespaced `uo-`.** `Britain Bank` becomes
+  `uo-britain-bank`, uniquified with a numeric suffix on collision — including across kinds,
+  because `Nav.TryRoute` accepts an id naming a waypoint *or* a destination. Their name is kept
+  verbatim as the display `name`. The prefix is not cosmetic; see **What Adopt has to know**.
 - **Edges carry no tags.** Their `Connects` is a bare adjacency; we cannot know which of their
   roads is a road, and a guessed `road` tag would silently reweight every search through
   `costTags`.
@@ -78,6 +78,57 @@ authored against a 38-tile leg cap; ours is 12, because ServUO's `FastAStarAlgor
 most important fact about this file: **its edges are not walkable as they stand.** Adopt re-walks
 each one with `NavCorridor.TryPath` and subdivides it under the cap, which is why adoption is
 region-scoped and takes real time.
+
+## What Adopt has to know
+
+Three facts about this file that the Adopt step cannot discover for itself.
+
+### Ids are namespaced `uo-`, and that is load-bearing
+
+Their waypoints are named `WP 157`, which slugifies to `wp-157` — and `wp-<n>` is exactly what our
+corridor tool mints for an unnamed road waypoint. Before the prefix, **23 reference ids collided
+with ids already in `navigation.json`**, among them `wp-1`: ours on the west road at 1381,1750,
+theirs a different tile at 1564,1687. Adopting one would have overwritten authored data.
+
+The prefix makes that impossible by construction rather than by a check somebody has to remember,
+and `uo-offline.test.js` asserts the two id sets stay disjoint.
+
+### Five ids are not the slug of the name beside them
+
+Their names are unique per *kind*; ours must be unique across kinds, because `Nav.TryRoute` accepts
+an id naming a waypoint or a destination. Where the two collided the converter appended a suffix:
+
+```
+uo-britain-bank    -> uo-britain-bank-2       (the waypoint took the plain slug)
+uo-britdock-1      -> uo-britdock-1-2
+uo-britain-bank-2  -> uo-britain-bank-2-2
+uo-britain-forge-2 -> uo-britain-forge-2-2
+uo-britain-forge-3 -> uo-britain-forge-3-2
+```
+
+All five are in Britain, which is where the two datasets overlap most. **Adopt must copy the `id`
+field, never re-derive it from `name`** — a re-import that ordered two colliding records the other
+way round would otherwise repoint an adopted edge at the wrong record.
+
+### 177 destinations have no arrival point
+
+Not a conversion loss: their `Arrivals` array is genuinely absent on those records, and their own
+catalog falls back to `NearestWaypoint` at runtime. The split matters because a destination with no
+arrival is one a bot can be sent to and cannot stand at — `Nav.Data` warns about exactly that.
+
+| | destinations |
+| --- | --- |
+| with at least one arrival | 308 |
+| **no arrival, tagged `dungeon`** | **173** — refused by Adopt anyway |
+| **no arrival, overworld** | **4** — `uo-britain-bank-3`, `uo-britain-smith-4`, `uo-nujel-m-forge`, `uo-nujel-m-forge-2` |
+
+So only four adoptable destinations lack one, and all four are duplicates of a better-covered
+record a few tiles away. **Adopt should offer to skip a destination with no arrival**, rather than
+write one that will warn at the next load.
+
+Counts of arrivals per destination, for the 308 that have any: 254 have one, and the rest run to
+eight — so the 485-vs-472 difference between the two totals is not a shortfall, it is that one
+destination can own several.
 
 ### The dungeon / Lost Lands boundary
 

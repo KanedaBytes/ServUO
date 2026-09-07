@@ -25,7 +25,7 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode, syncDerived
 } from './shapes.js';
 import * as coverage from './coverage.js';
@@ -89,6 +89,12 @@ const state = {
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
     worksitesVisible: false,
+
+    // Which reference regions are on. Overworld only by default: dungeon is 1988 waypoints of
+    // somewhere nothing can be adopted into yet, and drawing it over Britain is noise.
+    referenceRegions: new Set(),
+    referenceBox: null,
+    referenceCounts: null,
 
     selected: null,
     hovered: null,
@@ -294,6 +300,83 @@ async function refreshSpawners({ force = false } = {}) {
 }
 
 /**
+ * Loads the uo-offline reference for what is on screen.
+ *
+ * Same shape as refreshSpawners and for the same reasons: bbox-loaded because 3952 waypoints and
+ * 4291 edges are not drawable at facet scale, keyed on the box so a small pan refetches nothing.
+ *
+ * Nothing here can be edited, so unlike the spawner refresh there is no dirty-shape rule to
+ * observe - the incoming set simply replaces the old one.
+ */
+async function refreshReference({ force = false } = {}) {
+    const regions = [...state.referenceRegions];
+
+    if (regions.length === 0) {
+        const had = state.shapes.length;
+
+        state.shapes = state.shapes.filter((shape) => !REFERENCE_LAYERS.has(shape.layer));
+        state.referenceBox = null;
+
+        if (state.shapes.length !== had) {
+            updateCounts();
+            requestRender();
+        }
+
+        return;
+    }
+
+    const bbox = stockBox();
+
+    // No box means we are zoomed out past the floor, and for THIS layer that is the opposite of
+    // the spawner case: a null bbox there omits the 2,572 stock spawners, but here it means "the
+    // whole overworld", which is 4,364 shapes of grey smear. Drop what is drawn and ask for
+    // nothing until the view is worth drawing them in.
+    if (!bbox) {
+        const had = state.shapes.length;
+
+        state.shapes = state.shapes.filter((shape) => !REFERENCE_LAYERS.has(shape.layer));
+        state.referenceBox = null;
+
+        if (state.shapes.length !== had) {
+            updateCounts();
+            requestRender();
+        }
+
+        return;
+    }
+
+    const key = `${regions.sort().join(',')}|${bbox.x},${bbox.y},${bbox.width},${bbox.height}`;
+
+    if (!force && key === state.referenceBox) {
+        return;
+    }
+
+    let response;
+
+    try {
+        response = await api.reference(bbox, regions);
+    } catch (error) {
+        setStatus(`Could not load the reference: ${error.message}`, 'error');
+        return;
+    }
+
+    state.referenceBox = key;
+    state.referenceCounts = response;
+
+    if (!response.available) {
+        setStatus('No reference data - run node tools/nav-import/uo-offline.js first.', 'warn');
+        return;
+    }
+
+    state.shapes = state.shapes
+        .filter((shape) => !REFERENCE_LAYERS.has(shape.layer))
+        .concat(response.shapes);
+
+    updateCounts();
+    requestRender();
+}
+
+/**
  * The box to ask stock spawners for, or null when we are too far out to want them.
  *
  * PADDED BY A SCREEN in each direction, so a small pan lands inside what was already fetched and
@@ -328,7 +411,12 @@ let spawnerTimer = null;
 
 /** Debounced, because a pan is a hundred mousemove events and none of them is the one that matters. */
 function requestSpawners() {
-    if (!state.visible.has('spawners-stock')) {
+    // Two viewport-loaded layers now, and the guard used to be one condition for one of them - so
+    // panning with the reference on and the stock spawners off refetched nothing at all.
+    const wantsSpawners = state.visible.has('spawners-stock');
+    const wantsReference = state.referenceRegions.size > 0;
+
+    if (!wantsSpawners && !wantsReference) {
         return;
     }
 
@@ -338,7 +426,14 @@ function requestSpawners() {
 
     spawnerTimer = setTimeout(() => {
         spawnerTimer = null;
-        refreshSpawners();
+
+        if (wantsSpawners) {
+            refreshSpawners();
+        }
+
+        if (wantsReference) {
+            refreshReference();
+        }
     }, STOCK_DEBOUNCE_MS);
 }
 
@@ -398,6 +493,12 @@ function buildLayerList() {
     dom.layers.innerHTML = '';
 
     for (const layer of LAYER_ORDER) {
+        // The reference layers get region rows of their own further down. A row per shape layer
+        // would be three checkboxes that must always agree, which is three chances to disagree.
+        if (REFERENCE_LAYERS.has(layer)) {
+            continue;
+        }
+
         dom.layers.appendChild(
             layerRow(layer, LAYERS[layer].label, LAYERS[layer].color, state.visible.has(layer), (on) => {
                 if (on) {
@@ -434,6 +535,23 @@ function buildLayerList() {
         requestRender();
     }));
 
+    // The reference, as three rows: what to draw, and which halves of the world to ask for.
+    //
+    // Separate toggles rather than one, because they answer different questions. The first is
+    // "show me somebody else's roads at all"; the other two are "and include the 1988 dungeon
+    // waypoints", which is a different amount of map and a region Adopt refuses anyway.
+    dom.layers.appendChild(layerRow('reference', 'uo-offline reference', '#6b7a8f', false, (on) => {
+        setReferenceRegion('overworld', on);
+    }));
+
+    dom.layers.appendChild(layerRow('reference-dungeon', '  ...dungeons', '#5a6675', false, (on) => {
+        setReferenceRegion('dungeon', on);
+    }));
+
+    dom.layers.appendChild(layerRow('reference-lostlands', '  ...Lost Lands', '#5a6675', false, (on) => {
+        setReferenceRegion('lostlands', on);
+    }));
+
     dom.layers.appendChild(layerRow('coverage', 'Coverage gaps', '#ff2800', false, (on) => {
         state.coverageVisible = on;
 
@@ -446,6 +564,32 @@ function buildLayerList() {
         updateCounts();
         requestRender();
     }));
+}
+
+/**
+ * Turn one reference region on or off and refetch.
+ *
+ * The three shape layers are shown together whenever any region is on: the split that matters to
+ * the author is by REGION, not by whether a road is drawn without its waypoints.
+ */
+function setReferenceRegion(region, on) {
+    if (on) {
+        state.referenceRegions.add(region);
+    } else {
+        state.referenceRegions.delete(region);
+    }
+
+    const any = state.referenceRegions.size > 0;
+
+    for (const layer of REFERENCE_LAYERS) {
+        if (any) {
+            state.visible.add(layer);
+        } else {
+            state.visible.delete(layer);
+        }
+    }
+
+    refreshReference({ force: true });
 }
 
 /** Turn the work-site overlay on, and tick its row so the map and the panel agree. */
