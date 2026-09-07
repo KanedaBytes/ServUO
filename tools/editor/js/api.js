@@ -56,6 +56,7 @@ export const api = {
             : '/api/spawners'),
     entities: () => request('GET', '/api/entities'),
     audit: () => request('GET', '/api/audit'),
+    reach: () => request('GET', '/api/reach'),
     spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
 

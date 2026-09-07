@@ -523,6 +523,11 @@ namespace Server.Custom
 
                 // A guard post with nowhere for a second guard to stand is a data bug, not a
                 // runtime one: the picker would fall back to scattering round the centre.
+                //
+                // `shared` counts every non-exclusive arrival, `exact` ones included: an exact
+                // arrival is not reserved, so a second mobile can still be sent to it. Counting
+                // exactness as exclusivity is what made a station of four shareable benches report
+                // itself as having nowhere for a second worker to stand.
                 if (exclusive > 0 && shared < 2)
                 {
                     _dataWarnings.Add(String.Format(

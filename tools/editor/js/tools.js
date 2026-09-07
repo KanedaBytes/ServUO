@@ -79,6 +79,34 @@ export const TOOLS = {
         ]
     },
 
+    /**
+     * A work site is three records, and authoring them separately is how one gets forgotten.
+     *
+     * A mine or a wood is a destination (where bots are sent), a zone (the ground they may work
+     * and shuffle within) and a set of arrival tiles (where they stand). Miss the zone and
+     * GathererBehavior has no work area and walks the bot away; miss the arrivals and it has
+     * nowhere to stand. The shard is asked for the harvest reach under each arrival as it is
+     * placed, because until something with the map in front of it answers, an arrival tile is a
+     * guess - and a guess is what once put a mine on grass.
+     */
+    site: {
+        layer: 'nav-destinations',
+        label: 'Work site',
+        kind: 'site',
+        autoId: true,
+        hint: 'Click the centre of the site. Esc cancels.',
+        hint2: 'Drag the zone the bots may work inside.',
+        hint3: 'Click each arrival tile. Enter finishes, Esc cancels.',
+        title: 'New work site',
+        fields: [
+            { key: 'id', label: 'Id', required: true },
+            { key: 'name', label: 'Display name', required: true },
+            { key: 'type', label: 'Type (mine or lumber)', required: true, value: 'mine' },
+            { key: 'tags', label: 'Tags', value: 'wilderness' },
+            { key: 'waypoints', label: 'Approach waypoints', list: 'waypoint-list' }
+        ]
+    },
+
     destination: {
         layer: 'nav-destinations',
         label: 'Destination',

@@ -29,6 +29,7 @@ import {
     hitTest, pick, geometryOf, applyGeometry, moveShape, resizeRect, moveNode
 } from './shapes.js';
 import * as coverage from './coverage.js';
+import * as worksites from './worksites.js';
 import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId } from './ids.js';
@@ -70,6 +71,7 @@ const state = {
 
     visible: new Set(LAYER_ORDER.filter((layer) => layer !== 'nav-edges')),
     coverageVisible: false,
+    worksitesVisible: false,
 
     selected: null,
     hovered: null,
@@ -390,6 +392,18 @@ function buildLayerList() {
         });
     }
 
+    dom.layers.appendChild(layerRow('worksites', 'Work-site reach', '#7bd88f', false, (on) => {
+        state.worksitesVisible = on;
+
+        // Fetched on first show, then refreshed by the Site tool as points are placed. The shard
+        // rewrites the file on every navigation reload, so it is never staler than the data.
+        if (on && !worksites.isComputed()) {
+            refreshReach();
+        }
+
+        requestRender();
+    }));
+
     dom.layers.appendChild(layerRow('coverage', 'Coverage gaps', '#ff2800', false, (on) => {
         state.coverageVisible = on;
 
@@ -451,6 +465,22 @@ function updateCounts() {
 
         if (layer === 'coverage') {
             element.textContent = coverage.isComputed() ? String(coverage.gapCount()) : '-';
+            continue;
+        }
+
+        // Sites, and how many of their arrival tiles fall under their type's floor. The second
+        // number is the one worth reading: a site can be fine on average and still have arrivals
+        // that put a bot somewhere it can dig nothing.
+        if (layer === 'worksites') {
+            if (!worksites.isComputed()) {
+                element.textContent = '-';
+            } else {
+                const thin = worksites.thinCount();
+                element.textContent = thin > 0
+                    ? `${worksites.siteCount()} / ${thin} thin`
+                    : String(worksites.siteCount());
+            }
+
             continue;
         }
 
@@ -601,6 +631,35 @@ let pending = false;
  * tolerable when nothing could change and is not now: this file calls requestRender from around
  * forty places.
  */
+/**
+ * Pull per-arrival reach from the shard.
+ *
+ * `probeType` and `probePoints` ask about tiles that are not in navigation.json yet - the Site
+ * tool uses them so an arrival can be judged as it is placed. Without them this just refreshes
+ * the authored set.
+ *
+ * Never computed here. The count comes from BotWorkSites.ReachFrom running the same sweep the bot
+ * runs, against real map data the browser does not have.
+ */
+async function refreshReach(probeType, probePoints) {
+    const body = probeType && probePoints && probePoints.length > 0
+        ? `${probeType} ${probePoints.map(([x, y]) => `${x},${y}`).join(' ')}`
+        : '';
+
+    try {
+        const dropped = await api.request('site-reach', body);
+        await api.awaitAck('site-reach', { nonce: dropped.nonce, timeoutMs: 15000 });
+
+        worksites.setReach(await api.reach());
+        updateCounts();
+        requestRender();
+    } catch (error) {
+        // A reach answer is an aid, never a gate. The shard being down must not stop anybody
+        // placing a point - it only means the dots are not there to help while they do it.
+        setStatus(`Could not measure reach: ${error.message}`, 'warn');
+    }
+}
+
 function requestRender() {
     if (pending) {
         return;
@@ -624,6 +683,10 @@ function render() {
     }
 
     drawShapes(ctx, view, state.shapes, state.visible, state.selected, state.hovered, matchingShapes());
+
+    if (state.worksitesVisible) {
+        worksites.draw(ctx, view);
+    }
 
     if (state.visible.has('entities')) {
         drawEntities(ctx, view, state.entities);
@@ -1036,7 +1099,7 @@ function startTool(key, placeAt = null) {
         return;
     }
 
-    state.tool = { key, ...tool, phase: 0, owner: null, ids: [] };
+    state.tool = { key, ...tool, phase: 0, owner: null, ids: [], arrivals: [] };
     state.draft = { kind: tool.kind === 'rect' ? 'rect' : 'points', points: [], rect: null };
     state.selected = null;
 
@@ -1089,6 +1152,38 @@ function toolClick(worldX, worldY) {
         return true;
     }
 
+    // A work site is three records collected in one flow: the destination, the zone around it,
+    // and the arrival tiles inside that. Separately they are three tools and an author has to
+    // remember to reach for all three; together they are the thing being made.
+    if (tool.kind === 'site') {
+        if (tool.phase === 0) {
+            state.draft.points = [[x, y, 0]];
+
+            // The form comes HERE rather than at the end, alone among the tools, because the site
+            // type decides which harvest definition the reach probe measures against - and the
+            // probe runs while the arrivals are being placed, several steps before a tool would
+            // normally ask anything. Asking after the centre click is the first moment there are
+            // coordinates to auto-generate the id from.
+            askForSite(x, y);
+            return true;
+        }
+
+        if (tool.phase === 2) {
+            tool.arrivals.push([x, y]);
+            setHint(`${tool.arrivals.length} arrival(s). Click more, or press Enter to finish.`);
+
+            // Ask the shard what is actually under each tile as it lands. This is the whole
+            // reason the tool exists rather than three separate ones: an arrival is a guess until
+            // something with the map in front of it says how much is in reach.
+            refreshReach(state.tool.siteType || 'mine', tool.arrivals);
+
+            requestRender();
+            return true;
+        }
+
+        return true;
+    }
+
     const hit = tool.picks ? pick(view, state.shapes, state.visible, worldX, worldY) : null;
 
     if (tool.picks && (!hit || hit.layer !== tool.picks)) {
@@ -1127,8 +1222,46 @@ function toolClick(worldX, worldY) {
     return true;
 }
 
+/** The Site tool's one modal, taken early. See the comment in toolClick. */
+async function askForSite(x, y) {
+    const tool = state.tool;
+    const defaults = tool.autoId
+        ? { id: nextId(x, y, state.facet.name, state.shapes) }
+        : {};
+
+    const values = await askFor(tool, defaults);
+
+    // The tool may have been cancelled with Esc while the modal was open.
+    if (!state.tool || state.tool !== tool) {
+        return;
+    }
+
+    if (!values) {
+        cancelTool();
+        return;
+    }
+
+    tool.props = { ...defaults, ...values };
+    tool.siteType = (values.type || 'mine').toLowerCase();
+    tool.phase = 1;
+    state.draft.kind = 'rect';
+
+    setHint(tool.hint2);
+    requestRender();
+}
+
 function finishTool() {
     const tool = state.tool;
+
+    if (tool && tool.kind === 'site' && tool.phase === 2) {
+        if (tool.arrivals.length === 0) {
+            setStatus('A work site needs at least one arrival point.', 'error');
+            return;
+        }
+
+        completeTool();
+        return;
+    }
 
     if (!tool || tool.kind !== 'chain') {
         return;
@@ -1163,8 +1296,11 @@ async function completeTool() {
     }
 
     // A tool with nothing to ask never opens a modal. Two clicks of ceremony for no information is
-    // how a fast tool becomes a slow one.
-    const values = tool.fields.length > 0 ? await askFor(tool, defaults) : {};
+    // how a fast tool becomes a slow one. The Site tool asked at the start - it needed the answer
+    // to measure reach while the arrivals were going down - so it is not asked twice.
+    const values = tool.kind === 'site'
+        ? tool.props
+        : (tool.fields.length > 0 ? await askFor(tool, defaults) : {});
 
     if (!values) {
         cancelTool();
@@ -1178,6 +1314,7 @@ async function completeTool() {
     const shape = buildShape(tool.key, props, map, draft, {
         ownerId,
         ids: state.tool.ids,
+        arrivals: state.tool.arrivals,
         arrivalIndex: state.shapes.filter((s) => s.id.startsWith(`arr:${ownerId}#`)).length,
         // A spawner without a <UniqueId> is ADDED with a fresh GUID on every import rather than
         // replaced, which is how 47 stock spawners came to exist twice in this world. Every
@@ -1191,12 +1328,25 @@ async function completeTool() {
         return;
     }
 
-    if (state.shapes.some((existing) => existing.id === shape.id)) {
-        setStatus(`${shape.id} already exists.`, 'error');
-        return;
+    // A tool may build more than one record. The Site tool makes a destination, a zone and its
+    // arrivals in one go, and they are created together or not at all: half a site is a
+    // destination a bot can be sent to with nowhere to stand when it gets there.
+    const built = Array.isArray(shape) ? shape : [shape];
+
+    for (const one of built) {
+        if (state.shapes.some((existing) => existing.id === one.id)) {
+            setStatus(`${one.id} already exists.`, 'error');
+            return;
+        }
     }
 
-    createShape(shape);
+    for (const one of built) {
+        createShape(one);
+    }
+
+    if (built.length > 1) {
+        setStatus(`Created ${built.length} records. Save to write them.`, 'ok');
+    }
 }
 
 // --- the context menu -----------------------------------------------------------------------------
@@ -1260,7 +1410,8 @@ function wireInput() {
         const [worldX, worldY] = worldAt(event);
 
         if (state.tool) {
-            if (state.tool.kind === 'rect') {
+            if (state.tool.kind === 'rect'
+                || (state.tool.kind === 'site' && state.tool.phase === 1)) {
                 const x = Math.floor(worldX);
                 const y = Math.floor(worldY);
 
@@ -1385,6 +1536,14 @@ function wireInput() {
         canvas.classList.remove('dragging');
 
         if (drag && drag.kind === 'draw-rect') {
+            if (state.tool && state.tool.kind === 'site') {
+                state.tool.phase = 2;
+                state.draft.kind = 'points';
+                setHint(state.tool.hint3);
+                requestRender();
+                return;
+            }
+
             completeTool();
             return;
         }

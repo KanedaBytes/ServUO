@@ -575,6 +575,16 @@ test('every reload the editor can ask for exists in the shard dispatcher', async
         wanted.add(name);
     }
 
+    // Also every token the app asks for directly. A reload name reaches this set through
+    // shapes.js, but nav-audit, livemap-on and site-reach are requested straight from app.js and
+    // would otherwise be outside the guard entirely - which is exactly where a name typed one way
+    // in the browser and another way in the shard goes unnoticed.
+    const app = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+
+    for (const match of app.matchAll(/api\.request\(\s*'([a-z-]+)'/g)) {
+        wanted.add(match[1]);
+    }
+
     for (const name of wanted) {
         assert.ok(poller.includes(`case "${name}":`),
             `the editor asks for '${name}' and RequestPoller.Dispatch has no case for it`);

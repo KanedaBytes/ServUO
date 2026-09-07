@@ -851,6 +851,31 @@ namespace Server.Custom
         [JsonProperty("exclusive")]
         public bool Exclusive { get; set; }
 
+        /// <summary>
+        /// Take this tile EXACTLY, but do not reserve it. Optional; default false.
+        ///
+        /// Exactness and exclusivity are different properties, and until now the only way to buy
+        /// the first was to pay for the second. That cost real capacity: brit-forge's four
+        /// arrival tiles are the ones within two of both the anvil and the forge, and
+        /// DefBlacksmithy.CanCraft refuses anything further, so a scattered arrival put a smith
+        /// somewhere it could not work. Making all four exclusive fixed that and immediately drew
+        /// a Nav.Data warning for having no shared spots left - a station that four bots could
+        /// share had become one that four bots each had to themselves.
+        ///
+        /// So: `exact` suppresses the scatter, `exclusive` reserves the tile, and a station wants
+        /// the first without the second. The occupancy rules are untouched - a non-exclusive
+        /// arrival is still handed out to as many mobiles as ask for it, they simply all get the
+        /// authored tile and shove for it the way they would for any crowded spot.
+        /// </summary>
+        /// <remarks>
+        /// DefaultValueHandling, not NullValueHandling: a bool is never null, so Ignore-on-null
+        /// would do nothing and every one of the sixty-odd existing arrival lines would gain
+        /// `"exact":false` on the next save. Ignore-on-default omits it unless it is true, which
+        /// is what keeps this a one-line addition to two records rather than a whole-file diff.
+        /// </remarks>
+        [JsonProperty("exact", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Exact { get; set; }
+
         [JsonProperty("waypoints")]
         public string WaypointIds { get; set; }
 

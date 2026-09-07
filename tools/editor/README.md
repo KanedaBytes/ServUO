@@ -102,6 +102,41 @@ A template rather than copying the shape of a sibling record, because `restricte
 as `{"zones": []}` and has no sibling to copy — and a donor that happened to carry a `note` would
 give every new record a `"note": ""`.
 
+## The work-site overlay and the Site tool
+
+A mine or a wood is **three records** — a destination to send bots to, a zone they may work
+within, and the arrival tiles they stand on. Authoring them separately is how one gets forgotten,
+and each omission fails differently: no zone and `GathererBehavior.ResolveSite` finds no work area
+and walks the bot away; no arrivals and it has nowhere to stand. The **Site** tool collects all
+three in one flow — click the centre, drag the zone, click each arrival, Enter to finish — and
+writes them together or not at all.
+
+**It asks for its fields first**, alone among the tools. The site type decides which harvest
+definition the reach probe measures against, and the probe runs while the arrivals are going down,
+several steps before a tool would normally ask anything. The first moment there are coordinates to
+auto-generate an id from is the centre click, so that is where the form goes.
+
+**The numbers come from the shard, never from here.** As each arrival lands, the editor drops a
+`site-reach` token carrying the tiles it has placed; `BotWorkSites.ReachFrom` runs the identical
+5x5 sweep `BotHarvest.FindTarget` performs, against real map data, and the answer comes back
+through `GET /api/reach`. A browser cannot answer this — it has no tiledata — and the last time
+this shard guessed at harvestability from outside the engine it authored a mine on grass.
+
+Two fields, because they are different questions and a good tile needs both:
+
+```
+mine 1451,1517 z43  reach 14  canFit True    <- a face worth standing on
+mine 1200,1200 z49  reach 25  canFit False   <- dense rock you cannot stand on
+```
+
+The overlay itself (`js/worksites.js`) is **not a shape layer**. Those records already exist in
+`nav-destinations`, `nav-zones` and `nav-arrivals`, and a second copy would be two things to keep
+in step and two things to click; it draws *over* them, toggled by a synthetic layer row exactly as
+`coverage.js` is. Dots are green at or above the type's floor, amber below it, red at nothing at
+all — three bands rather than a gradient, because the author's decision is three-way: fine, thin,
+useless. Probe points draw hollow, so a tile being considered never looks like one already
+authored.
+
 ## Tiles
 
 `export-tiles.ps1` renders a pyramid at `tiles/<facet>/<z>/<x>/<y>.png`, 256px, level 0 = the
@@ -463,6 +498,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
 | `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
+| `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |
 
 **`save` exists because there is no other way to save from outside the game.** ServUO's console
 takes no staff commands, and `HandleClosed` does *not* save on exit — it only waits for writes

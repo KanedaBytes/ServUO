@@ -269,6 +269,59 @@ namespace Server.Custom
                     message = "health snapshot written";
                     return true;
 
+                // Per-arrival harvest reach, for the editor's work-site layer and its Site tool.
+                //
+                // The body is optional and is "<mine|lumber> x,y x,y ..." - points that are NOT in
+                // navigation.json yet, so a tile can be judged while it is being placed rather
+                // than after a save and a reload. With no body it just refreshes the authored set.
+                case "site-reach":
+                {
+                    string[] parts = (body ?? "").Split(
+                        new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    string probeType = null;
+                    var probe = new List<Point3D>();
+
+                    for (int i = 0; i < parts.Length; i++)
+                    {
+                        string part = parts[i];
+
+                        // The bridge appends its nonce as '#abc'; it is not an argument.
+                        if (part.StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        int comma = part.IndexOf(',');
+
+                        if (comma < 0)
+                        {
+                            probeType = part;
+                            continue;
+                        }
+
+                        int x, y;
+
+                        if (Int32.TryParse(part.Substring(0, comma), out x)
+                            && Int32.TryParse(part.Substring(comma + 1), out y))
+                        {
+                            probe.Add(new Point3D(x, y, 0));
+                        }
+                    }
+
+                    if (probe.Count > 0 && probeType == null)
+                    {
+                        message = "site-reach needs a type before its points: 'mine 1451,1517'";
+                        return false;
+                    }
+
+                    BotWorkSites.WriteReachSnapshot(Map.Trammel, probe, probeType);
+
+                    message = String.Format(
+                        "site reach written, {0} probe point(s)", probe.Count);
+                    return true;
+                }
+
                 // Exactly what [Save does (Handlers.cs:583), for the same reason it exists: this
                 // is the ONLY way to save from outside the game. ServUO's console takes no staff
                 // commands and HandleClosed does not save on exit, so a headless run - a probe

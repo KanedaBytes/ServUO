@@ -48,7 +48,11 @@ namespace Server.Custom
             {
                 NavArrival chosen = candidates[Utility.Random(candidates.Count)];
 
-                if (chosen.Exclusive)
+                // Two different reasons to take the tile exactly, and they are independent.
+                // `exclusive` reserves it (a guard post: one guard, precisely there). `exact` only
+                // suppresses the scatter (a forge bench: any number of smiths may queue for it,
+                // but two tiles off is out of range of the anvil and useless).
+                if (chosen.Exclusive || chosen.Exact)
                 {
                     spot = chosen.Location;
                     return true;

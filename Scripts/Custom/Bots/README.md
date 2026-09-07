@@ -715,10 +715,27 @@ The check that would have caught the first set of sites is now permanent, and it
 **`Nav.Data`** rather than `Bots.Work` on purpose: "there is no ore under this mine" is a fact about
 `navigation.json`, and the person who needs to hear it is whoever just authored a site in the editor.
 
-Any `mine` or `lumber` destination whose **best** arrival point reaches fewer than
-`Custom.BotWorkSiteMinReach` (default **5**) harvestable tiles warns, naming the site and its actual
-reach. Reach is measured with the very same 5×5 sweep `BotHarvest.FindTarget` performs, so it
-answers the only question that matters: standing here, will the bot find something to swing at?
+Any `mine` or `lumber` destination whose **best** arrival point reaches fewer than its type's floor
+warns, naming the site and its actual reach. Reach is measured with the very same 5×5 sweep
+`BotHarvest.FindTarget` performs, so it answers the only question that matters: standing here, will
+the bot find something to swing at?
+
+**The floor is per type, because rock and wood are not the same question.** A mine face saturates —
+the authored ones reach 11 to 15 — so `Custom.BotWorkSiteMinReachMine` at **5** is a low bar there
+and still catches a site authored on the wrong tiles. A wood does not: Britain is not ringed by
+dense forest, and no cell within 500 tiles of the bank holds more than nine choppable tiles per
+hundred, so the Britain wood reaches 4 and is a perfectly good place to send a Lumberjack, which is
+why `Custom.BotWorkSiteMinReachLumber` is **3**. One number for both meant either warning about a
+legitimate wood for ever, or lowering the bar for rock until it caught nothing. A type with no key
+of its own falls back to `Custom.BotWorkSiteMinReach`.
+
+**Every arrival's reach is written to `Data/Live/site-reach.json`**, not just the best one.
+`Nav.Data` reports the best because its question is *"is this site worth sending anyone to at
+all"*; somebody authoring a site needs the other question — which of these tiles is any good. A
+face has thin edges by nature, and an arrival on one is not a data error, but it *is* the arrival
+that produces a miner standing in the right place swinging at nothing. The editor draws those
+numbers, and the `site-reach` token answers for tiles that are not in `navigation.json` yet, so a
+spot can be judged as it is placed rather than after a save and a reload.
 
 The navigation layer is Core and knows nothing about bots, so it does not reach upward to ask —
 consumers register an auditor (`NavigationSystem.RegisterAuditor`) and `Bots` registers this one.

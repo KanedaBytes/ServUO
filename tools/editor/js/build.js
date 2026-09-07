@@ -60,15 +60,17 @@ export function buildShape(key, props, map, draft, context = {}) {
             // Indexed within its destination and appended, which is where unproject puts it too.
             return {
                 ...common, id: `arr:${context.ownerId}#${context.arrivalIndex}`, kind: 'point',
-                label: `${context.ownerId} arrival${props.exclusive ? ' (exclusive)' : ''}`,
+                label: `${context.ownerId} arrival${props.exclusive ? ' (exclusive)' : props.exact ? ' (exact)' : ''}`,
                 points: [[point[0], point[1], 0]],
                 props: {
                     destination: context.ownerId,
                     exclusive: props.exclusive === true,
+                    ...(props.exact === true || props.exact === 'true' ? { exact: true } : {}),
                     waypoints: props.waypoints || ''
                 },
                 fields: [
                     { key: 'exclusive', label: 'Exclusive', type: 'string' },
+                    { key: 'exact', label: 'Exact (no scatter)', type: 'string' },
                     { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
                 ]
             };
@@ -97,6 +99,59 @@ export function buildShape(key, props, map, draft, context = {}) {
                     { key: 'waypoints', label: 'Waypoints', type: 'string' }
                 ]
             };
+
+        // Three records, built together because they are one thing. Their ids are derived from
+        // the site's own id rather than auto-generated separately, so a site reads as a set in the
+        // filter and in a diff: brit-mine-west, brit-mine-west-face, and its arrivals.
+        case 'site': {
+            const zoneId = `${props.id}-face`;
+
+            const site = {
+                ...common, id: `dest:${props.id}`, kind: 'point', label: props.name || props.id,
+                points: [[point[0], point[1], 0]],
+                props: {
+                    id: props.id,
+                    name: props.name,
+                    type: props.type,
+                    tags: props.tags || '',
+                    waypoints: props.waypoints || ''
+                },
+                fields: [
+                    { key: 'name', label: 'Display name', type: 'string' },
+                    { key: 'type', label: 'Type', type: 'string' },
+                    { key: 'tags', label: 'Tags', type: 'string' },
+                    { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
+                ]
+            };
+
+            // The zone carries the site's type as a tag as well as 'work', because
+            // GathererBehavior.ResolveSite looks for a zone tagged 'mine' or 'lumber' at the
+            // bot's feet - a zone without it is invisible to the behaviour that needs it.
+            const zone = {
+                ...common, id: `zone:${zoneId}`, kind: 'rect', label: zoneId,
+                rect: [...draft.rect],
+                props: { id: zoneId, tags: `${props.type} wilderness work` },
+                fields: [{ key: 'tags', label: 'Tags', type: 'string' }]
+            };
+
+            const arrivals = (context.arrivals || []).map(([x, y], index) => ({
+                ...common, id: `arr:${props.id}#${index}`, kind: 'point',
+                label: `${props.id} arrival`,
+                points: [[x, y, 0]],
+                props: {
+                    destination: props.id,
+                    exclusive: false,
+                    waypoints: props.waypoints || ''
+                },
+                fields: [
+                    { key: 'exclusive', label: 'Exclusive', type: 'string' },
+                    { key: 'exact', label: 'Exact (no scatter)', type: 'string' },
+                    { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
+                ]
+            }));
+
+            return [site, zone, ...arrivals];
+        }
 
         case 'navzone':
             return {

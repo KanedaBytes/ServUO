@@ -110,7 +110,10 @@ test('auto ids on the real data land in the zone they were clicked in', () => {
 // --- tools.js -------------------------------------------------------------------------------------
 
 test('every tool names a real layer and a kind the state machine handles', () => {
-    const kinds = new Set(['point', 'rect', 'form', 'pair', 'chain', 'owner-then-point']);
+    // 'site' is the three-phase one: a point, then a rect, then N points finished with Enter.
+    // Adding a kind is deliberately a change in three places - tools.js, app.js and build.js -
+    // and this set is the fourth, so a kind the state machine cannot drive fails here first.
+    const kinds = new Set(['point', 'rect', 'form', 'pair', 'chain', 'owner-then-point', 'site']);
 
     for (const [key, tool] of Object.entries(tools.TOOLS)) {
         assert.ok(shapes.LAYERS[tool.layer], `${key} names an unknown layer '${tool.layer}'`);
@@ -586,17 +589,39 @@ test('every tool produces a shape unproject can write, with the right fields in 
         ['restricted', 'restrictedZones', zones,
             { name: 'test-restricted' },
             { rect: [5, 6, 7, 8] }, {},
-            /\{"name":"test-restricted","map":"Trammel","x":5,"y":6,"width":7,"height":8\}/]
+            /\{"name":"test-restricted","map":"Trammel","x":5,"y":6,"width":7,"height":8\}/],
+
+        // The Site tool writes a destination, its zone and its arrivals in one create. Only the
+        // destination is matched here; the assertions below check the other two landed, because a
+        // site that writes two of its three records is the failure this tool exists to prevent.
+        ['site', 'navigation', nav,
+            { id: 'test-site', name: 'Test Face', type: 'mine', tags: 'wilderness', waypoints: 'brit-plaza-1' },
+            { points: [[30, 40, 0]], rect: [28, 38, 6, 8] }, { arrivals: [[30, 41], [31, 42]] },
+            /\{"id":"test-site","name":"Test Face","type":"mine","map":"Trammel","x":30,"y":40,"z":0,"tags":"wilderness","waypoints":"brit-plaza-1"\}/]
     ];
 
     for (const [key, file, text, props, draft, context, expected] of cases) {
-        const shape = buildShape(key, props, 'Trammel', draft, context);
+        const built = buildShape(key, props, 'Trammel', draft, context);
 
-        assert.ok(shape, `${key} built nothing`);
+        assert.ok(built, `${key} built nothing`);
 
-        const written = unproject(file, text, { creates: [shape] });
+        // The Site tool builds three records at once, so a case may be a list. Everything else
+        // builds one, and is treated as a list of one rather than given a second code path.
+        const shapes = Array.isArray(built) ? built : [built];
+        const shape = shapes[0];
+
+        const written = unproject(file, text, { creates: shapes });
 
         assert.match(written, expected, `${key} did not write the record it should have`);
+
+        if (key === 'site') {
+            assert.match(written,
+                /\{"id":"test-site-face","map":"Trammel","x":28,"y":38,"width":6,"height":8,"tags":"mine wilderness work"\}/,
+                'the site did not write its zone');
+            assert.match(written,
+                /\{"destination":"test-site","x":30,"y":41,"z":0,"exclusive":false,"waypoints":"brit-plaza-1"\}/,
+                'the site did not write its arrivals');
+        }
 
         // And it survives a round trip back into a shape, so the editor can carry on editing it.
         assert.doesNotThrow(() => unproject(file, written, { updates: [shape] }), `${key} update`);

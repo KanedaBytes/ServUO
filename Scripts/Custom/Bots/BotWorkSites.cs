@@ -20,6 +20,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 using Server.Engines.Craft;
 using Server.Engines.Harvest;
@@ -69,6 +70,37 @@ namespace Server.Custom
         public static int MinReach
         {
             get { return Config.Get("Custom.BotWorkSiteMinReach", 5); }
+        }
+
+        /// <summary>
+        /// The floor for one kind of site, because rock and wood are not the same question.
+        ///
+        /// A mine face saturates - the authored ones reach 11 to 15 - so five is a low bar there
+        /// and catches a site authored on the wrong tiles. A wood does not: Britain is not ringed
+        /// by dense forest, and no cell within 500 tiles of the bank holds more than nine
+        /// choppable tiles per hundred, so the Britain wood reaches 4 and is a perfectly good
+        /// place to send a Lumberjack. One number for both meant either warning about a legitimate
+        /// wood for ever or lowering the bar for rock until it stopped catching anything.
+        ///
+        /// Falls back to Custom.BotWorkSiteMinReach for any type without its own key, so a new
+        /// site type inherits a sane floor rather than none.
+        /// </summary>
+        public static int MinReachFor(string type)
+        {
+            if (type != null)
+            {
+                if (Insensitive.Equals(type, "mine"))
+                {
+                    return Config.Get("Custom.BotWorkSiteMinReachMine", MinReach);
+                }
+
+                if (Insensitive.Equals(type, "lumber"))
+                {
+                    return Config.Get("Custom.BotWorkSiteMinReachLumber", 3);
+                }
+            }
+
+            return MinReach;
         }
 
         /// <summary>Sites excluded at load, with the reason. Reported by Bots.Work.</summary>
@@ -199,8 +231,6 @@ namespace Server.Custom
                 return thin;
             }
 
-            int floor = MinReach;
-
             foreach (NavDestination destination in Nav.Destinations(map, null, null))
             {
                 HarvestDefinition definition = DefinitionForType(destination.Type);
@@ -210,6 +240,7 @@ namespace Server.Custom
                     continue;
                 }
 
+                int floor = MinReachFor(destination.Type);
                 int best = 0;
 
                 foreach (NavArrival arrival in destination.ArrivalList)
@@ -466,6 +497,116 @@ namespace Server.Custom
                     "{0} has no station: nothing on this facet is a '{1}' destination. Bots of that class will never work.",
                     BotClassHelper.DisplayName(cls),
                     station);
+            }
+
+            WriteReachSnapshot(map, null, null);
+        }
+
+        /// <summary>Where the editor reads per-arrival reach from.</summary>
+        public const string ReachPath = "Data/Live/site-reach.json";
+
+        /// <summary>
+        /// Write the reach of EVERY arrival at every work site, not just the best one.
+        ///
+        /// Nav.Data only reports the best, because that is the question it is asking - "is this
+        /// site worth sending anyone to at all". Somebody authoring a site needs the other
+        /// question: which of these tiles is actually any good. A face has thin edges by nature,
+        /// and an arrival on one is not a data error, but it IS the arrival that produces a miner
+        /// standing in the right place swinging at nothing.
+        ///
+        /// <paramref name="probe"/> carries points that are not in navigation.json yet, so the
+        /// Site tool can show reach for a tile as it is being placed rather than after a save and
+        /// a reload. They are answered against <paramref name="probeType"/>'s harvest definition
+        /// and reported separately, because they are a question rather than data.
+        /// </summary>
+        public static void WriteReachSnapshot(Map map, IList<Point3D> probe, string probeType)
+        {
+            if (map == null || map == Map.Internal)
+            {
+                return;
+            }
+
+            var builder = new StringBuilder(2048);
+
+            builder.Append("{\n");
+            builder.Append("  \"utc\": \"").Append(DateTime.UtcNow.ToString("o")).Append("\",\n");
+            builder.Append("  \"map\": ").Append(Json.Quote(map.Name)).Append(",\n");
+            builder.Append("  \"arrivals\": [\n");
+
+            bool first = true;
+
+            foreach (NavDestination destination in Nav.Destinations(map, null, null))
+            {
+                HarvestDefinition definition = DefinitionForType(destination.Type);
+
+                if (definition == null || destination.ArrivalList == null)
+                {
+                    continue;
+                }
+
+                int floor = MinReachFor(destination.Type);
+
+                for (int i = 0; i < destination.ArrivalList.Count; i++)
+                {
+                    NavArrival arrival = destination.ArrivalList[i];
+
+                    if (!first)
+                    {
+                        builder.Append(",\n");
+                    }
+
+                    first = false;
+
+                    builder.Append("    {");
+                    builder.Append("\"destination\":").Append(Json.Quote(destination.Id));
+                    builder.Append(",\"type\":").Append(Json.Quote(destination.Type));
+                    builder.Append(",\"index\":").Append(i);
+                    builder.Append(",\"x\":").Append(arrival.X);
+                    builder.Append(",\"y\":").Append(arrival.Y);
+                    builder.Append(",\"z\":").Append(arrival.Z);
+                    builder.Append(",\"reach\":").Append(ReachFrom(map, arrival.Location, definition));
+                    builder.Append(",\"min\":").Append(floor);
+                    builder.Append("}");
+                }
+            }
+
+            builder.Append(first ? "\n" : "\n");
+            builder.Append("  ],\n  \"probe\": [\n");
+
+            HarvestDefinition probeDefinition = DefinitionForType(probeType);
+
+            if (probe != null && probeDefinition != null)
+            {
+                for (int i = 0; i < probe.Count; i++)
+                {
+                    Point3D point = probe[i];
+
+                    // Resolve Z the way the walker would, so the answer is for the tile a bot
+                    // would actually end up standing on rather than the one the editor guessed.
+                    var at = new Point3D(point.X, point.Y, map.GetAverageZ(point.X, point.Y));
+
+                    builder.Append(i > 0 ? ",\n" : "");
+                    builder.Append("    {");
+                    builder.Append("\"type\":").Append(Json.Quote(probeType));
+                    builder.Append(",\"x\":").Append(at.X);
+                    builder.Append(",\"y\":").Append(at.Y);
+                    builder.Append(",\"z\":").Append(at.Z);
+                    builder.Append(",\"reach\":").Append(ReachFrom(map, at, probeDefinition));
+                    builder.Append(",\"min\":").Append(MinReachFor(probeType));
+                    builder.Append(",\"canFit\":").Append(map.CanSpawnMobile(at.X, at.Y, at.Z) ? "true" : "false");
+                    builder.Append("}");
+                }
+
+                builder.Append("\n");
+            }
+
+            builder.Append("  ]\n}\n");
+
+            string error;
+
+            if (!AtomicFile.Write(ReachPath, builder.ToString(), out error))
+            {
+                Log.Error("Site reach snapshot not written: {0}", error);
             }
         }
 

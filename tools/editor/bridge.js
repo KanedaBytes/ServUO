@@ -349,6 +349,18 @@ const ROUTES = {
         sendJson(response, 200, readJson(whitelist.FILES.navAudit) || { utc: null, problems: [] });
     },
 
+    /**
+     * How many harvestable tiles each work-site arrival can actually reach.
+     *
+     * Read-only, like every other Data/Live file: the shard measures it against real map data and
+     * the editor only draws it. `probe` holds answers for points that are not in navigation.json
+     * yet, which is what lets the Site tool judge a tile while it is being placed.
+     */
+    '/api/reach': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.siteReach) || { utc: null, map: null, arrivals: [], probe: [] });
+    },
+
     /** What the spawners are actually doing, as opposed to what the files say. */
     '/api/spawner-state': (request, response) => {
         sendJson(response, 200,

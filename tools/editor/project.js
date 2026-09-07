@@ -138,11 +138,12 @@ function projectNavigation(nav) {
                 id: `arr:${dest.id}#${index}`,
                 kind: 'point',
                 map: dest.map,
-                label: `${dest.id} arrival${arrival.exclusive ? ' (exclusive)' : ''}`,
+                label: `${dest.id} arrival${arrival.exclusive ? ' (exclusive)' : arrival.exact ? ' (exact)' : ''}`,
                 points: [[arrival.x, arrival.y, arrival.z]],
                 props: { destination: dest.id, ...extraProps(arrival, MODELLED.arrival) },
                 fields: [
                     { key: 'exclusive', label: 'Exclusive', type: 'string' },
+                    { key: 'exact', label: 'Exact (no scatter)', type: 'string' },
                     { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
                 ]
             });
@@ -391,6 +392,10 @@ function project(files) {
 // file churns on the shard's first save, which is exactly the diff 5a's golden test exists to
 // prevent.
 //
+// `omitWhenFalse` mirrors DefaultValueHandling.Ignore, which is what NavArrival.Exact uses: a
+// bool is never null, so Ignore-on-null would do nothing and every arrival line would gain
+// `"exact":false`. Ignore-on-default writes the key only when it is true.
+//
 // `omitWhenBlank` mirrors NullValueHandling.Ignore. A created record NEVER contains null: an
 // optional field is either written with a real value or its key is absent.
 
@@ -415,9 +420,10 @@ const TEMPLATES = {
     },
     arrival: {
         // No 'map': an arrival belongs to its destination, which has one.
-        keys: ['destination', 'x', 'y', 'z', 'exclusive', 'waypoints', 'note'],
+        keys: ['destination', 'x', 'y', 'z', 'exclusive', 'exact', 'waypoints', 'note'],
         geometry: ['x', 'y', 'z'],
         defaults: { exclusive: false, waypoints: '' },
+        omitWhenFalse: ['exact'],
         omitWhenBlank: ['note']
     },
     zone: {
@@ -654,6 +660,17 @@ function isBlank(value) {
     return value === undefined || value === null || value === '';
 }
 
+/**
+ * A boolean field's truth, from either a real boolean or the string a text input produces.
+ *
+ * The properties panel edits these as `type: 'string'` - there is no checkbox widget - so a field
+ * the user typed reads 'true', while the same field parsed from the file reads true. Both have to
+ * mean the same thing or a round-trip through the panel would silently clear the flag.
+ */
+function isTrue(value) {
+    return value === true || value === 'true' || value === 'True';
+}
+
 /** Where a key belongs when it is not in the record yet: before the next template key that is. */
 function anchorFor(node, template, key) {
     const after = template.keys.slice(template.keys.indexOf(key) + 1);
@@ -662,6 +679,11 @@ function anchorFor(node, template, key) {
 
 function writeField(node, template, key, value) {
     if ((template.omitWhenBlank || []).includes(key) && isBlank(value)) {
+        compact.remove(node, key);
+        return;
+    }
+
+    if ((template.omitWhenFalse || []).includes(key) && !isTrue(value)) {
         compact.remove(node, key);
         return;
     }
@@ -763,6 +785,10 @@ function createShape(root, file, shape) {
         }
 
         if ((template.omitWhenBlank || []).includes(key) && isBlank(value)) {
+            continue;
+        }
+
+        if ((template.omitWhenFalse || []).includes(key) && !isTrue(value)) {
             continue;
         }
 
