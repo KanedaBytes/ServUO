@@ -569,6 +569,7 @@ namespace Server.Custom
             int floor = MinReachFor(type);
             double centreX = zone.X + (zone.Width / 2.0);
             double centreY = zone.Y + (zone.Height / 2.0);
+            int stranded = 0;
 
             var scored = new List<SweptTile>();
 
@@ -587,6 +588,24 @@ namespace Server.Custom
 
                     if (reach < floor)
                     {
+                        continue;
+                    }
+
+                    // AND IT HAS TO BE POSSIBLE TO LEAVE AGAIN.
+                    //
+                    // An arrival further than the hop cap from every waypoint is a one-way trip:
+                    // the walker can be aimed at it, and then cannot plan a route away, so the
+                    // bot stands there for the rest of its life. brit-mine-north lost every miner
+                    // sent to it that way once already.
+                    //
+                    // Ranking used to break ties on distance to the zone centre and call that
+                    // covered. It is not the same question: a 9x41 zone authored at the west
+                    // cliff had its two best tiles by reach at the far south end, 26 tiles past
+                    // the end of the road, and the sweep offered them first and took them by
+                    // default. The cap is the question, so ask the cap.
+                    if (Nav.NearestWaypoint(at, map, NavigationSystem.HopMaxTiles) == null)
+                    {
+                        stranded++;
                         continue;
                     }
 
@@ -612,8 +631,25 @@ namespace Server.Custom
 
             if (scored.Count == 0)
             {
+                problem = stranded > 0
+                    ? String.Format(
+                        "every tile in this zone with {0}+ harvestable tile(s) in reach is further "
+                        + "than the {1}-tile hop cap from any waypoint - run a road to it first",
+                        floor, NavigationSystem.HopMaxTiles)
+                    : String.Format(
+                        "no tile in this zone can be stood on with {0}+ harvestable tile(s) in reach",
+                        floor);
+            }
+            else if (stranded > 0)
+            {
+                // Said out loud rather than silently dropped: a zone drawn past the end of the
+                // road looks, from the editor, like a zone with fewer good tiles in it than it
+                // has. The author needs to know the difference between "thin ground" and "no
+                // road out there yet".
                 problem = String.Format(
-                    "no tile in this zone can be stood on with {0}+ harvestable tile(s) in reach", floor);
+                    "{0} tile(s) with enough in reach were skipped: further than the {1}-tile hop "
+                    + "cap from any waypoint. Extend the road if you want the far end worked.",
+                    stranded, NavigationSystem.HopMaxTiles);
             }
             else if (area > SweepWarnTiles)
             {
