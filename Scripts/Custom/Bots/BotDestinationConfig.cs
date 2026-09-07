@@ -35,6 +35,23 @@ namespace Server.Custom
         [JsonProperty("byTag")]
         public Dictionary<string, Dictionary<string, double>> ByTag { get; set; }
 
+        /// <summary>
+        /// The route distance, in tiles, at which a work site is half as attractive.
+        ///
+        /// Weighting had no distance term at all, so a Miner standing at the west gate was
+        /// exactly as likely to walk to the far side of the map as to the face it could see. The
+        /// term is `weight / (1 + routeTiles / this)`, which prefers the near site without ever
+        /// excluding the far one - a shard where everybody mines the nearest rock is as wrong as
+        /// one where they ignore distance, and a hyperbola falls off gently enough that a
+        /// twice-as-far site still gets picked when it is twice as good.
+        ///
+        /// Measured along the ROAD, not as the crow flies. The whole reason the west cliff feels
+        /// far is that reaching it means walking out of town and round; straight-line distance
+        /// would call it close and be wrong about the only thing that matters.
+        /// </summary>
+        [JsonProperty("distanceHalfTiles")]
+        public double DistanceHalfTiles { get; set; }
+
         /// <summary>The key standing for "every class that is not named".</summary>
         public const string DefaultKey = "default";
 
@@ -55,6 +72,13 @@ namespace Server.Custom
             if (ByTag == null)
             {
                 ByTag = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            // Zero or negative would divide the term away or invert it, so an unset value falls
+            // back rather than silently disabling the distance preference.
+            if (DistanceHalfTiles <= 0.0)
+            {
+                DistanceHalfTiles = 150.0;
             }
 
             Validate(errors, ByType, "destinations.byType");

@@ -402,6 +402,34 @@ floor cannot make one bank the only place anybody goes. **Bots already routing t
 the floor.** Validated at load: a floor larger than the destination's authored arrival points warns
 (`brit-bank` has four).
 
+### Work sites are weighted by how far they actually are
+
+Weighting had no distance term at all, so a Miner weighed a face on the far side of the map exactly
+as heavily as the one it was standing beside. A work site's weight is now multiplied by
+`1 / (1 + routeTiles / destinations.distanceHalfTiles)` - 150 by default, meaning a site 150 tiles
+away is half as attractive as one underfoot. A hyperbola rather than a cutoff, so a site twice as
+far still wins when it is twice as good.
+
+**Measured along the road, with the router the bot will itself use.** Straight-line distance calls
+the west cliff close and is wrong about the only thing that matters: from the west gate it is 125
+tiles to the northern outcrop and 350 to the west cliff, because the road out to the cliff leaves
+by the town rather than the gate. A site it cannot route to at all scores zero and drops out -
+though the place to FIX that is the island warning at load, not here.
+
+Only work sites are routed, and only while they still have a weight worth spending an A* on, so a
+class with no interest in rock costs nothing.
+
+The roll is invisible from outside, so it is logged. `BotLogKind.Route`, once per pick where a site
+was genuinely in the running:
+
+```
+site choice: brit-forge w3.81 165t, brit-mine-north w0.00, brit-mine-west w0.00 - chose 'brit-shop-tanner' instead
+```
+
+`*` marks the chosen one when a site won. A site with no tiles beside it was never measured, because
+its class weight was already zero; one that says `no route:` carries the router's own reason, which
+separates an island from an exclusive arrival that is merely reserved right now.
+
 A `BankSitter` sets `Home` a few tiles off its arrival point and `RangeHome` to 2, and the stock
 wander does the milling. It faces the nearest person occasionally and now and then bends over the
 bank box. **No speech this session** - the hook is marked in `Tick` and fills in 7d.

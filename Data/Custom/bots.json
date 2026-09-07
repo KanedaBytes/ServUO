@@ -3,6 +3,7 @@
   "comment": "PlayerBots. Caps are DELIBERATELY EMPTY: with no values here a bot is built to exactly the limits Config/PlayerCaps.cfg gives players, which is this shard's authoritative source and already carries the EJ values (skill 100/700, stat 125/225). Set a value only to make bots deliberately different from players - the Bots.Population health check names every override so the divergence is never silent. Destination weights multiply: byType[type][class or default] times byTag[tag][class or default] for every tag the destination carries. Absent means 1.0 (no opinion); 0 excludes. home, guard and work are excluded outright - a bot has no business loitering on a guard post, at a crier's station, or inside somebody's house. forge, mine and lumber are excluded for everyone EXCEPT the class that works them, which is how an artisan or gatherer is drawn to its own station and nobody else wanders onto a rock face. An artisan's pull now lives in its station tag (tailoring, woodworking) rather than in the generic craft tag, which before 7e was standing in for a station it did not yet have. Class templates, tier curves and the equipment tables live in code; see Scripts/Custom/Bots/README.md.",
   "caps": {},
   "destinations": {
+    "distanceHalfTiles": 150,
     "byType": {
       "bank": {
         "default": 1.2,

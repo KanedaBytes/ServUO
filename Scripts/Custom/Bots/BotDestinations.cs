@@ -37,6 +37,19 @@ namespace Server.Custom
             BotDestinationConfig config = BotSystem.Store.Destinations;
 
             var weights = new double[candidates.Count];
+
+            // -1 means "not measured": only work sites are routed, and only when they still have
+            // a weight worth spending an A* on.
+            var routeTiles = new int[candidates.Count];
+
+            for (int i = 0; i < routeTiles.Length; i++)
+            {
+                routeTiles[i] = -1;
+            }
+
+            // Why a candidate could not be routed to, when it could not.
+            var noRoute = new string[candidates.Count];
+
             double total = 0.0;
 
             for (int i = 0; i < candidates.Count; i++)
@@ -95,6 +108,16 @@ namespace Server.Custom
                     if (BotWorkSites.IsWorkType(candidate.Type))
                     {
                         weight *= BotWorkSites.VacancyFactor(candidate);
+
+                        // And how far it actually is to walk. Nothing here considered distance
+                        // at all, so a Miner at the west gate weighed the face across the map
+                        // exactly as heavily as the one it was standing beside.
+                        int tiles;
+                        string why;
+
+                        weight *= DistanceFactor(bot, candidate, config, out tiles, out why);
+                        routeTiles[i] = tiles;
+                        noRoute[i] = why;
                     }
                 }
 
@@ -124,11 +147,152 @@ namespace Server.Custom
 
                 if (roll <= 0.0)
                 {
+                    LogChoice(bot, candidates, weights, routeTiles, noRoute, i);
                     return candidates[i];
                 }
             }
 
+            LogChoice(bot, candidates, weights, routeTiles, noRoute, candidates.Count - 1);
+
             return candidates[candidates.Count - 1];
+        }
+
+        /// <summary>
+        /// How much a site's distance discounts it: 1.0 underfoot, 0.5 at the configured
+        /// half-distance, never zero for anywhere it can actually walk to.
+        ///
+        /// Measured along the road with the router the bot will itself use, so a site on the far
+        /// side of a wall is far even when it is close. A site it cannot route to at all scores
+        /// zero and drops out - which is also what keeps an island out of the running, though the
+        /// place to FIX an island is the load warning, not here.
+        /// </summary>
+        private static double DistanceFactor(
+            PlayerBot bot, NavDestination candidate, BotDestinationConfig config,
+            out int tiles, out string why)
+        {
+            tiles = -1;
+            why = null;
+
+            NavRoute route;
+            string error;
+
+            if (!Nav.TryRouteFrom(bot.Location, bot.Map, candidate.Id, bot, out route, out error)
+                || route == null)
+            {
+                // Carried through to the log rather than flattened to "unreachable". They are
+                // different faults with different fixes: an island is authoring, an exclusive
+                // arrival already reserved is a busy forge and rights itself, and a bot standing
+                // off the graph is the walker. One word for all three sent the reader to the
+                // wrong one.
+                why = error;
+                return 0.0;
+            }
+
+            tiles = RouteTiles(route);
+
+            double half = config.DistanceHalfTiles;
+
+            if (half <= 0.0)
+            {
+                return 1.0;
+            }
+
+            return 1.0 / (1.0 + (tiles / half));
+        }
+
+        /// <summary>
+        /// The length of a route in tiles, summed hop by hop.
+        ///
+        /// Not the step count, which counts a twelve-tile hop and a one-tile hop the same, and not
+        /// NavRoute.Cost, which is weighted by road tags for the SEARCH and so is not a distance
+        /// at all - a road hop costs 0.9 of what it measures.
+        /// </summary>
+        private static int RouteTiles(NavRoute route)
+        {
+            if (route == null || route.Steps == null || route.Steps.Count < 2)
+            {
+                return 0;
+            }
+
+            int tiles = 0;
+
+            for (int i = 1; i < route.Steps.Count; i++)
+            {
+                Point3D a = route.Steps[i - 1].Point;
+                Point3D b = route.Steps[i].Point;
+
+                tiles += Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
+            }
+
+            return tiles;
+        }
+
+        /// <summary>
+        /// Records which site was chosen and what it was chosen over.
+        ///
+        /// A weighted roll is invisible from outside: a Miner walking past the face beside it to
+        /// one across the map is either a bad weight, a full site, or a fair roll that happened to
+        /// land, and nothing in the log told them apart. Only work sites are listed - the town
+        /// destinations are a different question and would bury the one being asked.
+        /// </summary>
+        private static void LogChoice(
+            PlayerBot bot, List<NavDestination> candidates, double[] weights, int[] tiles,
+            string[] noRoute, int chosen)
+        {
+            var parts = new List<string>();
+            bool anyInPlay = false;
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (!BotWorkSites.IsWorkType(candidates[i].Type))
+                {
+                    continue;
+                }
+
+                if (weights[i] > 0.0)
+                {
+                    anyInPlay = true;
+                }
+
+                string detail;
+
+                if (tiles[i] >= 0)
+                {
+                    detail = String.Format(" {0}t", tiles[i]);
+                }
+                else if (!String.IsNullOrEmpty(noRoute[i]))
+                {
+                    detail = String.Format(" no route: {0}", noRoute[i]);
+                }
+                else
+                {
+                    detail = "";
+                }
+
+                parts.Add(String.Format(
+                    "{0}{1} w{2:0.00}{3}",
+                    i == chosen ? "*" : "",
+                    candidates[i].Id,
+                    weights[i],
+                    detail));
+            }
+
+            // Logged whenever a site was genuinely in the running, not only when one won. "Why
+            // did it walk past the face beside it" is the same question as "why did it pick the
+            // far one", and answering only the second leaves the first invisible.
+            if (!anyInPlay || parts.Count == 0)
+            {
+                return;
+            }
+
+            string line = String.Join(", ", parts.ToArray());
+
+            if (!BotWorkSites.IsWorkType(candidates[chosen].Type))
+            {
+                line += String.Format(" - chose '{0}' instead", candidates[chosen].Id);
+            }
+
+            BotLog.Note(bot, BotLogKind.Route, "site choice: {0}", line);
         }
 
         /// <summary>
