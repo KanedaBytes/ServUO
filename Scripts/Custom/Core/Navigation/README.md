@@ -138,6 +138,13 @@ reason.
 **Every rung logs once at Debug, when it is entered** — never per tick. The top rung stays a
 `Warn` naming the edge, because that line is the bug report.
 
+**`RungFired` is an optional callback beside `Arrived`**, raised at the same moment with the rung
+and the reason. It exists so a consumer can record recovery in its own diagnostics — the bots'
+event log subscribes to it — without this layer learning what a consumer is. That is the same
+inversion `NavigationSystem.RegisterAuditor` uses for the data checks, and for the same reason:
+navigation is Core and must not reach upward. A subscriber that throws is caught and logged rather
+than being allowed to break the recovery ladder it is watching.
+
 **A watched walker escalates; it does not freeze.** Previously, a walker with its retries spent
 held position for as long as a player stood within `PlayerNearTiles`, resetting its deadline
 without repathing — unbounded, and it never tried anything again. Now the recoverable rungs are

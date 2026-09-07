@@ -21,6 +21,16 @@ namespace Server.Custom
         public const string OutputPath = "Data/Live/entities.json";
 
         /// <summary>
+        /// The bot event log, written beside the entity snapshot.
+        ///
+        /// On the same timer deliberately: the editor draws a bot from entities.json and reads
+        /// its recent history from here, and two files written on two cadences would let a bot
+        /// appear in one and not the other. Absent when the live map is off, for the same reason
+        /// entities.json is - nobody is watching.
+        /// </summary>
+        public const string BotLogPath = "Data/Live/botlog.json";
+
+        /// <summary>
         /// Route points sent per entity. The editor draws where an NPC is heading; it does not
         /// need the whole lap, and a patrol lap can be dozens of points on every snapshot.
         /// </summary>
@@ -177,11 +187,53 @@ namespace Server.Custom
 
                 _lastError = null;
                 _lastWriteUtc = DateTime.UtcNow;
+
+                WriteBotLog();
             }
             catch (Exception ex)
             {
                 _lastError = ex.Message;
                 Log.Error(ex, "Live map snapshot failed.");
+            }
+        }
+
+        /// <summary>
+        /// Write the bot event log, but only when something was actually added to it.
+        ///
+        /// A quiet fleet would otherwise rewrite an identical file every two seconds for the
+        /// length of a session. The dirty flag is cleared by BuildJson rather than here, so a
+        /// write that throws leaves it set and is retried on the next tick instead of silently
+        /// dropping everything logged since.
+        ///
+        /// A failure here is logged and swallowed: the entity snapshot is the load-bearing half
+        /// of this timer, and a diagnostic that cannot be written must not stop the map updating.
+        /// </summary>
+        private static void WriteBotLog()
+        {
+            if (!BotLog.Dirty)
+            {
+                return;
+            }
+
+            try
+            {
+                string error;
+
+                if (AtomicFile.Write(BotLogPath, BotLog.BuildJson(_sequence), out error))
+                {
+                    BotLog.MarkClean();
+                }
+                else
+                {
+                    Log.Error("Bot log snapshot not written: {0}", error);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Caught HERE rather than by the caller's handler, which would report this as
+                // "Live map snapshot failed" and set _lastError - telling the editor the entity
+                // feed had broken when it had not.
+                Log.Error(ex, "Bot log snapshot failed.");
             }
         }
 

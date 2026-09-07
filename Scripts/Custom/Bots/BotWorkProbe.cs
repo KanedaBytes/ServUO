@@ -74,6 +74,15 @@ namespace Server.Custom
         /// <summary>Set by the clock-in check: was the miner inside its site's zone and working?</summary>
         private static bool _clockedInZone;
 
+        /// <summary>
+        /// The gatherer that had to WALK to the site, kept so its counters survive the handoff.
+        ///
+        /// Held as the behaviour rather than the bot because the bot's brain is replaced when the
+        /// shift ends, and Swings lives on the brain. The detached instance keeps its counts,
+        /// which is exactly what the assertion needs to read afterwards.
+        /// </summary>
+        private static GathererBehavior _walkIn;
+
         private static string _clockInNote;
 
         /// <summary>
@@ -119,6 +128,11 @@ namespace Server.Custom
             {
                 _running = true;
 
+                // Cleared per run, not just per boot: a second [BotSmoke in one session would
+                // otherwise assert against the previous run's walking miner and pass on its
+                // swings.
+                _walkIn = null;
+
                 NavDestination site = FirstUsable(map, new BotStation("mine", null));
                 NavDestination forge = FirstUsable(map, BotClassHelper.StationFor(BotClass.Smith));
 
@@ -129,6 +143,12 @@ namespace Server.Custom
                         site == null ? "no usable mine on the graph" : "no usable forge on the graph")));
                     return;
                 }
+
+                // Where the walking miner starts. The bank by preference, because it is the place
+                // a bot genuinely rolls into and the far end of a real commute; the invoker's own
+                // tile if this shard has no bank on the graph, which still tests the walk-in.
+                NavDestination town = Nav.NearestDestination(location, map, "bank", Int32.MaxValue);
+                Point3D start = town == null ? location : town.Location;
 
                 // The smith first, and standing at the forge, so it is already working when the
                 // ore arrives.
@@ -165,7 +185,7 @@ namespace Server.Custom
                 // swaps the smith back to a Traveler moments before Report looks at it, and the
                 // probe reports "the smith stopped being a Crafter mid-probe" about its own clock.
                 crafter.VisitExpiresAt = CustomTime.Now + Window + TimeSpan.FromMinutes(2.0);
-                smith.Behavior = crafter;
+                smith.SetBehavior(crafter, "probe setup");
 
                 // The miner starts at the site, works a short shift, and then walks the load in
                 // under its own steam - the real EndShift path, not a rigged one.
@@ -193,11 +213,33 @@ namespace Server.Custom
                 var gatherer = new GathererBehavior();
                 gatherer.DestinationId = site.Id;
                 gatherer.VisitExpiresAt = CustomTime.Now + Shift;
-                miner.Behavior = gatherer;
+                miner.SetBehavior(gatherer, "probe setup");
+
+                // A SECOND MINER, SPAWNED AT THE BANK, which is the case the probe never covered.
+                //
+                // The one above is placed directly ON a picked arrival tile, so it clocks in on
+                // its first tick and never exercises the walk-in at all. Everything that went
+                // wrong with the walk-in - a hand switch that left DestinationId null, a clock-in
+                // test weaker than the one that keeps a bot clocked in, and a give-up clock
+                // shorter than the walker's own recovery ladder - lived entirely in the path this
+                // probe could not reach. A miner that starts in town has to walk out, get inside
+                // the zone, find rock and swing before any of it counts.
+                var walker = new PlayerBot(BotClass.Miner, BotSkillTier.Grandmaster);
+                bots.Add(walker);
+
+                StripYield(walker);
+                walker.MoveToWorld(start, map);
+
+                _walkIn = new GathererBehavior();
+                _walkIn.DestinationId = site.Id;
+                _walkIn.VisitExpiresAt = CustomTime.Now + Window;
+                walker.SetBehavior(_walkIn, "probe setup");
 
                 Log.Info(
-                    "Work probe: a Miner at '{0}' and a Smith at '{1}', {2:0}s window.",
+                    "Work probe: a Miner at '{0}', a Miner walking there from {1},{2}, and a Smith at '{3}', {4:0}s window.",
                     site.Id,
+                    start.X,
+                    start.Y,
                     forge.Id,
                     Window.TotalSeconds);
 
@@ -318,7 +360,12 @@ namespace Server.Custom
                 && !miner.HaulPending
                 && BotWorkSites.Deliveries > 0
                 && crafter != null
-                && crafter.Made > madeBefore;
+                && crafter.Made > madeBefore
+                // The walking miner is part of the bar, not a bonus. Without it here the probe
+                // exits the moment the face-spawned miner finishes its cycle - about two minutes
+                // in - and the bot that is still walking out of town is never looked at.
+                && _walkIn != null
+                && _walkIn.Swings > 0;
         }
 
         /// <summary>
@@ -420,6 +467,29 @@ namespace Server.Custom
                 else
                 {
                     notes.Add("clocked in inside the zone");
+                }
+
+                // THE WALK-IN, which is the half this probe could not see before. A gatherer that
+                // starts in town has to route out, get inside the zone, find something in reach
+                // and swing at it. Swinging is the proof: arriving is not enough, because a bot
+                // standing on a thin tile at the edge of the face arrives perfectly well and then
+                // mines nothing for the length of its shift.
+                if (_walkIn == null)
+                {
+                    problems.Add("the walking miner was never created");
+                }
+                else if (_walkIn.Swings <= 0)
+                {
+                    problems.Add(String.Format(
+                        "the miner that had to walk to the site never swung - it was {0}",
+                        _walkIn.IsWorking ? "clocked in but idle" : "never clocked in"));
+                }
+                else
+                {
+                    notes.Add(String.Format(
+                        "the walking miner reached the site and swung {0} time(s), {1} mined",
+                        _walkIn.Swings,
+                        _walkIn.Mined));
                 }
 
                 if (BotWorkSites.Deliveries == 0)

@@ -269,6 +269,31 @@ namespace Server.Custom
                     message = "health snapshot written";
                     return true;
 
+                // Exactly what [Save does (Handlers.cs:583), for the same reason it exists: this
+                // is the ONLY way to save from outside the game. ServUO's console takes no staff
+                // commands and HandleClosed does not save on exit, so a headless run - a probe
+                // over SSH, a verification pass before a rebuild - could otherwise only save by
+                // waiting out Config/AutoSave.cfg's fifteen-minute timer.
+                //
+                // AutoSave.Save rather than World.Save so the backup rotation happens too: a
+                // forced save that skipped it would be the one save with no way back.
+                //
+                // Safe to run inline here. Poll is a Timer callback, so this IS the game thread,
+                // which is where World.Save must run; and Poll has already refused to dispatch
+                // anything while World.Saving, so this cannot re-enter a save in progress.
+                case "save":
+                {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+
+                    Server.Misc.AutoSave.Save();
+
+                    watch.Stop();
+
+                    message = String.Format(
+                        "world saved in {0:F2}s", watch.Elapsed.TotalSeconds);
+                    return true;
+                }
+
                 case "nav-export-golden":
                     if (!NavExportGolden.Export(out error))
                     {

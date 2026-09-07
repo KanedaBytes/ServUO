@@ -55,8 +55,26 @@ namespace Server.Custom
         /// <summary>Upstream's swing cadence. Each swing is one real harvest attempt.</summary>
         private static readonly TimeSpan SwingInterval = TimeSpan.FromSeconds(4.0);
 
-        /// <summary>How long the walk-in gets before the bot gives up on the site entirely.</summary>
-        private static readonly TimeSpan WalkInTimeout = TimeSpan.FromSeconds(75.0);
+        /// <summary>
+        /// How long the walk-in gets before the bot gives up on the site entirely.
+        ///
+        /// Config rather than a literal because it is a race against NavWalker's recovery ladder
+        /// (see TickWalkIn), and the ladder's own timings are configurable.
+        /// </summary>
+        public static TimeSpan WalkInTimeout
+        {
+            get { return TimeSpan.FromSeconds(Config.Get("Custom.BotWalkInSeconds", 75.0)); }
+        }
+
+        /// <summary>
+        /// How far to look for a harvestable tile when standing inside the site with none in reach.
+        ///
+        /// Six, because it has to be able to cross the widest thin edge a scattered arrival can
+        /// land on - Custom.NavArrivalScatter is 2 and BotHarvest's own sweep is 5x5 - while
+        /// staying small enough that the sweep is a hundred-odd tiles rather than a zone-sized
+        /// one, on a path that runs every tick until it succeeds.
+        /// </summary>
+        private const int SeekRadius = 6;
 
         /// <summary>Upstream's carry limit, doubled when a beast is along.</summary>
         public const int MaxCarried = 60;
@@ -70,6 +88,7 @@ namespace Server.Custom
         private NavZone _site;
         private bool _clockedIn;
         private bool _walkingIn;
+        private bool _seeking;
         private long _walkInDeadline;
         private long _nextSwing;
         private int _swings;
@@ -147,7 +166,7 @@ namespace Server.Custom
                     bot.Name,
                     DestinationId ?? "(nowhere)");
 
-                bot.Behavior = BotBehaviors.Create("Traveler");
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "no work zone");
                 return;
             }
 
@@ -215,9 +234,11 @@ namespace Server.Custom
 
             if (threat != null && threat.Alive && !threat.Deleted)
             {
+                BotLog.Note(bot, BotLogKind.Work, "downed tools: {0} is attacking", threat.Name);
+
                 Release(bot);
                 bot.HaulPending = Carried(bot) > 0;
-                bot.Behavior = BotBehaviors.Create("Traveler");
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "combat");
                 return;
             }
 
@@ -334,6 +355,12 @@ namespace Server.Custom
 
                 _mined += gained;
                 BotWorkSites.NoteMined(gained);
+
+                // On the YIELD, not on the swing. A swing every four seconds would fill a
+                // fifty-deep ring in three minutes and bury everything else in it; what somebody
+                // reading this log wants to know is whether the ground gave anything up.
+                BotLog.Note(bot, BotLogKind.Work, "+{0} at {1},{2} - {3} mined this shift, carrying {4}/{5}",
+                    gained, bot.X, bot.Y, _mined, carried, Capacity(bot));
             }
 
             _carriedSeen = carried;
@@ -353,7 +380,11 @@ namespace Server.Custom
                 _site.Id,
                 reach);
 
+            BotLog.Note(bot, BotLogKind.Clock, "clocked in at {0},{1} in '{2}', reach {3}",
+                bot.X, bot.Y, _site.Id, reach);
+
             _clockedIn = true;
+            _seeking = false;
             _nextSwing = Core.TickCount;
 
             // Mining refuses a mounted digger outright (Mining.cs:501), and a mounted bot plays no
@@ -382,15 +413,39 @@ namespace Server.Custom
         /// </summary>
         private void TickWalkIn(PlayerBot bot)
         {
+            // THE DEADLINE DOES NOT RUN WHILE THE WALKER IS WORKING.
+            //
+            // NavWalker aims the last step of a route at an EXACT tile - ArrivalRangeFor returns 0
+            // for a NavStepKind.Arrival - and its recovery ladder is five rungs at HopTimeout
+            // apiece, so a contended approach strip can legitimately take 80 to 100 seconds to
+            // land. Against a flat 75-second budget the give-up fired first, and Release() then
+            // called _walker.Stop(), which drops the route with no Arrived callback: the recovery
+            // that was about to succeed was thrown away and the bot walked off.
+            //
+            // Pushing the deadline forward while the walker is active is not the same as removing
+            // it. The walker cannot spin for ever - it has its own abandonment path, watched by
+            // the branch below - so this bounds the time spent NOT walking, which is the thing
+            // this timeout was actually meant to bound.
+            if (_walkingIn && _walker != null && _walker.Active)
+            {
+                _walkInDeadline = Core.TickCount + (long)WalkInTimeout.TotalMilliseconds;
+            }
+
             if (Core.TickCount - _walkInDeadline >= 0)
             {
-                Log.Debug(
+                // Info, not Debug. This is a real failure - the bot was sent to work and could
+                // not get to the face - and as a Debug line it was invisible on a shard not
+                // running with -debug, which is how it went undiagnosed for a whole session.
+                Log.Info(
                     "{0} could not get inside '{1}'; leaving rather than working outside it.",
                     bot.Name,
                     DestinationId);
 
+                BotLog.Note(bot, BotLogKind.Clock, "gave up getting inside '{0}'", DestinationId);
+                BotTickManager.NoteGaveUp();
+
                 Release(bot);
-                bot.Behavior = BotBehaviors.Create("Traveler");
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "walk-in gave up");
                 return;
             }
 
@@ -402,10 +457,22 @@ namespace Server.Custom
                 // Commuting still true.
                 if (_walker == null || !_walker.Active)
                 {
+                    BotLog.Note(bot, BotLogKind.Arrive, "walk-in abandoned; the walker stopped without arriving");
                     BotTickManager.NoteAbandoned();
                     Release(bot);
                 }
 
+                return;
+            }
+
+            // ALREADY INSIDE, JUST NOT ON ANYTHING. Routing again would be a no-op: the route ends
+            // at an arrival point of a destination this bot is standing in, so the walker finishes
+            // without taking a step and the bot asks again next tick until the deadline. What is
+            // needed is not a route across town but a few steps sideways, and until now nothing
+            // could take them - StepAlongTheFace is reachable only from Swing, i.e. only AFTER
+            // clocking in, which is the thing that cannot happen.
+            if (Contains(_site, bot.Location) && SeekReach(bot))
+            {
                 return;
             }
 
@@ -425,6 +492,7 @@ namespace Server.Custom
 
             if (!Nav.TryRouteFrom(bot.Location, bot.Map, DestinationId, bot, out route, out error))
             {
+                BotLog.Note(bot, BotLogKind.Route, "no route in to '{0}': {1}", DestinationId, error);
                 BotTickManager.NoteNoRoute();
                 return;
             }
@@ -433,10 +501,15 @@ namespace Server.Custom
             {
                 _walker = new NavWalker(bot);
                 _walker.Arrived = OnWalkedIn;
+                LogWalker(bot, _walker);
             }
 
             bot.Commuting = true;
             _walkingIn = true;
+
+            BotLog.Note(bot, BotLogKind.Route, "walking in to '{0}', {1} hop(s) from {2},{3}",
+                DestinationId, route.Count, bot.X, bot.Y);
+
             _walker.Follow(route);
         }
 
@@ -452,10 +525,21 @@ namespace Server.Custom
             bot.Commuting = false;
             _walkingIn = false;
 
-            if (_site == null || Contains(_site, bot.Location))
+            // THE SAME QUESTION Tick ASKS, and it has to be, because Tick is what happens next.
+            //
+            // This used to clock in on containment alone while CanClockIn demands containment AND
+            // something in reach. So a bot that landed on a thin tile clocked in - spawning its
+            // pack beast, which is what made the bug look like a success - and then un-clocked on
+            // the very next tick, walked in again to the same tile, and repeated that until the
+            // deadline. Asking the weaker question here bought nothing and cost a llama.
+            if (CanClockIn(bot))
             {
                 ClockIn(bot);
+                return;
             }
+
+            BotLog.Note(bot, BotLogKind.Clock,
+                "arrived at {0},{1} but nothing is in reach; looking for rock", bot.X, bot.Y);
         }
 
         /// <summary>
@@ -489,7 +573,107 @@ namespace Server.Custom
                 BotPackAnimals.Release(bot);
             }
 
-            bot.Behavior = BotBehaviors.Create("Traveler");
+            BotLog.Note(bot, BotLogKind.Clock, "shift over - {0} swing(s), {1} mined, carrying {2}",
+                _swings, _mined, carried);
+
+            bot.SetBehavior(BotBehaviors.Create("Traveler"), "shift over");
+        }
+
+        /// <summary>
+        /// Standing inside the site with nothing in reach: step toward the nearest tile that has
+        /// something, and report whether a step was taken.
+        ///
+        /// This is the piece the walk-in never had. A bot lands where NavWalker put it - an
+        /// arrival point scattered by Custom.NavArrivalScatter, or wherever the recovery ladder
+        /// left it - and a face has thin edges, so landing on a tile with zero reach is ordinary
+        /// rather than exceptional. The old code answered that by asking for the route again,
+        /// which cannot help: the destination is where it already is.
+        ///
+        /// Bounded by the site rectangle and by SeekRadius, and every candidate must pass the same
+        /// three tests a shuffle does - inside the zone, standable, and still able to route home -
+        /// so this cannot walk a bot somewhere StepAlongTheFace would refuse to.
+        /// </summary>
+        private bool SeekReach(PlayerBot bot)
+        {
+            HarvestDefinition definition = BotHarvest.DefinitionFor(bot.Class);
+
+            if (definition == null || _site == null)
+            {
+                return false;
+            }
+
+            Point3D from = bot.Location;
+            Point3D target = Point3D.Zero;
+            int best = 0;
+            bool found = false;
+
+            for (int dx = -SeekRadius; dx <= SeekRadius; dx++)
+            {
+                for (int dy = -SeekRadius; dy <= SeekRadius; dy++)
+                {
+                    int x = from.X + dx;
+                    int y = from.Y + dy;
+
+                    if (!_site.Contains(x, y))
+                    {
+                        continue;
+                    }
+
+                    int z = bot.Map.GetAverageZ(x, y);
+
+                    if (!bot.Map.CanSpawnMobile(x, y, z))
+                    {
+                        continue;
+                    }
+
+                    var candidate = new Point3D(x, y, z);
+
+                    if (BotWorkSites.ReachFrom(bot.Map, candidate, definition) <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (!CanGetHomeFrom(bot, candidate))
+                    {
+                        continue;
+                    }
+
+                    int distance = Math.Max(Math.Abs(dx), Math.Abs(dy));
+
+                    if (!found || distance < best)
+                    {
+                        target = candidate;
+                        best = distance;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+
+            // One tile per tick, through Move, so it walks rather than teleports and the AI's own
+            // move gate still applies. The next tick re-runs the sweep from where it ended up,
+            // which is also how it copes with something standing in the way.
+            Direction toward = bot.GetDirectionTo(target);
+
+            bot.Direction = toward;
+
+            if (!bot.Move(toward))
+            {
+                return false;
+            }
+
+            if (!_seeking)
+            {
+                _seeking = true;
+                BotLog.Note(bot, BotLogKind.Clock, "seeking rock {0} tile(s) away at {1},{2}",
+                    best, target.X, target.Y);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -662,6 +846,7 @@ namespace Server.Custom
             if (_walker != null)
             {
                 _walker.Arrived = null;
+                _walker.RungFired = null;
                 _walker = null;
             }
         }

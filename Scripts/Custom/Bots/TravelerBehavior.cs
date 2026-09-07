@@ -319,6 +319,8 @@ namespace Server.Custom
                 // graph cannot cross today; either way the bot simply picks again next tick.
                 Log.Debug("{0} cannot route to '{1}': {2}", bot.Name, destination.Id, error);
 
+                BotLog.Note(bot, BotLogKind.Route, "no route to '{0}': {1}", destination.Id, error);
+
                 return false;
             }
 
@@ -326,6 +328,7 @@ namespace Server.Custom
             {
                 _walker = new NavWalker(bot);
                 _walker.Arrived = OnArrived;
+                LogWalker(bot, _walker);
             }
 
             _destinationId = destination.Id;
@@ -337,6 +340,9 @@ namespace Server.Custom
             bot.Commuting = true;
 
             _state = TravelState.Walking;
+
+            BotLog.Note(bot, BotLogKind.Route, "departing for '{0}' ({1}), {2} hop(s)",
+                destination.Id, destination.Name, route.Count);
 
             _walker.Follow(route);
 
@@ -353,6 +359,8 @@ namespace Server.Custom
             }
 
             bot.Commuting = false;
+
+            BotLog.Note(bot, BotLogKind.Arrive, "arrived at '{0}' ({1},{2})", _destinationId, bot.X, bot.Y);
 
             _lastDestinationId = _destinationId;
             _state = TravelState.Lingering;
@@ -455,7 +463,7 @@ namespace Server.Custom
                 visit.SerializableName,
                 minutes);
 
-            bot.Behavior = visit;
+            bot.SetBehavior(visit, "arrival handoff");
 
             return true;
         }
@@ -541,6 +549,7 @@ namespace Server.Custom
             if (_walker != null)
             {
                 _walker.Arrived = null;
+                _walker.RungFired = null;
                 _walker = null;
             }
         }

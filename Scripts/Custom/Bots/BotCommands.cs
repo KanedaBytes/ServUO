@@ -19,6 +19,78 @@ namespace Server.Custom
             CommandSystem.Register("BotsReload", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("ReloadBots", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("BotSmoke", AccessLevel.Administrator, BotSmoke_OnCommand);
+            CommandSystem.Register("BotTrace", AccessLevel.GameMaster, BotTrace_OnCommand);
+        }
+
+        [Usage("BotTrace on | off | off all | list")]
+        [Description("Echoes one bot's event log to the console. Target the bot after typing it.")]
+        private static void BotTrace_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            string what = e.Length == 0 ? "" : e.GetString(0);
+
+            if (Insensitive.Equals(what, "list"))
+            {
+                List<string> traced = BotLog.TracedNames();
+
+                from.SendMessage(traced.Count == 0
+                    ? "No bots are being traced."
+                    : String.Format("Tracing {0}: {1}", traced.Count, String.Join(", ", traced.ToArray())));
+                return;
+            }
+
+            // The all-off escape hatch. Tracing is per bot and a bot is ephemeral, so without this
+            // the only way to quiet a console after tracing several is to remember every one of
+            // them - and the reason you are turning it off is usually that you cannot read it.
+            if (Insensitive.Equals(what, "off")
+                && e.Length > 1
+                && Insensitive.Equals(e.GetString(1), "all"))
+            {
+                int cleared = BotLog.TraceNone();
+
+                from.SendMessage(String.Format("Tracing off for {0} bot(s).", cleared));
+                return;
+            }
+
+            bool on;
+
+            if (Insensitive.Equals(what, "on"))
+            {
+                on = true;
+            }
+            else if (Insensitive.Equals(what, "off"))
+            {
+                on = false;
+            }
+            else
+            {
+                from.SendMessage(0x35, "Usage: [BotTrace on | off | off all | list");
+                return;
+            }
+
+            from.SendMessage(String.Format("Target a bot to turn tracing {0}.", on ? "on" : "off"));
+            from.BeginTarget(12, false, TargetFlags.None,
+                (m, targeted) => BotTrace_OnTarget(m, targeted, on));
+        }
+
+        private static void BotTrace_OnTarget(Mobile from, object targeted, bool on)
+        {
+            var bot = targeted as PlayerBot;
+
+            if (bot == null)
+            {
+                from.SendMessage(0x35, "That is not a bot.");
+                return;
+            }
+
+            BotLog.Trace(bot, on);
+
+            from.SendMessage(String.Format(
+                "Tracing {0} for {1}. Its last {2} event(s) are in Data/Live/botlog.json.",
+                on ? "on" : "off",
+                bot.Name,
+                BotLog.Entries(bot).Count));
         }
 
         [Usage("SpawnBot [class] [tier]")]
@@ -337,6 +409,49 @@ namespace Server.Custom
                 sitter == null ? "" : ", role " + sitter.Role));
         }
 
+        /// <summary>
+        /// Give a hand-switched work behaviour the destination the arrival handoff would have.
+        ///
+        /// Returns false when the bot's class has nowhere to work, having said so - a Lumberjack
+        /// on a shard with no lumber site, say. Refusing is better than attaching a brain that is
+        /// going to walk away within one tick and leave the person who typed the command none the
+        /// wiser.
+        /// </summary>
+        private static bool AssignStation(Mobile from, PlayerBot bot, PlayerBotBehavior chosen)
+        {
+            var gatherer = chosen as GathererBehavior;
+            var crafter = chosen as CrafterBehavior;
+
+            if (gatherer == null && crafter == null)
+            {
+                return true;
+            }
+
+            NavDestination site = BotWorkSites.NearestSiteFor(bot);
+
+            if (site == null)
+            {
+                from.SendMessage(0x35, String.Format(
+                    "{0} is a {1}, and nothing on this facet is a site or station it works.",
+                    bot.Name,
+                    BotClassHelper.DisplayName(bot.TradeClass)));
+                return false;
+            }
+
+            if (gatherer != null)
+            {
+                gatherer.DestinationId = site.Id;
+            }
+            else
+            {
+                crafter.DestinationId = site.Id;
+            }
+
+            from.SendMessage(String.Format("Sending {0} to {1}.", bot.Name, site.Name));
+
+            return true;
+        }
+
         private static void BotBehaviorSet_OnTarget(Mobile from, object targeted, string name)
         {
             var bot = targeted as PlayerBot;
@@ -361,6 +476,21 @@ namespace Server.Custom
             if (window != null)
             {
                 chosen.VisitExpiresAt = CustomTime.Now + window.Value;
+            }
+
+            // A HAND SWITCH ALSO HAS TO HAND OVER THE DESTINATION.
+            //
+            // Crafter and Gatherer are arrival handoffs: you become one by turning up somewhere
+            // that wants one, and the Traveler passes the destination across at the same moment it
+            // passes the brain across. This command passed only the brain, so a hand-switched
+            // Gatherer had a null DestinationId - ResolveSite fell through to
+            // Nav.Destination(null), found no work zone, and OnAttached walked it straight back to
+            // Traveler. Typing [BotBehavior Gatherer therefore appeared to do nothing at all,
+            // which is exactly how the walk-in fault below stayed hidden: nobody could hold a
+            // gatherer still long enough to watch it fail.
+            if (!AssignStation(from, bot, chosen))
+            {
+                return;
             }
 
             bot.Behavior = chosen;

@@ -115,6 +115,7 @@ namespace Server.Custom
             if (_walker != null)
             {
                 _walker.Arrived = null;
+                _walker.RungFired = null;
                 _walker = null;
             }
         }
@@ -245,6 +246,7 @@ namespace Server.Custom
             {
                 _walker = new NavWalker(bot);
                 _walker.Arrived = OnArrived;
+                LogWalker(bot, _walker);
             }
 
             bot.Commuting = true;

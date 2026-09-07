@@ -462,6 +462,15 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `livemap-on` / `livemap-off` | The entity snapshot; the body carries `<seconds> [custom|all] [zoneId]` |
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
+| `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
+
+**`save` exists because there is no other way to save from outside the game.** ServUO's console
+takes no staff commands, and `HandleClosed` does *not* save on exit — it only waits for writes
+already in flight. So a headless run had to sit out `Config/AutoSave.cfg`'s fifteen-minute timer
+before it was safe to stop the shard and rebuild. It is dispatched inline: `Poll` is a `Timer`
+callback, so it is already the game thread, which is where `World.Save` has to run; and `Poll`
+refuses to dispatch anything while `World.Saving`, so it cannot re-enter a save in progress. No
+editor button — it is an operator's tool, like `nav-export-golden`.
 
 **`spawn-reload` reloads ONE file, and that is the point.** `[GG_Reimport` deletes every `GG_`
 spawner in the world and re-imports the whole tree, and deleting an `XmlSpawner` deletes its spawned

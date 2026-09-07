@@ -254,6 +254,7 @@ namespace Server.Custom
             {
                 _walker = new NavWalker(bot);
                 _walker.Arrived = OnReachedStation;
+                LogWalker(bot, _walker);
             }
 
             bot.Commuting = true;
@@ -339,6 +340,7 @@ namespace Server.Custom
             {
                 _walker.Stop();
                 _walker.Arrived = null;
+                _walker.RungFired = null;
                 _walker = null;
             }
         }
@@ -623,6 +625,9 @@ namespace Server.Custom
             if (made > _madeSeen)
             {
                 Made += made - _madeSeen;
+
+                BotLog.Note(bot, BotLogKind.Work, "finished {0} piece(s) - {1} made, {2} on the bench",
+                    made - _madeSeen, Made, made);
             }
 
             if (exceptional > _exceptionalSeen && Utility.RandomDouble() < 0.60)

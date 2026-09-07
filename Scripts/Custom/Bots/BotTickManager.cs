@@ -39,6 +39,16 @@ namespace Server.Custom
         /// <summary>Walks that ended without an arrival since boot. See the Traveler's watchdog.</summary>
         public static int AbandonedTotal { get; private set; }
 
+        /// <summary>
+        /// Gatherers that reached their walk-in deadline and left since boot.
+        ///
+        /// Counted since boot rather than per tick because it is rare and cumulative - one of
+        /// these is a bad afternoon for one bot, a dozen is a site nobody can get into. Until
+        /// now this failure incremented nothing at all and logged only at Debug, so a work site
+        /// that no bot could enter was indistinguishable from one nobody had chosen.
+        /// </summary>
+        public static int GaveUpTotal { get; private set; }
+
         public static TimeSpan Interval
         {
             get { return TimeSpan.FromSeconds(Config.Get("Custom.BotTickSeconds", 2.0)); }
@@ -88,6 +98,11 @@ namespace Server.Custom
         {
             _abandoned++;
             AbandonedTotal++;
+        }
+
+        public static void NoteGaveUp()
+        {
+            GaveUpTotal++;
         }
 
         private static void OnTick()

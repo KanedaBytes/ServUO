@@ -253,7 +253,7 @@ namespace Server.Custom
                 return false;
             }
 
-            bot.Behavior = BotBehaviors.Create(target);
+            bot.SetBehavior(BotBehaviors.Create(target), "lifecycle roll");
 
             int count;
             _transitions.TryGetValue(target, out count);

@@ -46,6 +46,8 @@ namespace Server.Custom
 {
     public class PlayerBot : BaseCreature, IBotActor
     {
+        private static readonly CustomLogger Log = CustomLogger.For("Bots");
+
         private PlayerBotBehavior _behavior;
 
         // ---- identity, rolled once and persisted ----
@@ -160,28 +162,58 @@ namespace Server.Custom
         public PlayerBotBehavior Behavior
         {
             get { return _behavior; }
-            set
+            set { SetBehavior(value, null); }
+        }
+
+        /// <summary>
+        /// Change the brain, and say why.
+        ///
+        /// This is the ONE choke point for a behaviour change - the property setter above is a
+        /// thin wrapper on it - which is what makes a complete event log possible at all. The
+        /// setter cannot know the reason, so it passes null and the log reads "unspecified";
+        /// every caller that knows should use this overload instead.
+        ///
+        /// The reason is a short lower-case phrase, not a sentence: it is printed inside brackets
+        /// in a fixed line format and read by eye down a column.
+        /// </summary>
+        public void SetBehavior(PlayerBotBehavior value, string reason)
+        {
+            PlayerBotBehavior next = value ?? new IdleBehavior();
+
+            if (ReferenceEquals(_behavior, next))
             {
-                PlayerBotBehavior next = value ?? new IdleBehavior();
-
-                if (ReferenceEquals(_behavior, next))
-                {
-                    return;
-                }
-
-                if (_behavior != null)
-                {
-                    _behavior.OnDetached(this);
-                }
-
-                _behavior = next;
-                _behavior.OnAttached(this);
-
-                // Counts every real change of brain, whatever caused it - a lifecycle roll, an
-                // arrival handoff, a visit ending. The phase clock deliberately does NOT move on a
-                // handoff, so it cannot answer "has this bot done anything?"; this can.
-                BehaviorChanges++;
+                return;
             }
+
+            string from = _behavior == null ? "none" : _behavior.SerializableName;
+            string why = String.IsNullOrEmpty(reason) ? "unspecified" : reason;
+
+            if (_behavior != null)
+            {
+                _behavior.OnDetached(this);
+            }
+
+            _behavior = next;
+
+            // Logged BEFORE OnAttached, because OnAttached is entitled to change the behaviour
+            // again - GathererBehavior walks a bot with no work zone straight back to Traveler
+            // from inside it. Logging afterwards would record those two changes in the wrong
+            // order and lose the one that explains the other.
+            // Deliberately the single-argument Info overload with an already-formatted string:
+            // CustomLogger.Safe returns the template untouched when there are no args, so a stray
+            // brace in a bot name cannot become a FormatException here.
+            Log.Info(String.Format(
+                "{0} {1} -> {2} ({3}) @ {4},{5}", Name, from, next.SerializableName, why, X, Y));
+
+            BotLog.Note(this, BotLogKind.Behavior, "{0} -> {1} ({2}) @ {3},{4}",
+                from, next.SerializableName, why, X, Y);
+
+            _behavior.OnAttached(this);
+
+            // Counts every real change of brain, whatever caused it - a lifecycle roll, an
+            // arrival handoff, a visit ending. The phase clock deliberately does NOT move on a
+            // handoff, so it cannot answer "has this bot done anything?"; this can.
+            BehaviorChanges++;
         }
 
         // ---- construction ----

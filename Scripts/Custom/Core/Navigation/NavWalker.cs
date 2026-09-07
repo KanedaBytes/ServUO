@@ -162,6 +162,18 @@ namespace Server.Custom
         /// <summary>Raised on the game thread when the last step is reached.</summary>
         public Action<NavWalker> Arrived;
 
+        /// <summary>
+        /// Raised on the game thread each time a stuck-recovery rung is entered, with the reason
+        /// this walker just logged.
+        ///
+        /// An OPTIONAL seam, in the same shape as Arrived, so a consumer can record recovery in
+        /// its own diagnostics without this file learning what a consumer is. Navigation is Core
+        /// and knows nothing about bots; the bots' event log subscribes to this rather than the
+        /// other way round, exactly as NavigationSystem.RegisterAuditor inverts the same
+        /// dependency for the data checks.
+        /// </summary>
+        public Action<NavWalker, StuckRung, string> RungFired;
+
         /// <summary>Whether the mobile runs rather than walks.</summary>
         public bool Run { get; set; }
 
@@ -526,6 +538,25 @@ namespace Server.Custom
                 DescribeHop(step),
                 _rung,
                 what);
+
+            // Copied to a local first: a subscriber is free to clear the field, and this is the
+            // same null-race guard Advance already applies to Arrived.
+            Action<NavWalker, StuckRung, string> fired = RungFired;
+
+            if (fired != null)
+            {
+                try
+                {
+                    fired(this, _rung, what);
+                }
+                catch (Exception ex)
+                {
+                    // A diagnostic subscriber must never be able to break the recovery ladder it
+                    // is watching - that would turn "this bot is stuck" into "this bot is stuck
+                    // and can no longer get unstuck".
+                    Log.Error(ex, "A RungFired subscriber threw.");
+                }
+            }
         }
 
         private string Who()

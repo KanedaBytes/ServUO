@@ -110,7 +110,7 @@ namespace Server.Custom
                     bots.Add(bot);
                     bot.MoveToWorld(location, map);
 
-                    bot.Behavior = BotBehaviors.Create("Traveler");
+                    bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
 
                     // Backdate the phase so the first roll is not a full clamp away, and stagger
                     // it so twelve bots do not all transition on the same pass and hit the budget.

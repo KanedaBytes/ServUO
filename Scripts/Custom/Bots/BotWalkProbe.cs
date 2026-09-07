@@ -91,7 +91,7 @@ namespace Server.Custom
 
                     // Traveler rather than Idle: this is the behaviour under test, and attaching
                     // it here means the probe exercises the real code path rather than a rig.
-                    bot.Behavior = BotBehaviors.Create("Traveler");
+                    bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
                 }
 
                 // CONVERGE. One destination for all five, chosen for crowding rather than at
@@ -400,7 +400,7 @@ namespace Server.Custom
                 // which is the arrival handoff working. For the probe's purposes that is a bot
                 // that needs putting back on the road: without this the disperse phase silently
                 // did nothing for every bot that had committed, and they read as stuck.
-                bot.Behavior = BotBehaviors.Create("Traveler");
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
 
                 traveler = bot.Behavior as TravelerBehavior;
 

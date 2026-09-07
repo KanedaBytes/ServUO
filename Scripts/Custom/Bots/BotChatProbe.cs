@@ -119,7 +119,7 @@ namespace Server.Custom
                 // than no probe. ForceRole must precede the assignment: OnAttached is what rolls.
                 var sitter = new BankSitterBehavior();
                 sitter.ForceRole(BankSitterBehavior.BankRole.Regular);
-                bot.Behavior = sitter;
+                bot.SetBehavior(sitter, "probe setup");
 
                 // The audience. A throwaway PlayerMobile, the same device the party probe uses -
                 // and the reason IsPlayerNearby asks the sector rather than NetState.Instances,

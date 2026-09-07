@@ -286,6 +286,58 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// The nearest site or station this bot's own class works, or null.
+        ///
+        /// Exists because a behaviour reached by HAND has no destination. Crafter and Gatherer are
+        /// arrival handoffs - you become one by turning up somewhere that wants one - so the
+        /// Traveler hands the destination over as it hands the brain over. [BotBehavior hands over
+        /// only the brain, which left a Gatherer with a null DestinationId: ResolveSite fell
+        /// through to Nav.Destination(null), found nothing, and the bot walked away again before
+        /// anybody could watch it work. This is what the command uses to supply the missing half.
+        ///
+        /// Nearest by straight-line distance, NOT by route cost. The bot is about to ask
+        /// Nav.TryRouteFrom for a real route anyway, and running the graph over every candidate to
+        /// rank them would pay for a pathfind per site to choose between two.
+        /// </summary>
+        public static NavDestination NearestSiteFor(PlayerBot bot)
+        {
+            if (bot == null || bot.Map == null || bot.Map == Map.Internal)
+            {
+                return null;
+            }
+
+            BotStation station = BotClassHelper.StationFor(bot);
+
+            if (station.IsNone)
+            {
+                station = SiteFor(bot.TradeClass);
+            }
+
+            if (station.IsNone)
+            {
+                return null;
+            }
+
+            NavDestination nearest = null;
+            int best = 0;
+
+            foreach (NavDestination destination in Available(bot.Map, station))
+            {
+                int distance = Math.Max(
+                    Math.Abs(destination.X - bot.X),
+                    Math.Abs(destination.Y - bot.Y));
+
+                if (nearest == null || distance < best)
+                {
+                    nearest = destination;
+                    best = distance;
+                }
+            }
+
+            return nearest;
+        }
+
+        /// <summary>
         /// How many bots a site holds before it stops pulling.
         ///
         /// The mirror of the standing-crowd floor, and deliberately the same shape: a floor says

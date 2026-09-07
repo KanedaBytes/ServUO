@@ -317,6 +317,13 @@ namespace Server.Custom
                     BotTickManager.AbandonedTotal);
             }
 
+            if (BotTickManager.GaveUpTotal > 0)
+            {
+                detail += String.Format(
+                    ". {0} gatherer(s) gave up getting into a site since boot",
+                    BotTickManager.GaveUpTotal);
+            }
+
             // A class that can never travel is a config bug that looks exactly like a walker bug:
             // the bot asks for a destination every tick, gets nothing, and stands still.
             List<BotClass> starved = BotDestinations.StarvedClasses(facet ?? Map.Trammel);

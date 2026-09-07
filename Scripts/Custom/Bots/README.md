@@ -759,7 +759,7 @@ Three things now stand between that and a repeat, deliberately at three differen
 | Site | Type / tag | Face | Best arrival reach | Arrivals | Corridor |
 | --- | --- | --- | --- | --- | --- |
 | `brit-mine-north` | `mine` / `mine-north` | 14×26 at 1443,1508 | **14**/25 | 5 | **1** waypoint, joining at `brit-inn-1` |
-| `brit-forge` | `forge` / `craft town` | 1424,1557 | anvil `0x0FAF` at 1423,1556, forge `0x0FB1` at 1424,1558 | 4 (2 exclusive, 2 shared) | in town, off `brit-smith-1` |
+| `brit-forge` | `forge` / `craft town` | 1424,1557 | anvil `0x0FAF` at 1423,1556, forge `0x0FB1` at 1424,1558 | 4 (all exclusive) | in town, off `brit-smith-1` |
 
 **One new waypoint and one new edge.** The outcrop north-east of Britain turns out to sit six tiles
 from `brit-inn-1`, so the "corridor" is a single hop — which is the happiest possible outcome and
@@ -811,6 +811,18 @@ the same reason those are: `NavArrivals` scatters a non-exclusive point by `Cust
 found that the honest way — a smith standing at its own forge, reporting *"it is not beside both a
 forge and an anvil"*. Scatter is right for a rock face, where it stops four bots stacking on one
 tile; it is wrong for a spot chosen because of what is next to it.
+
+> **All four are exclusive now, and the original "2 exclusive, 2 shared" was a bug.** Every one of
+> the four carries a note saying it is an exact tile — but only two were given the flag, so the
+> picker chose a shared one about half the time, `Scatter` moved the smith up to two tiles off, and
+> the probe failed with the very message quoted above. It had done so since the site was authored;
+> the run that caught it put the smith at 1425,1556, which is (1423,1558) plus (+2, −2).
+>
+> Making all four exclusive is a **stopgap, not the design**. Exclusivity and exactness are
+> different properties, and paying for one with the other costs three of the four standing spots —
+> `Nav.Data` now says so on every boot: *"'brit-forge' has 4 exclusive arrival point(s) but only 0
+> shared one(s)"*. The fix is an `exact` flag on an arrival — no scatter, but not reserved — which
+> is a schema change and belongs with the other schema work.
 
 `BotWorkSites` checks that at load without line of sight, and says so: the pessimistic half — a
 fixture that is simply not there, which is what a wrong coordinate actually looks like — is exact,
@@ -978,7 +990,7 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet. Class and tier are rolled when omitted, and may be given in either order (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and every non-zero skill against the caps in force |
 | `[BotBehavior` | GameMaster | Target a bot; report its brain, status line, and its **voice** — chat categories, lines said, speech hue, and its bank role if it has one |
-| `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`, `BankSitter`, `Shopper`, `Crafter`, `Gatherer`) |
+| `[BotBehavior <name>` | GameMaster | Target a bot; switch it (`Idle`, `Traveler`, `BankSitter`, `Shopper`, `Crafter`, `Gatherer`). Switching to `Crafter` or `Gatherer` also assigns the **nearest site or station that bot's class works**, because those two are arrival handoffs and are useless without a destination — a class with nowhere to work is refused out loud rather than silently walking off |
 | `[BotLifecycle` | GameMaster | Report the roller, its cadence and the transition tally |
 | `[BotLifecycle on\|off` | GameMaster | Pause the roller, so a behaviour can be watched without it being rolled away |
 | `[BotWorkScout` | Administrator | Build and verify the road from each authored work site back to the town graph, and write `Data/Live/work-scout.json` for merging into `navigation.json`. An authoring tool, not a runtime one — see above |
@@ -989,6 +1001,54 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | *(config)* `Custom.BotWorkProbeOnStart` | — | Run the work probe on its own, without the six minutes of walk, lifecycle and chat probes that precede it in `[BotSmoke` |
 | `[BotsReload` | GameMaster | Re-read `bots.json`, the player caps it defaults from, **and the chat corpus** (alias `[ReloadBots`). The corpus reloads either way — a bad edit to one has nothing to do with the other. Also **re-validates the work sites**, so after editing the graph the order is `[NavReload` then `[BotsReload` |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
+| `[BotTrace on\|off` | GameMaster | Target a bot; echo everything it does to the console. `[BotTrace off all` quiets every traced bot, `[BotTrace list` names them |
+
+## The event log
+
+Every bot keeps its last **50** events in a ring buffer (`BotLog`), and the whole table is written
+to `Data/Live/botlog.json` beside `entities.json` — on the same timer, so a bot the editor is
+drawing always has a history to show. Events are one of seven kinds: `behavior`, `route`,
+`arrive`, `rung`, `clock`, `work`, `speech`.
+
+**Every behaviour change now says why, at `Info`.** One line, one format:
+
+```
+[04:34:58] [INFO ] [Bots] Hal of Vesper Traveler -> Gatherer (hand switch) @ 1449,1521
+```
+
+The reason comes from `PlayerBot.SetBehavior(behavior, reason)`, which is the **single choke
+point** for a brain change — the `Behavior` property setter is now a thin wrapper on it that
+passes `null`, so a call site that has not been told what to say reads `(unspecified)` rather than
+lying. The reasons in use are `lifecycle roll`, `arrival handoff`, `visit expired`, `hand switch`,
+`no work zone`, `combat`, `walk-in gave up`, `shift over` and `probe setup`.
+
+It is logged **before** `OnAttached` runs, because `OnAttached` is entitled to change the
+behaviour again — `GathererBehavior` walks a bot with no work zone straight back to Traveler from
+inside it. Logging afterwards recorded those two changes in the wrong order and lost the one that
+explained the other.
+
+### Why this exists
+
+A Gatherer that cannot get inside its site gives up after 75 seconds and walks away, and the
+**only** trace of that was a `Log.Debug` line — dropped entirely unless the shard runs with
+`-debug`. Nothing counted it and no health check saw it, so from outside it was indistinguishable
+from a bot that had simply chosen to go somewhere else. That failure now logs at `Info`, records a
+`clock` event, and increments `BotTickManager.GaveUpTotal`, which `Bots.Work` reports.
+
+### Two deliberate choices
+
+- **A deleted bot keeps its log.** Deletion is usually the last and most interesting thing in it.
+  The ring is keyed by `Serial` rather than by the mobile precisely so it can outlive it without
+  pinning it, and the table is bounded by **recency** (64 bots) rather than by liveness.
+- **The ring is not the console.** Everything goes in the ring; only behaviour changes are spoken
+  aloud, and only a bot under `[BotTrace` says all of it. Twenty bots produce a few hundred events
+  a minute, which is a useful file and an unreadable console.
+
+`NavWalker` gained an optional `RungFired` callback beside `Arrived` so a stuck-recovery rung
+lands in the log. Navigation is Core and knows nothing about bots, so the subscription goes the
+other way — the same inversion `NavigationSystem.RegisterAuditor` already uses for the data
+checks — and a subscriber that throws is caught and logged rather than being allowed to break the
+recovery ladder it is watching.
 
 ## `[BotSmoke`
 
@@ -1104,6 +1164,83 @@ The first version of this probe called a bot stuck if it was still walking when 
 and duly reported five stuck bots that were simply getting on with it — a Traveler that arrives
 lingers and then departs again of its own accord, so "still walking" is the *normal* steady state.
 
+## The walk-in, and three ways it was broken
+
+A Gatherer sent to a site from anywhere except the site itself did not work. It either turned back
+into a Traveler within a tick, or walked most of the way, spawned its pack beast, and then stood
+outside reporting *"standing outside a work site"* until it gave up seventy-five seconds later.
+
+One symptom, three independent faults. Worth separating, because two of them were invisible and the
+third was mis-attributed to the map.
+
+**It was NOT the slope.** The obvious suspicion is that the site zone does not contain the arrival
+tiles as the ground climbs from z 32 to z 45. It does. `NavZone.Contains(x, y)` never consults Z at
+all, and all five `brit-mine-north` arrivals sit at least four tiles inside the rectangle — further
+in than `Custom.NavArrivalScatter` can push them.
+
+### 1. A hand switch handed over the brain but not the destination
+
+`Crafter` and `Gatherer` are arrival handoffs: the Traveler passes the destination across at the
+same moment it passes the brain across. `[BotBehavior Gatherer` passed only the brain, so
+`DestinationId` was null, `ResolveSite` fell through to `Nav.Destination(null)`, and `OnAttached`
+walked the bot straight back to Traveler. Typing the command appeared to do nothing.
+
+That is also why the rest stayed hidden: **nobody could hold a gatherer still long enough to watch
+it fail.** `BotWorkSites.NearestSiteFor` now supplies the missing half, and a class with nowhere to
+work is told so instead of silently walking away.
+
+### 2. Clocking in and staying clocked in asked different questions
+
+`OnWalkedIn` clocked in on zone containment alone. `CanClockIn`, which decides whether the bot
+*stays* clocked in on the very next tick, demands containment **and** something within harvest
+reach. So a bot that landed on a thin tile clocked in — spawning its pack beast, which is what made
+the failure look like a success — un-clocked one tick later, and asked to walk in again.
+
+The re-walk cannot help, and this is the heart of it: **the route ends at an arrival point of a
+destination the bot is already standing in**, so the walker finishes without taking a step. What was
+needed was not a route across town but a few steps sideways, and nothing could take them —
+`StepAlongTheFace` is reachable only from `Swing`, which runs only *after* clocking in.
+
+`SeekReach` is that missing step: standing inside the site with nothing in reach, sweep
+`SeekRadius` tiles for the nearest one that has something, and walk to it one tile per tick. Every
+candidate passes the same three tests a shuffle does — inside the zone, standable, and still able to
+route home — so it cannot go anywhere `StepAlongTheFace` would refuse.
+
+This one was **not confined to the walk-in.** The event log caught the work probe's own miner —
+spawned directly on a good tile, in a run that passed — clocking in twice in one shift:
+
+```
+clock  clocked in at 1447,1521 in 'brit-mine-north-face', reach 5
+clock  clocked in at 1450,1520 in 'brit-mine-north-face', reach 5
+clock  shift over - 21 swing(s), 17 mined, carrying 17
+```
+
+It had shuffled onto a zero-reach tile and had to walk back in. Every shift was paying this.
+
+### 3. The give-up clock was racing the walker's recovery ladder
+
+`NavWalker.ArrivalRangeFor` returns **0** for a `NavStepKind.Arrival` — the last tile of a route
+must be hit exactly — and the recovery ladder is five rungs at `HopTimeout` apiece, so a contended
+one-tile approach can legitimately take 80 to 100 seconds to land. Against a flat 75-second budget
+the give-up fired first, and `Release` then called `_walker.Stop()`, which drops the route with no
+`Arrived` callback: **the recovery that was about to succeed was thrown away.**
+
+Observed on a live run, on the forge arrival rather than the mine:
+
+```
+[WARN] [Nav] Enid Ashdown could not walk 'brit-smith-1' -> '(arrival)' after the whole recovery
+             ladder with nobody watching; it was moved. Check that edge.
+```
+
+The deadline now stops running while the walker is active. That is not the same as removing it —
+the walker has its own abandonment path, watched by the branch below it — so what remains bounded is
+the time spent *not* walking, which is what the timeout was always meant to bound. The budget is
+`Custom.BotWalkInSeconds`.
+
+And the give-up now logs at `Info` and increments `BotTickManager.GaveUpTotal`, which `Bots.Work`
+reports. Previously it logged at `Debug` and counted nothing, which is how three faults shared one
+symptom for a whole session without anybody being able to tell them apart.
+
 ## The work probe
 
 Runs with `[BotSmoke`, last of the four, reports through `Bots.Shift`.
@@ -1114,6 +1251,14 @@ crafted item. Every one of those steps is somewhere the session could be quietly
 part looked fine on its own — a site with no ore, a corridor that does not route, a delivery that
 matches the wrong trade, a forge the bot cannot reach from its own arrival tile — and none of them
 would show up in a check of any single piece.
+
+**There are two miners, and the second one is the point.** The first is placed directly *on* a
+picked arrival tile, so it clocks in on its first tick and never exercises the walk-in at all. The
+second starts at the **bank** and has to route out of town, get inside the zone, find something in
+reach and swing at it. Every fault described in [The walk-in](#the-walk-in-and-three-ways-it-was-broken)
+lived entirely in the path the first miner skips, which is why all of it survived a probe that was
+otherwise asserting the whole loop. Swinging is the bar, not arriving: a bot standing on a thin tile
+at the edge of the face arrives perfectly well and then mines nothing for its entire shift.
 
 It runs on an **accelerated clamp installed in memory only**, the same discipline `BotLifeProbe`
 keeps: a real shift is 4–8 minutes and a real crafter settles in for 3–6 *hours*, which is right for

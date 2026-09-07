@@ -101,7 +101,7 @@ namespace Server.Custom
                 return false;
             }
 
-            bot.Behavior = BotBehaviors.Create("Traveler");
+            bot.SetBehavior(BotBehaviors.Create("Traveler"), "visit expired");
 
             return true;
         }
@@ -112,6 +112,26 @@ namespace Server.Custom
 
         public virtual void OnDetached(PlayerBot bot)
         {
+        }
+
+        /// <summary>
+        /// Subscribe a freshly built walker to this bot's event log.
+        ///
+        /// Every walking behaviour here creates its walker the same way and would otherwise
+        /// repeat this lambda four times, which is four places for it to drift. Called once, next
+        /// to the Arrived assignment, and deliberately NOT inside NavWalker's constructor: Core
+        /// navigation knows nothing about bots, and a walker steering a daily-life townsfolk has
+        /// no bot log to write to.
+        /// </summary>
+        protected static void LogWalker(PlayerBot bot, NavWalker walker)
+        {
+            if (bot == null || walker == null)
+            {
+                return;
+            }
+
+            walker.RungFired = (w, rung, what) =>
+                BotLog.Note(bot, BotLogKind.Rung, "stuck at {0},{1} [{2}] - {3}", bot.X, bot.Y, rung, what);
         }
 
         // ---------------------------------------------------------------------
@@ -357,6 +377,8 @@ namespace Server.Custom
 
             bot.SpeechLines++;
             ChatLibrary.NoteSpoken(resolved);
+
+            BotLog.Note(bot, BotLogKind.Speech, "\"{0}\"", resolved);
 
             _nextChatAllowed = Core.TickCount + (long)RandomCooldown().TotalMilliseconds;
 
