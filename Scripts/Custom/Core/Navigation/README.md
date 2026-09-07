@@ -138,6 +138,30 @@ reason.
 **Every rung logs once at Debug, when it is entered** — never per tick. The top rung stays a
 `Warn` naming the edge, because that line is the bug report.
 
+### Every arrival must be routable, not just one of them
+
+`Nav.TryRouteFrom` refuses to route from anywhere with no waypoint inside `Custom.NavHopMaxTiles`,
+so **an arrival point beyond the cap is a one-way trip**: the picker sends a mobile there, it does
+what it came for, then asks for a way home every tick and is told there is none, for ever. Silent,
+permanent, and from outside indistinguishable from a broken walker.
+
+`CheckQuality` used to ask whether **any** arrival was reachable, which a destination with one good
+point and four stranding ones passes quietly — and did. `brit-mine-north` shipped with an arrival
+**16 tiles** from the nearest waypoint against a cap of **12**, so roughly one miner in five was
+stranded the moment it arrived, and the only symptom was an intermittent work-probe failure a long
+way downstream. The check now names each offender and its real distance:
+
+```
+destination 'brit-mine-north' has 1 arrival point(s) further than the 12-tile hop cap from any
+waypoint, so a mobile sent to one cannot route away again: (1450,1512) is 16 tiles from 'brit-inn-1'
+```
+
+The site itself was fixed by adding `brit-minenorth-2` and `-3` **on existing arrival tiles** —
+coordinates `BotWorkScout` had already verified standable with `map.CanFit` at `NavWalker.ResolveZ`,
+which is why two new edges across a mountain face passed `[NavAudit` first time. One approach
+waypoint cannot cover a zone 26 tiles deep inside a 12-tile cap; the worst tile is now 9 tiles from
+a waypoint rather than 21.
+
 **`RungFired` is an optional callback beside `Arrived`**, raised at the same moment with the rung
 and the reason. It exists so a consumer can record recovery in its own diagnostics — the bots'
 event log subscribes to it — without this layer learning what a consumer is. That is the same

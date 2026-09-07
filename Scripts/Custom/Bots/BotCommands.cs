@@ -417,8 +417,10 @@ namespace Server.Custom
         /// going to walk away within one tick and leave the person who typed the command none the
         /// wiser.
         /// </summary>
-        private static bool AssignStation(Mobile from, PlayerBot bot, PlayerBotBehavior chosen)
+        private static bool AssignStation(PlayerBot bot, PlayerBotBehavior chosen, out string note)
         {
+            note = null;
+
             var gatherer = chosen as GathererBehavior;
             var crafter = chosen as CrafterBehavior;
 
@@ -431,10 +433,10 @@ namespace Server.Custom
 
             if (site == null)
             {
-                from.SendMessage(0x35, String.Format(
+                note = String.Format(
                     "{0} is a {1}, and nothing on this facet is a site or station it works.",
                     bot.Name,
-                    BotClassHelper.DisplayName(bot.TradeClass)));
+                    BotClassHelper.DisplayName(bot.TradeClass));
                 return false;
             }
 
@@ -447,7 +449,7 @@ namespace Server.Custom
                 crafter.DestinationId = site.Id;
             }
 
-            from.SendMessage(String.Format("Sending {0} to {1}.", bot.Name, site.Name));
+            note = "Sending it to " + site.Name + ".";
 
             return true;
         }
@@ -460,6 +462,53 @@ namespace Server.Custom
             {
                 from.SendMessage(0x35, "That is not a bot.");
                 return;
+            }
+
+            string message;
+
+            if (!TryHandSwitch(bot, name, out message))
+            {
+                from.SendMessage(0x35, message);
+                return;
+            }
+
+            from.SendMessage(message);
+
+            CommandLogging.WriteLine(
+                from,
+                String.Format(
+                    "{0} {1} setting {2}'s behaviour to {3}",
+                    from.AccessLevel,
+                    CommandLogging.Format(from),
+                    bot.Name,
+                    bot.Behavior.SerializableName));
+        }
+
+        /// <summary>
+        /// Switch a bot's brain by hand, and leave it in the state a real transition leaves it in.
+        ///
+        /// Public and separated from the targeting so the LIFE PROBE can drive the same code rather
+        /// than a copy of it. That is the whole point: the fault this guards against was a hand
+        /// switch that looked correct and was undone seconds later, and a probe asserting against
+        /// its own reimplementation of the switch would not have caught it.
+        ///
+        /// Returns false with the refusal in <paramref name="message"/>, true with the
+        /// confirmation.
+        /// </summary>
+        public static bool TryHandSwitch(PlayerBot bot, string name, out string message)
+        {
+            message = null;
+
+            if (bot == null || bot.Deleted)
+            {
+                message = "That bot is gone.";
+                return false;
+            }
+
+            if (!BotBehaviors.IsKnown(name))
+            {
+                message = String.Format("'{0}' is not a bot behaviour.", name);
+                return false;
             }
 
             PlayerBotBehavior chosen = BotBehaviors.Create(name);
@@ -488,31 +537,28 @@ namespace Server.Custom
             // Traveler. Typing [BotBehavior Gatherer therefore appeared to do nothing at all,
             // which is exactly how the walk-in fault below stayed hidden: nobody could hold a
             // gatherer still long enough to watch it fail.
-            if (!AssignStation(from, bot, chosen))
+            string station;
+
+            if (!AssignStation(bot, chosen, out station))
             {
-                return;
+                message = station;
+                return false;
             }
 
-            bot.Behavior = chosen;
+            bot.SetBehavior(chosen, "hand switch");
             bot.PhaseStartedAt = CustomTime.Now;
             bot.TransitionPending = false;
 
-            from.SendMessage(String.Format(
-                "{0} is now {1}{2}.",
+            message = String.Format(
+                "{0} is now {1}{2}.{3}",
                 bot.Name,
                 bot.Behavior.SerializableName,
                 window == null
                     ? " for a full phase"
-                    : String.Format(" for {0:0} minute(s)", window.Value.TotalMinutes)));
+                    : String.Format(" for {0:0} minute(s)", window.Value.TotalMinutes),
+                station == null ? "" : " " + station);
 
-            CommandLogging.WriteLine(
-                from,
-                String.Format(
-                    "{0} {1} setting {2}'s behaviour to {3}",
-                    from.AccessLevel,
-                    CommandLogging.Format(from),
-                    bot.Name,
-                    bot.Behavior.SerializableName));
+            return true;
         }
 
         [Usage("BotsReload")]

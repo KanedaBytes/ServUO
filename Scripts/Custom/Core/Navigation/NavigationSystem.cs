@@ -455,6 +455,7 @@ namespace Server.Custom
                 int exclusive = 0;
                 int shared = 0;
                 bool reachable = false;
+                var stranding = new List<string>();
 
                 foreach (NavArrival arrival in destination.ArrivalList)
                 {
@@ -470,7 +471,36 @@ namespace Server.Custom
                     if (_graph.Nearest(arrival.Location, destination.Map, cap) != null)
                     {
                         reachable = true;
+                        continue;
                     }
+
+                    // EVERY arrival has to be routable, not just one of them.
+                    //
+                    // Nav.TryRouteFrom refuses to route from anywhere with no waypoint inside the
+                    // hop cap, so an arrival beyond it is a ONE-WAY TRIP: the picker sends a
+                    // mobile there, it does whatever it came to do, and then asks for a way home
+                    // every tick and is told there is none, for ever. The failure is silent,
+                    // permanent, and from outside it looks exactly like a broken walker.
+                    //
+                    // This used to be asked as "is ANY arrival reachable", which a destination
+                    // with one good point and four stranding ones passes quietly - and did. The
+                    // mine at brit-mine-north shipped with an arrival seventeen tiles from its
+                    // only approach waypoint against a cap of twelve, so roughly one miner in five
+                    // was stranded on arrival, and the only symptom was an intermittent work-probe
+                    // failure a long way downstream.
+                    // maxTiles of 0 means "no limit" here, which is how the real distance is got
+                    // for the message: the capped call above has already said only that there is
+                    // nothing inside the cap, not how far outside it the nearest one is.
+                    NavWaypoint nearest = _graph.Nearest(arrival.Location, destination.Map, 0);
+
+                    stranding.Add(nearest == null
+                        ? String.Format("({0},{1}) has no waypoint at all on this facet",
+                            arrival.X, arrival.Y)
+                        : String.Format("({0},{1}) is {2} tiles from '{3}'",
+                            arrival.X,
+                            arrival.Y,
+                            NavGraph.Chebyshev(arrival.Location, nearest.Location),
+                            nearest.Id));
                 }
 
                 if (!reachable)
@@ -479,6 +509,16 @@ namespace Server.Custom
                         "destination '{0}' has no arrival point within {1} tiles of a waypoint",
                         destination.Id,
                         cap));
+                }
+                else if (stranding.Count > 0)
+                {
+                    _dataWarnings.Add(String.Format(
+                        "destination '{0}' has {1} arrival point(s) further than the {2}-tile hop cap "
+                        + "from any waypoint, so a mobile sent to one cannot route away again: {3}",
+                        destination.Id,
+                        stranding.Count,
+                        cap,
+                        String.Join(", ", stranding.ToArray())));
                 }
 
                 // A guard post with nowhere for a second guard to stand is a data bug, not a

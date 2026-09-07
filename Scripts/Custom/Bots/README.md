@@ -725,6 +725,28 @@ Two deliberate distinctions:
 - **The threshold is a floor on the BEST arrival**, not on every one. A face has thin edges by
   nature; what matters is whether the site has a good spot at all.
 
+### The north face shipped as a trap anyway
+
+Everything below was written when the site was authored, and the site still violated it. The zone
+is **26 tiles deep** and had **one** approach waypoint at its southern end, so the far corner was
+**21** tiles away against a 12-tile cap — and the authored arrival at `1450,1512` was **16** tiles
+from the nearest waypoint. `Nav.TryPickArrival` chooses uniformly, so about **one miner in five was
+stranded the instant it arrived**, mined a full shift, and then could never route home. The only
+symptom was the work probe failing on delivery every few runs.
+
+Three things were wrong at once, which is why it lasted:
+
+- **The scout's clamp is described below as if it had been applied. It had not been** — or the site
+  was re-authored afterwards without it.
+- **`Nav.Data` only asked whether *any* arrival was reachable**, so a destination with one good
+  point and four bad ones passed silently. It now names each offender and its real distance.
+- **`CanGetHomeFrom` guards the shuffle, not the arrival.** No amount of care about where a bot
+  *steps* helps when it is *placed* out of range to begin with.
+
+Fixed by adding `brit-minenorth-2` and `-3` on two existing arrival tiles — coordinates
+`BotWorkScout` had already proved standable — which is why two new edges across a mountain face
+passed `[NavAudit` first time. Worst tile in the zone is now 9 tiles from a waypoint.
+
 ### A work site has to fit inside the hop cap, or it is a trap
 
 The second thing the engine had to say, and it cost a probe run to hear.
@@ -758,7 +780,7 @@ Three things now stand between that and a repeat, deliberately at three differen
 
 | Site | Type / tag | Face | Best arrival reach | Arrivals | Corridor |
 | --- | --- | --- | --- | --- | --- |
-| `brit-mine-north` | `mine` / `mine-north` | 14×26 at 1443,1508 | **14**/25 | 5 | **1** waypoint, joining at `brit-inn-1` |
+| `brit-mine-north` | `mine` / `mine-north` | 14×26 at 1443,1508 | **14**/25 | 5 | **3** waypoints, joining at `brit-inn-1` |
 | `brit-forge` | `forge` / `craft town` | 1424,1557 | anvil `0x0FAF` at 1423,1556, forge `0x0FB1` at 1424,1558 | 4 (all exclusive) | in town, off `brit-smith-1` |
 
 **One new waypoint and one new edge.** The outcrop north-east of Britain turns out to sit six tiles
@@ -1145,6 +1167,52 @@ recovery: repath 6, sidestep 1, door 0, skip 0, teleport 0. caps: from PlayerCap
 
 Those totals are fleet-wide and **reset on `[NavReload`**: the counts describe a graph, and after an
 edit they would otherwise describe two.
+
+### The life probe also guards the hand switch
+
+One of the twelve bots is switched to `Idle` **through the real `[BotBehavior` code path** —
+`BotCommands.TryHandSwitch`, which the command and the probe now share rather than each having
+their own copy. The probe then asserts the bot still holds that brain after
+`HandSwitchPasses` lifecycle passes.
+
+The fault it guards against already shipped once. Setting `Behavior` alone left `PhaseStartedAt`
+untouched, so the roller's next pass asked *"is this bot's phase over?"*, got yes, and rolled the
+switch away within seconds: every `[BotBehavior` appeared to work and then quietly undid itself.
+Nothing exercised that path, which is the whole reason it survived.
+
+Three details that are not incidental:
+
+- **`Idle`, specifically.** It takes no visit window, so the phase clock is the only thing
+  protecting it — and the phase clock is exactly what broke. A behaviour *with* a visit window is
+  skipped by the roller outright, so the assertion would pass without testing anything.
+- **Passes, not seconds.** A wall-clock assertion would really be an assertion about
+  `Custom.BotLifecycleSeconds`, and would start passing for the wrong reason the moment somebody
+  slowed the cadence. `BotLifecycle.PassCount` counts passes that actually ran.
+- **The probe's cadence dropped from 10s to 5s to make two passes safe to assert.** A probe run's
+  phase is *exactly* 30 seconds — `BotPhaseClamp.Apply` clamps the personality's 30–180 **minute**
+  average down to `maxSeconds`, so the minimum never comes into it — and at 10s two passes was 20s,
+  uncomfortably close. At 5s it is 10s.
+
+**And the first run of this assertion failed, on a system that was working correctly.** Worth
+recording, because the fix was in the lifecycle rather than in the probe:
+
+```
+a hand switch did not survive the roller - Myrwina was switched to Idle by hand
+and the roller had it as Traveler 2 pass(es) later
+```
+
+The switch was at 06:24:00 and the roll at 06:24:36 — **thirty-six seconds later, against a
+thirty-second phase**. Entirely legal. The trouble was that *"two passes" was not a bounded amount
+of time*: `BotLifecycle.IntervalOverride` set the new five-second cadence but left `_nextPass`
+holding the deadline the previous **sixty**-second cadence had already scheduled, so the first pass
+did not arrive for another half-minute. Setting the override now brings the next pass forward — an
+override that does not take effect until the thing it overrides has finished is not really an
+override — and the sample records elapsed seconds alongside the pass count, because with only
+`2 pass(es) later` in the message there was nothing to tell a real fault from this one.
+
+It is also part of the early-exit condition rather than only the report: churn can be satisfied
+inside twenty seconds, and exiting on churn alone would end the run before the hand-switched bot
+had been looked at once — which is how a probe grows an assertion that is never evaluated.
 
 ## The five-traveller walk probe
 

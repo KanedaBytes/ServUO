@@ -550,3 +550,24 @@ pets stabled for the length of the sentence.
   BOMs, `-NoNewline` flattens a whole file onto one line, and the round-trip corrupts non-ASCII
   (an em dash becomes `â€"`). Use the editor tools or Python for anything textual; keep PowerShell
   for running processes.
+
+## 16. Commit checkpoints
+
+**Sean runs every git command by hand.** At a commit checkpoint, print exactly three lines, in
+**PowerShell** form, and nothing else:
+
+```powershell
+git add -A
+git commit -m "<message>"
+git push origin pub57
+```
+
+Never a bash heredoc or `\` line continuation, never an enumerated file list, and **never `-F`
+with a temp file**. They are all things to retype or clean up before they will run, and a command
+that has to be edited before it works is not a command.
+
+The practical consequence: **`-m` takes one line, so the message has to fit on one.** Say what
+changed and why in a sentence; the explanation belongs in the code comments and the folder README,
+which is where somebody reading the code a year from now will actually be standing.
+
+Do not run `git commit` or `git push` unless asked to. Printing the commands *is* the deliverable.

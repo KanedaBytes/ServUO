@@ -40,8 +40,31 @@ namespace Server.Custom
         /// </summary>
         public const int ChurnPercent = 75;
 
+        /// <summary>
+        /// Lifecycle passes a hand switch must survive untouched.
+        ///
+        /// Two, and the cadence below is what makes two SAFE to assert. The phase clamps installed
+        /// for a probe run are 15-30 seconds and the roller runs every 5, so two passes is ten
+        /// seconds - comfortably inside even the shortest phase a bot can roll. At the old
+        /// ten-second cadence two passes was twenty seconds, past the fifteen-second floor, and a
+        /// bot rolling on the second pass would have been entirely legal: the assertion would have
+        /// failed a correct system often enough to stop meaning anything.
+        /// </summary>
+        public const int HandSwitchPasses = 2;
+
         private static HealthResult _last;
         private static bool _running;
+
+        // The hand-switch assertion. A hand switch that is quietly rolled away seconds later is
+        // indistinguishable from one that never happened, which is exactly what it was before
+        // PhaseStartedAt was set - and nothing exercised that path, so it shipped broken.
+        private static PlayerBot _switched;
+        private static string _switchedTo;
+        private static int _switchedAtPass;
+        private static DateTime _switchedAt;
+        private static bool _switchSampled;
+        private static bool _switchHeld;
+        private static string _switchNote;
 
         /// <summary>True while this probe is mid-run. Read by [BotSmoke to advance the chain.</summary>
         public static bool IsRunning
@@ -99,7 +122,10 @@ namespace Server.Custom
                 // three-minute window holds three passes, and with a per-pass budget most bots
                 // never get asked at all - the first run of this probe read that as ten bots
                 // refusing to live, when it was really the roller barely being invited to run.
-                BotLifecycle.IntervalOverride = TimeSpan.FromSeconds(10.0);
+                // Five, not ten. The hand-switch assertion needs at least HandSwitchPasses passes
+                // to fall inside the shortest phase clamp above, and at ten seconds it did not.
+                // Asking the roller more often also helps the churn bar it was already tuned for.
+                BotLifecycle.IntervalOverride = TimeSpan.FromSeconds(5.0);
 
                 BotLifecycle.ResetTransitions();
 
@@ -117,10 +143,36 @@ namespace Server.Custom
                     bot.PhaseStartedAt = CustomTime.Now - TimeSpan.FromSeconds(Utility.Random(20));
                 }
 
+                // ONE BOT IS HAND-SWITCHED, through the real [BotBehavior code path.
+                //
+                // Idle deliberately: it takes no visit window, so the phase clock is the only
+                // thing protecting it, and the phase clock is precisely what the fault broke. A
+                // behaviour with a visit window would be skipped by the roller outright and the
+                // assertion would pass without testing anything.
+                _switched = null;
+                _switchSampled = false;
+                _switchHeld = false;
+                _switchNote = "never sampled";
+
+                string switchMessage;
+
+                if (BotCommands.TryHandSwitch(bots[0], "Idle", out switchMessage))
+                {
+                    _switched = bots[0];
+                    _switchedTo = "Idle";
+                    _switchedAtPass = BotLifecycle.PassCount;
+                    _switchedAt = CustomTime.Now;
+                }
+                else
+                {
+                    _switchNote = "the switch was refused: " + switchMessage;
+                }
+
                 Log.Info(
-                    "Life probe: {0} bot(s) on accelerated phases ({1:0}s window).",
+                    "Life probe: {0} bot(s) on accelerated phases ({1:0}s window), {2} hand-switched to Idle.",
                     bots.Count,
-                    Window.TotalSeconds);
+                    Window.TotalSeconds,
+                    _switched == null ? "nobody" : _switched.Name);
 
                 List<PlayerBot> captured = bots;
 
@@ -131,7 +183,13 @@ namespace Server.Custom
 
                 _watch = Timer.DelayCall(PollInterval, PollInterval, 0, () =>
                 {
-                    if (!Churned(captured) && !_clock.Expired)
+                    SampleHandSwitch();
+
+                    // Both bars, not either. Churn can be satisfied inside twenty seconds, and an
+                    // early exit on churn alone would end the run before the hand-switched bot had
+                    // been looked at even once - which is how a probe grows an assertion that is
+                    // never actually evaluated.
+                    if ((!Churned(captured) || !_switchSampled) && !_clock.Expired)
                     {
                         return;
                     }
@@ -154,6 +212,61 @@ namespace Server.Custom
         /// exiting on the churn bar alone would stop watching for them. That is a deliberate
         /// trade - the probe is primarily a churn test - and it is why the timeout still exists.
         /// </summary>
+        /// <summary>
+        /// Did the hand-switched bot keep the brain it was given?
+        ///
+        /// Sampled once, the moment HandSwitchPasses lifecycle passes have run since the switch -
+        /// not on a wall-clock delay, because the question is about the ROLLER and a wall-clock
+        /// answer would really be about Custom.BotLifecycleSeconds.
+        ///
+        /// The fault this exists for: setting Behavior alone left PhaseStartedAt untouched, so the
+        /// roller's next pass asked "is this bot's phase over?", got yes, and rolled the switch
+        /// away within seconds. Every [BotBehavior appeared to work and then quietly undid itself,
+        /// and nothing exercised the path.
+        /// </summary>
+        private static void SampleHandSwitch()
+        {
+            if (_switchSampled || _switched == null)
+            {
+                return;
+            }
+
+            if (_switched.Deleted)
+            {
+                _switchSampled = true;
+                _switchHeld = false;
+                _switchNote = "the hand-switched bot was deleted mid-run";
+                return;
+            }
+
+            int passes = BotLifecycle.PassCount - _switchedAtPass;
+
+            if (passes < HandSwitchPasses)
+            {
+                return;
+            }
+
+            string now = _switched.Behavior == null ? "nothing" : _switched.Behavior.SerializableName;
+
+            _switchSampled = true;
+            _switchHeld = Insensitive.Equals(now, _switchedTo);
+
+            // The elapsed seconds are in the note on purpose. The first run of this assertion
+            // failed reporting only "2 pass(es) later", which reads as a fault and was not one:
+            // the passes were 36 seconds apart because IntervalOverride had not displaced the
+            // cadence already in flight, and a 30-second phase had legitimately expired between
+            // them. Without the clock in the message there was nothing to tell those two apart.
+            double seconds = (CustomTime.Now - _switchedAt).TotalSeconds;
+
+            _switchNote = _switchHeld
+                ? String.Format(
+                    "{0} held {1} through {2} lifecycle pass(es) over {3:0}s",
+                    _switched.Name, _switchedTo, passes, seconds)
+                : String.Format(
+                    "{0} was switched to {1} by hand and the roller had it as {2} {3} pass(es) ({4:0}s) later",
+                    _switched.Name, _switchedTo, now, passes, seconds);
+        }
+
         private static bool Churned(List<PlayerBot> bots)
         {
             int alive = 0;
@@ -286,6 +399,23 @@ namespace Server.Custom
 
                         unchanged.Add(line);
                     }
+                }
+
+                // THE HAND SWITCH. A fault here is a real one: it means a behaviour given by hand
+                // does not survive contact with the roller, which makes [BotBehavior useless for
+                // watching any behaviour at all - and being unable to hold a bot still is how the
+                // Gatherer walk-in faults stayed hidden for a session.
+                if (!_switchSampled)
+                {
+                    problems.Add("the hand switch was never sampled - " + _switchNote);
+                }
+                else if (!_switchHeld)
+                {
+                    problems.Add("a hand switch did not survive the roller - " + _switchNote);
+                }
+                else
+                {
+                    notes.Add(_switchNote);
                 }
 
                 List<string> belowFloor = BotCrowds.BelowFloor(map);

@@ -84,7 +84,9 @@
     {"id":"brit-north-8","map":"Trammel","x":1426,"y":1546,"z":30,"arrivalRange":0,"tags":"town road"},
     {"id":"brit-inn-1","map":"Trammel","x":1458,"y":1528,"z":20,"arrivalRange":0,"tags":"town road"},
     {"id":"brit-smith-1","map":"Trammel","x":1418,"y":1547,"z":30,"arrivalRange":0,"tags":"town road"},
-    {"id":"brit-minenorth-1","map":"Trammel","x":1452,"y":1529,"z":35,"arrivalRange":0,"tags":"wilderness"}
+    {"id":"brit-minenorth-1","map":"Trammel","x":1452,"y":1529,"z":35,"arrivalRange":0,"tags":"wilderness"},
+    {"id":"brit-minenorth-2","map":"Trammel","x":1448,"y":1522,"z":45,"arrivalRange":0,"tags":"wilderness","note":"Mid-face. The site zone is 26 tiles deep and one approach cannot cover it inside the hop cap, so the northern half was a one-way trip. Sited on an authored arrival tile, which BotWorkScout already verified standable."},
+    {"id":"brit-minenorth-3","map":"Trammel","x":1450,"y":1512,"z":40,"arrivalRange":0,"tags":"wilderness","note":"North face. Covers the arrival at 1450,1512, which was 16 tiles from the nearest waypoint and stranded every miner sent to it."}
   ],
   "edges": [
     {"from":"brit-plaza-1","to":"brit-plaza-2","kind":"walk","tags":"road"},
@@ -173,7 +175,9 @@
     {"from":"brit-north-6","to":"brit-north-7","kind":"walk","tags":"road"},
     {"from":"brit-north-7","to":"brit-north-8","kind":"walk","tags":"road"},
     {"from":"brit-north-8","to":"brit-smith-1","kind":"walk","tags":"road"},
-    {"from":"brit-inn-1","to":"brit-minenorth-1","kind":"walk","tags":"wilderness"}
+    {"from":"brit-inn-1","to":"brit-minenorth-1","kind":"walk","tags":"wilderness"},
+    {"from":"brit-minenorth-1","to":"brit-minenorth-2","kind":"walk","tags":"wilderness"},
+    {"from":"brit-minenorth-2","to":"brit-minenorth-3","kind":"walk","tags":"wilderness"}
   ],
   "destinations": [
     {"id":"brit-bank","name":"Britain Bank","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded","waypoints":"brit-bank-2 brit-bank-0"},

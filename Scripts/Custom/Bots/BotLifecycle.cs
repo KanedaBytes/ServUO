@@ -66,7 +66,33 @@ namespace Server.Custom
         /// production 60-second cadence a three-minute window contains three passes, and with a
         /// per-pass transition budget most bots never get asked. The probe shortens both.
         /// </summary>
-        public static TimeSpan? IntervalOverride { get; set; }
+        /// <remarks>
+        /// Setting this brings the NEXT pass forward, rather than letting the cadence already in
+        /// flight run its course first.
+        ///
+        /// Without that, installing a five-second override does nothing for up to a minute,
+        /// because _nextPass is still holding the deadline the previous sixty-second cadence set.
+        /// A probe that then counts passes is counting something unbounded: the life probe's
+        /// hand-switch assertion sampled at "two passes" and got a bot thirty-six seconds older
+        /// than it expected, past a thirty-second phase, and reported a correct roll as a fault.
+        /// An override that does not take effect until the thing it is overriding has finished is
+        /// not really an override.
+        /// </remarks>
+        public static TimeSpan? IntervalOverride
+        {
+            get { return _intervalOverride; }
+            set
+            {
+                _intervalOverride = value;
+
+                if (value != null)
+                {
+                    _nextPass = Core.TickCount + (long)value.Value.TotalMilliseconds;
+                }
+            }
+        }
+
+        private static TimeSpan? _intervalOverride;
 
         public static TimeSpan Interval
         {
@@ -114,6 +140,17 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// Passes that have actually RUN since boot - not calls to Pass, which is invited on every
+        /// bot tick and returns immediately until its own cadence is due.
+        ///
+        /// Counted because "did the roller leave this bot alone?" has to be asked in passes rather
+        /// than in seconds. A probe asserting over a wall-clock window is really asserting about
+        /// Custom.BotLifecycleSeconds, and would start passing for the wrong reason the moment
+        /// somebody slowed the cadence down.
+        /// </summary>
+        public static int PassCount { get; private set; }
+
         public static void ResetTransitions()
         {
             _transitions.Clear();
@@ -157,6 +194,8 @@ namespace Server.Custom
             }
 
             _nextPass = Core.TickCount + (long)Interval.TotalMilliseconds;
+
+            PassCount++;
 
             int transitions = 0;
 

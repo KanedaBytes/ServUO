@@ -659,6 +659,18 @@ namespace Server.Custom
             // which is also how it copes with something standing in the way.
             Direction toward = bot.GetDirectionTo(target);
 
+            // CHECK THE STEP, not just the destination. Validating only the target is how a bot
+            // walks off the end of the reachable region one tile at a time: every individual move
+            // is "toward somewhere legal", and the tile it actually lands on is never asked about.
+            // The far end of a face can be past the hop cap even when the tile being aimed at is
+            // not, and a gatherer that steps outside it can mine happily and then never route home.
+            Point3D step = Step(bot.Location, toward);
+
+            if (!Contains(_site, step) || !CanGetHomeFrom(bot, step))
+            {
+                return false;
+            }
+
             bot.Direction = toward;
 
             if (!bot.Move(toward))
@@ -707,7 +719,13 @@ namespace Server.Custom
 
             bot.Direction = inward;
 
-            if (Contains(_site, Step(bot.Location, inward)))
+            Point3D drift = Step(bot.Location, inward);
+
+            // The same home check the outward step gets. Drifting toward the middle of the site is
+            // usually the safe direction, but "usually" is not a guarantee: on a zone whose
+            // approach waypoint sits at one end, the middle can be further from it than the edge
+            // the bot is standing on.
+            if (Contains(_site, drift) && CanGetHomeFrom(bot, drift))
             {
                 bot.Move(inward);
             }
