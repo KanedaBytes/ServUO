@@ -76,6 +76,43 @@ test('a zone with no tags falls back to its own id, and a wrong facet does not c
     assert.strictEqual(ids.prefixAt(5, 5, 'Felucca', untagged), 'wp');
 });
 
+test('a point inserted into a road is named after the road, not the zone it landed in', () => {
+    // The real one: inserting between town-9 and town-10 while standing in the bank quarter
+    // produced 'bank-2', which reads as part of a different road and sorts nowhere near the one
+    // it belongs to. The number in a road id is a position, so 10a is the answer whatever the
+    // point happens to be standing inside.
+    const world = [
+        zone('bankquarter', 0, 0, 40, 40, 'bank town'),
+        pointShape('wp:town-9', 5, 5),
+        pointShape('wp:town-10', 10, 10),
+        pointShape('wp:town-11', 20, 20)
+    ];
+
+    assert.strictEqual(ids.insertedId('town-10', 'town-11', 'Trammel', 7, 7, world), 'town-10a');
+
+    // A second insert on the same hop keeps counting, and never produces 'town-10aa'.
+    const withA = [...world, pointShape('wp:town-10a', 12, 12)];
+
+    assert.strictEqual(ids.insertedId('town-10', 'town-11', 'Trammel', 7, 7, withA), 'town-10b');
+    assert.strictEqual(ids.insertedId('town-10a', 'town-11', 'Trammel', 7, 7, withA), 'town-10b');
+});
+
+test('an inserted point falls back to the zone scheme when neither neighbour is numbered', () => {
+    // 'brit-gate-w' has no position to be after, and 'brit-gate-wa' would read worse than the
+    // zone's own name.
+    const world = [zone('bankquarter', 0, 0, 40, 40, 'bank town'), pointShape('wp:brit-gate-w', 5, 5)];
+
+    assert.strictEqual(ids.insertedId('brit-gate-w', 'brit-gate-e', 'Trammel', 7, 7, world), 'bank-1');
+});
+
+test('an inserted point carries its neighbour display name, or none at all', () => {
+    assert.strictEqual(ids.insertedName('Bank road 10', '', 'town-10a'), 'Bank road 10a');
+    assert.strictEqual(ids.insertedName('', 'Bank road 11', 'town-10b'), 'Bank road 11b');
+
+    // The common case: unnamed neighbours leave the field unset rather than inventing one.
+    assert.strictEqual(ids.insertedName('', '', 'town-10a'), '');
+});
+
 test('an auto id skips ids that are taken, across kinds and ignoring case', () => {
     // Stricter than the shard, deliberately: Nav.TryRoute accepts an id naming a waypoint OR a
     // destination, so letting the two collide would be genuinely ambiguous.

@@ -33,7 +33,7 @@ import * as worksites from './worksites.js';
 import { auditLine, hasBlocked } from './audit.js';
 import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
-import { nextId } from './ids.js';
+import { nextId, insertedId, insertedName } from './ids.js';
 import { buildShape } from './build.js';
 import { liveStatusText } from './live.js';
 
@@ -971,9 +971,26 @@ function insertOnHop(edge, worldX, worldY) {
     // at every point, and a new point at 0 would be underground.
     const z = edge.points[0][2] || 0;
 
-    const id = nextId(x, y, state.facet.name, state.shapes);
+    // Named after its neighbours, not after the zone it landed in. A point inserted between
+    // 'town-9' and 'town-10' while standing in the bank quarter used to be called 'bank-2',
+    // which reads as part of a different road and sorts nowhere near the one it belongs to.
+    const id = insertedId(from, to, state.facet.name, x, y, state.shapes);
 
-    const waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
+    const named = (waypointId) => {
+        const shape = state.shapes.find((s) => s.id === `wp:${waypointId}`);
+
+        return shape ? shape.props.name || '' : '';
+    };
+
+    const name = insertedName(named(from), named(to), id);
+
+    const props = { id, tags: 'road', arrivalRange: '0' };
+
+    if (name) {
+        props.name = name;
+    }
+
+    const waypoint = buildShape('waypoint', props,
         state.facet.name, { points: [[x, y, z]] }, {});
 
     waypoint.points = [[x, y, z]];
@@ -1783,21 +1800,54 @@ async function proposeCorridor(points) {
     createProposal(hops);
 }
 
+/**
+ * An authored waypoint already standing on this tile, or within `slack` of it.
+ *
+ * Only the ends of a road are asked about. A road that starts where a waypoint already is has to
+ * JOIN it, and the first version did not: it made a second waypoint at the identical coordinates,
+ * which meant 43 waypoints and a mine hung off the graph as an island reachable by nothing. The
+ * duplicate paths perfectly, audits clean, and goes nowhere.
+ */
+function waypointNear(x, y, slack) {
+    return state.shapes.find((shape) =>
+        shape.layer === 'nav'
+        && shape.map === state.facet.name
+        && shape.points
+        && shape.points.length > 0
+        && Math.max(Math.abs(shape.points[0][0] - x), Math.abs(shape.points[0][1] - y)) <= slack)
+        || null;
+}
+
 /** Turn a verified hop list into unsaved waypoint and edge records. */
 function createProposal(hops) {
     const created = [];
+    const reused = [];
     let previous = null;
 
-    for (const [x, y, z] of hops) {
-        const id = nextId(x, y, state.facet.name, [...state.shapes, ...created]);
+    for (let i = 0; i < hops.length; i++) {
+        const [x, y, z] = hops[i];
+        const atEnd = i === 0 || i === hops.length - 1;
+        const existing = atEnd ? waypointNear(x, y, 1) : null;
 
-        const waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
-            state.facet.name, { points: [[x, y, z]] }, {});
+        let waypoint;
 
-        // buildShape flattens Z to 0 for a click; a walked road carries the real one, and the
-        // authored Z is what makes a raised or sunken hop reachable at all.
-        waypoint.points = [[x, y, z]];
-        created.push(waypoint);
+        if (existing) {
+            // Joined, not duplicated. The existing point keeps its own id, name and position -
+            // moving it to match the walked hop would edit a record the author did not ask to
+            // touch, and one tile is inside the slack the walker already works to.
+            waypoint = existing;
+            reused.push(existing.props.id);
+        } else {
+            const id = nextId(x, y, state.facet.name, [...state.shapes, ...created]);
+
+            waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
+                state.facet.name, { points: [[x, y, z]] }, {});
+
+            // buildShape flattens Z to 0 for a click; a walked road carries the real one, and the
+            // authored Z is what makes a raised or sunken hop reachable at all.
+            waypoint.points = [[x, y, z]];
+            created.push(waypoint);
+        }
 
         if (previous) {
             created.push(buildShape('edge', {}, state.facet.name,
@@ -1817,7 +1867,16 @@ function createProposal(hops) {
     state.proposal = new Set(created.map((shape) => shape.id));
 
     syncDerived(state.shapes);
-    setStatus(`Proposed ${hops.length} waypoint(s). Drag to adjust, then Save.`, 'ok');
+
+    // Said out loud, because joining is the difference between a road and an island and the
+    // author has no other way to see which happened.
+    setStatus(
+        reused.length > 0
+            ? `Proposed ${hops.length} waypoint(s), joining ${reused.join(' and ')}.`
+                + ' Drag to adjust, then Save.'
+            : `Proposed ${hops.length} waypoint(s). Drag to adjust, then Save.`,
+        'ok');
+
     requestRender();
 }
 
@@ -2872,10 +2931,34 @@ function showBanner(message, kind, offerReload) {
     dom.banner.className = kind === 'warn' ? 'warn' : '';
     dom.banner.hidden = false;
     dom.bannerDiscard.hidden = !hasEdits() && state.written.size === 0;
+
+    stackGuideUnderBanner();
 }
 
 function hideBanner() {
     dom.banner.hidden = true;
+    stackGuideUnderBanner();
+}
+
+/**
+ * Keeps the tool guide clear of the banner.
+ *
+ * Both live on the shelf below the toolbar, and the banner's height is whatever its message
+ * needs - an audit banner is twelve findings tall - so the offset is measured rather than
+ * guessed at. A tool being driven while a banner is up is not rare: the banner is how a refused
+ * save reports itself, and the first thing anybody does about it is reach for a tool.
+ */
+function stackGuideUnderBanner() {
+    if (!dom.toolGuide) {
+        return;
+    }
+
+    if (dom.banner.hidden) {
+        dom.toolGuide.style.top = '';
+        return;
+    }
+
+    dom.toolGuide.style.top = `${dom.banner.offsetTop + dom.banner.offsetHeight + 8}px`;
 }
 
 function hideBannerIfClean() {
@@ -3082,6 +3165,10 @@ function setHint(message) {
 
     dom.toolGuide.hidden = false;
     dom.toolHint.textContent = message;
+
+    // A tool started while a banner is already up has to clear it too, not only the other way
+    // round.
+    stackGuideUnderBanner();
 }
 
 /**

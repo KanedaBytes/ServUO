@@ -202,7 +202,9 @@ itself, and nothing is saved until you say so. The in-game equivalents are `[Nav
 `[NavRecord` / `[NavLink` (`Scripts/Custom/Core/Navigation/README.md`), which are the right reach
 for a single waypoint rather than a road.
 
-1. **Click `Corridor`, then click where the road starts.**
+1. **Click `Corridor`, then click where the road starts.** Start it *on* an existing waypoint when
+   you mean to join the graph there — a road that starts within a tile of one reuses it rather than
+   creating a second waypoint on the same tile, and the status line names what it joined.
 2. **Click via points to steer it, then the end.** Each leg is routed separately and joined, so a
    via point is how you make the road go round the mountain rather than at it.
 3. **Enter, or the `Finish` button, routes it.** The status line counts the legs as they walk;
@@ -216,6 +218,18 @@ for a single waypoint rather than a road.
 An over-cap hop is a **warning**, not a refusal — the shard accepts it and the walker may then be
 unable to plan it, so it is worth fixing before it strands somebody. The audit and `validate.js`
 both name the cap the hop broke.
+
+**A road joined to nothing is the failure worth checking for.** The first road authored this way
+put a duplicate waypoint on top of `brit-gate-w` instead of linking to it, and forty-three
+waypoints and a mine hung off the graph as an island: every edge pathed, the audit was clean, and
+nothing could walk there. Reusing an existing waypoint at the ends is what prevents it, and
+`Nav.Data` now warns at load when any component other than the largest holds a destination or an
+arrival, naming its waypoints. `[NavAudit` repeats the finding.
+
+**An inserted point is named after its neighbours**, not after the zone it landed in — inserting
+between `town-9` and `town-10` gives `town-10a`, even in the middle of the bank quarter, and it
+carries the neighbour's display name if there is one. Only where neither neighbour is numbered does
+it fall back to the zone scheme.
 
 ### Editing a proposal
 

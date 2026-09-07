@@ -419,7 +419,11 @@ button:disabled { opacity: .45; cursor: default; }
 /* The active tool's instructions, over the top of the map rather than in the corner of it.
    Centred and at the top because that is where a tool's own buttons are, and because the thing
    it is describing is usually in the middle of the map where the author is already looking. */
-#tool-guide { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+/* Below the toolbar, never across it. At top:8px this sat exactly where the toolbar is - the
+   toolbar draws over it (z-index 4 to this one's 3) and clipped the instruction mid-sentence,
+   so "...where the road starts. Esc cancels." was half a button. 56px is the same shelf the
+   banner uses, and showBanner moves this below the banner when both are up. */
+#tool-guide { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 3;
               max-width: min(720px, calc(100% - 32px)); display: flex; flex-direction: column;
               gap: 2px; padding: 8px 14px; border-radius: 6px; font-size: 13px;
               background: rgba(20,22,28,.92); border: 1px solid #3a3f4b;
