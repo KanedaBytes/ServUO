@@ -91,6 +91,26 @@ namespace Server.Custom
             return builder.ToString();
         }
 
+        /// <summary>
+        /// Neutralises the one character that can eat a report, and nothing else.
+        ///
+        /// THE CLIENT'S GUMP HTML DOES NOT DECODE ENTITIES. It parses tags, so an unescaped '&lt;'
+        /// opens one and swallows whatever follows - but `&amp;gt;` is not turned back into '&gt;', it is
+        /// drawn as the four characters `&amp;gt;`. The first version escaped '&gt;' and '&amp;' as well, and
+        /// every NavAudit finding came out reading
+        ///
+        ///     BLOCKED 'brit-plaza-9' -&amp;gt; 'brit-bake-1'
+        ///
+        /// because every one of those arrows is a '&gt;'. Escaping '&amp;' has the same fault one level
+        /// down: it would render the literal text `&amp;amp;`, which is the bug it was meant to avoid.
+        ///
+        /// So: '&lt;' only. '&gt;' is not special to a parser that is looking for a tag OPENER, and an
+        /// ampersand that is never decoded cannot be misdecoded.
+        ///
+        /// reportgump.test.js reads this method and asserts the set of replacements is exactly
+        /// this one - the failure was invisible from outside the client, and a test that only
+        /// checked "is it escaped" would have passed on the broken version.
+        /// </summary>
         private static string Escape(string text)
         {
             if (String.IsNullOrEmpty(text))
@@ -98,10 +118,7 @@ namespace Server.Custom
                 return "";
             }
 
-            return text
-                .Replace("&", "&amp;")
-                .Replace("<", "&lt;")
-                .Replace(">", "&gt;");
+            return text.Replace("<", "&lt;");
         }
     }
 
