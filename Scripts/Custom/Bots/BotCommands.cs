@@ -157,6 +157,17 @@ namespace Server.Custom
                 from.SendMessage("  " + line);
             }
 
+            if (bot.Class == BotClass.Crafter)
+            {
+                // The legacy one-class-many-subtypes shape. Without this the report says only
+                // "Class Crafter", and the station it works - forge, tailor shop, dock - is
+                // invisible, which is how a Crafter at the forge came to be told it had no station.
+                from.SendMessage(String.Format(
+                    "Sub-type {0} (works as {1}).",
+                    CrafterTypeHelper.DisplayName(bot.CrafterSpec),
+                    BotClassHelper.DisplayName(bot.TradeClass)));
+            }
+
             from.SendMessage(bot.Personality.ToString());
 
             PlayerBotBehavior behaviour = bot.Behavior;
@@ -169,7 +180,20 @@ namespace Server.Custom
                 TimeSpan elapsed = CustomTime.Now - bot.PhaseStartedAt;
                 TimeSpan left = phase - elapsed;
 
-                if (behaviour.VisitExpiresAt != null)
+                // CLAMP AND SAY SO rather than print two thousand years.
+                //
+                // An unset clock used to render as "63924344915s of 14160s elapsed", which reads
+                // as a display glitch and is in fact the symptom of a bot the lifecycle will
+                // overwrite on its next pass. Naming it is the difference between shrugging at a
+                // silly number and finding the bug.
+                if (bot.PhaseClockUnset)
+                {
+                    from.SendMessage(0x35, String.Format(
+                        "Phase {0}: CLOCK UNSET - this bot is permanently overdue and the "
+                        + "lifecycle will roll it on its next pass.",
+                        behaviour.SerializableName));
+                }
+                else if (behaviour.VisitExpiresAt != null)
                 {
                     TimeSpan visit = behaviour.VisitExpiresAt.Value - CustomTime.Now;
 
@@ -180,6 +204,16 @@ namespace Server.Custom
                 }
                 else
                 {
+                    if (elapsed < TimeSpan.Zero)
+                    {
+                        elapsed = TimeSpan.Zero;
+                    }
+
+                    if (elapsed > phase)
+                    {
+                        elapsed = phase;
+                    }
+
                     from.SendMessage(String.Format(
                         "Phase {0}: {1:0}s of {2:0}s elapsed, {3:0}s left.",
                         behaviour.SerializableName,
@@ -313,9 +347,33 @@ namespace Server.Custom
                 return;
             }
 
-            bot.Behavior = BotBehaviors.Create(name);
+            PlayerBotBehavior chosen = BotBehaviors.Create(name);
 
-            from.SendMessage(String.Format("{0} is now {1}.", bot.Name, bot.Behavior.SerializableName));
+            // A HAND SWITCH IS A TRANSITION, and has to leave the bot in the same state one does.
+            //
+            // Setting Behavior alone was not enough: the lifecycle asks "is this bot's phase over"
+            // on its next pass, and with the phase clock untouched the answer was yes - so every
+            // [BotBehavior was quietly rolled away within seconds of being typed. Starting the
+            // clock is what buys the behaviour its phase; the visit window is what protects the
+            // ones that are visits, exactly as the arrival handoff protects them.
+            TimeSpan? window = BotBehaviors.VisitWindowFor(chosen);
+
+            if (window != null)
+            {
+                chosen.VisitExpiresAt = CustomTime.Now + window.Value;
+            }
+
+            bot.Behavior = chosen;
+            bot.PhaseStartedAt = CustomTime.Now;
+            bot.TransitionPending = false;
+
+            from.SendMessage(String.Format(
+                "{0} is now {1}{2}.",
+                bot.Name,
+                bot.Behavior.SerializableName,
+                window == null
+                    ? " for a full phase"
+                    : String.Format(" for {0:0} minute(s)", window.Value.TotalMinutes)));
 
             CommandLogging.WriteLine(
                 from,

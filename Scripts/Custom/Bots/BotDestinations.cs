@@ -186,10 +186,36 @@ namespace Server.Custom
 
             if (Insensitive.Equals(candidate.Type, "bank"))
             {
-                return 2.0;
+                // The bank is the FALLBACK, not a competitor. Upstream's 2.0 against a station's
+                // 9.0 still sent about one load in eleven to a bank while a dry smith stood at the
+                // forge waiting for it - which is not a miner making a choice, it is a miner
+                // getting it wrong. If somebody is actually at the bench, go to the bench.
+                //
+                // With nobody there the bank is exactly right, and this returns to 2.0: ore in a
+                // bank box is ore kept, and it is what a player would have done.
+                return AnyStaffedStation(bot, raw) ? 0.02 : 2.0;
             }
 
             return 0.02;
+        }
+
+        /// <summary>Is a crafter of the trade that buys this good working anywhere on the facet?</summary>
+        private static bool AnyStaffedStation(PlayerBot bot, Type raw)
+        {
+            if (raw == null)
+            {
+                return false;
+            }
+
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (crafter.RawGood == raw && !BotWorkSites.IsExcluded(crafter.DestinationId))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Is a crafter of this trade actually working at this station right now?</summary>

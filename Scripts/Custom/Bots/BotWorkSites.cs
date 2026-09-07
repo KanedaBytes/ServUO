@@ -265,11 +265,11 @@ namespace Server.Custom
                 return false;
             }
 
-            BotStation station = BotClassHelper.StationFor(bot.Class);
+            BotStation station = BotClassHelper.StationFor(bot);
 
             if (station.IsNone)
             {
-                station = SiteFor(bot.Class);
+                station = SiteFor(bot.TradeClass);
             }
 
             if (station.IsNone)

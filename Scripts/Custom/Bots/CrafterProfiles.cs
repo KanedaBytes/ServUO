@@ -200,6 +200,18 @@ namespace Server.Custom
             // (1424,1747, the dockside tavern) and Customs (1480,1746, on the docks themselves).
         }
 
+        /// <summary>
+        /// The profile this BOT works to, resolving the legacy Crafter class through its sub-type.
+        ///
+        /// Same reason as BotClassHelper.StationFor(PlayerBot): the profiles are keyed on the real
+        /// trade classes and BotClass.Crafter is not one of them, so asking by Class alone hands a
+        /// Crafter-class smith a null profile and it stands at the bench with "no trade".
+        /// </summary>
+        public static CrafterProfile For(PlayerBot bot)
+        {
+            return bot == null ? null : For(bot.TradeClass);
+        }
+
         /// <summary>The profile for a class, or null when that class is not a stationed artisan.</summary>
         public static CrafterProfile For(BotClass cls)
         {

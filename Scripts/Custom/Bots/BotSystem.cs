@@ -205,6 +205,7 @@ namespace Server.Custom
             int count = 0;
             int travelling = 0;
             int lingering = 0;
+            int clockless = 0;
             Map facet = null;
             var byBehaviour = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -220,6 +221,11 @@ namespace Server.Custom
                 }
 
                 count++;
+
+                if (bot.PhaseClockUnset)
+                {
+                    clockless++;
+                }
 
                 int classCount;
                 byClass.TryGetValue(bot.Class, out classCount);
@@ -364,6 +370,24 @@ namespace Server.Custom
                     "{0} destination weight key(s) match nothing in the nav graph ({1}) - they do nothing. {2}",
                     unknown.Count,
                     String.Join(", ", unknown.ToArray()),
+                    detail));
+            }
+
+            // A BOT WITH AN UNSET PHASE CLOCK IS PERMANENTLY OVERDUE, and this check exists
+            // because that went unnoticed for three sessions.
+            //
+            // PhaseStartedAt was never set in the constructor, so `CustomTime.Now - MinValue` came
+            // out at two thousand years - greater than any phase length - and the roller wanted to
+            // transition every bot on every pass. The visible symptom was that any behaviour set by
+            // hand was overwritten within seconds, which reads as a broken command rather than a
+            // broken clock. It should now be impossible; that is exactly why it is worth counting.
+            if (clockless > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} of {1} bot(s) have an UNSET PHASE CLOCK - they are permanently overdue and "
+                    + "the lifecycle will overwrite anything set on them. {2}",
+                    clockless,
+                    count,
                     detail));
             }
 

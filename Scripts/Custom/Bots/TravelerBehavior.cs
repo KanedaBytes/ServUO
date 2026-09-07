@@ -436,15 +436,17 @@ namespace Server.Custom
                 return false;
             }
 
-            // Upstream's windows, and they are three very different lengths on purpose. A
-            // browsing visit is minutes; a SHIFT at a rock face is four to eight; an artisan
-            // settles at its bench for three to six HOURS, which is what makes a town's smith a
-            // fixture you can go back to rather than somebody who happened to be there once.
-            int minutes = visit is CrafterBehavior ? Utility.RandomMinMax(180, 360)
-                        : visit is GathererBehavior ? Utility.RandomMinMax(4, 8)
-                        : Utility.RandomMinMax(2, 6);
+            // The windows live in BotBehaviors now, because [BotBehavior has to set the same ones.
+            TimeSpan? window = BotBehaviors.VisitWindowFor(visit);
 
-            visit.VisitExpiresAt = CustomTime.Now + TimeSpan.FromMinutes(minutes);
+            if (window == null)
+            {
+                return false;
+            }
+
+            int minutes = (int)window.Value.TotalMinutes;
+
+            visit.VisitExpiresAt = CustomTime.Now + window.Value;
 
             Log.Debug(
                 "{0} is staying at '{1}' as a {2} for {3} minute(s).",
@@ -476,7 +478,7 @@ namespace Server.Custom
                     return gatherer;
                 }
 
-                if (CrafterProfiles.For(bot.Class) != null)
+                if (CrafterProfiles.For(bot) != null)
                 {
                     var crafter = new CrafterBehavior();
                     crafter.DestinationId = destination.Id;

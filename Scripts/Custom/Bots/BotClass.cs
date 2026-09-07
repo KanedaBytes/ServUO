@@ -141,6 +141,19 @@ namespace Server.Custom
         /// stationless at load rather than the fishing half being quietly missing. See the seam
         /// note at the foot of CrafterProfiles.
         /// </summary>
+        /// <summary>
+        /// The station this BOT works, resolving the legacy Crafter class through its sub-type.
+        ///
+        /// Prefer this over the BotClass overload wherever a bot is in hand. BotClass.Crafter is
+        /// one class with a CrafterSpec behind it, and the by-class overload cannot see the spec -
+        /// which is exactly why a "Class Crafter" bot standing at the forge was told there was no
+        /// station on the facet.
+        /// </summary>
+        public static BotStation StationFor(PlayerBot bot)
+        {
+            return bot == null ? new BotStation(null, null) : StationFor(bot.TradeClass);
+        }
+
         public static BotStation StationFor(BotClass cls)
         {
             CrafterProfile profile = CrafterProfiles.For(cls);

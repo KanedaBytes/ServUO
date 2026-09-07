@@ -50,6 +50,38 @@ namespace Server.Custom
             return new IdleBehavior();
         }
 
+        /// <summary>
+        /// How long a visit to this kind of behaviour lasts, or null for an open-ended one.
+        ///
+        /// Upstream's windows, and they are three very different lengths on purpose: a browsing
+        /// visit is minutes, a SHIFT at a rock face is four to eight, and an artisan settles at
+        /// its bench for three to six HOURS.
+        ///
+        /// Here rather than in TravelerBehavior because the arrival handoff is no longer the only
+        /// caller: a hand switch through [BotBehavior has to set the same window, or the bot is
+        /// left with no visit protection and the lifecycle rolls it away seconds later.
+        /// </summary>
+        public static TimeSpan? VisitWindowFor(PlayerBotBehavior behaviour)
+        {
+            if (behaviour is CrafterBehavior)
+            {
+                return TimeSpan.FromMinutes(Utility.RandomMinMax(180, 360));
+            }
+
+            if (behaviour is GathererBehavior)
+            {
+                return TimeSpan.FromMinutes(Utility.RandomMinMax(4, 8));
+            }
+
+            if (behaviour is BankSitterBehavior || behaviour is ShopperBehavior)
+            {
+                return TimeSpan.FromMinutes(Utility.RandomMinMax(2, 6));
+            }
+
+            // Traveler and Idle are open-ended: they end when their PHASE does.
+            return null;
+        }
+
         public static bool IsKnown(string name)
         {
             return !String.IsNullOrWhiteSpace(name) && _factories.ContainsKey(name.Trim());

@@ -849,11 +849,20 @@ whose trade buys what it is carrying, 2.0 at a bank, 0.02 everywhere else. Blend
 Miner's own 10.0 site weight outvote the delivery it is on, and it would walk back out to the mine
 still carrying the last load.
 
-**One number is ours rather than upstream's: a station with somebody actually at it scores 20.0.**
-Upstream's weights asked whether a destination *could* buy the load, never whether anyone was there
-to buy it — and that is the question that decides whether the haul turns into anything, because a
-load left at an empty forge is a load in a bank box with extra steps. At 9 against the bank's 2 a
-laden miner still banks about one trip in five, which is how the work probe first found this:
+**Two numbers are ours rather than upstream's, and they are the same idea twice.** A station with
+somebody actually at it scores **20.0**, and while such a station exists the bank drops from 2.0 to
+**0.02** — it is the fallback, not a rival. Upstream's weights asked whether a destination *could*
+buy the load, never whether anyone was there to buy it, and that is the question that decides
+whether the haul turns into anything: a load left at an empty forge is a load in a bank box with
+extra steps.
+
+At 9 against the bank's 2 a laden miner banked about one trip in five; even at 20 against 2 it was
+still one in eleven, and the work probe duly failed on it with everything else green — *16 units
+mined, 16 delivered, the smith dry*. That is not a miner making a choice, it is a miner getting it
+wrong. With nobody at the bench the bank returns to 2.0, which is right: ore in a bank box is ore
+kept, and it is what a player would have done.
+
+The original 9-vs-2 version was found the same way:
 
 ```
 Bot work probe FAILED - the smith made nothing in 420s (0 attempt(s)) - it never
@@ -1152,6 +1161,60 @@ Bot work probe PASSED - a full cycle completed - miner ended as Traveler,
 The Smith is **placed** at the forge rather than walked there. That half of the journey is the
 Traveler's and `Bots.Travel` already proves it; spending two minutes of the window on a walk that is
 covered elsewhere would only make this flakier.
+
+### The phase clock was never started, and it broke every hand switch
+
+`[BotBehavior Crafter` on a bot was overwritten within seconds, every time. `[BotInfo` said why, in
+a number nobody read as a fault:
+
+```
+Phase Crafter: 63924344915s of 14160s elapsed, 0s left
+```
+
+Two thousand years. `PlayerBot`'s constructor assigns a `Personality` but **never assigned
+`PhaseStartedAt`**, so it sat at `DateTime.MinValue` — and `BotLifecycle`'s "first sight" branch,
+which starts the clock, only fires for a bot whose personality is *unassigned*. It therefore never
+fired for anybody. Every bot was permanently overdue for a lifecycle roll from the moment it
+spawned, and anything you set by hand was rolled away on the next pass.
+
+Three changes, at three levels:
+
+1. **The constructor starts the clock.** That is the actual bug.
+2. **A hand switch is a transition.** `[BotBehavior` now sets `PhaseStartedAt`, clears
+   `TransitionPending`, and gives visit behaviours their proper window — the same window the arrival
+   handoff gives them, which now lives in `BotBehaviors.VisitWindowFor` so the two cannot drift. It
+   reports what it did: *"Eamon is now Crafter for 291 minute(s)"*.
+3. **`[BotInfo` refuses to print nonsense.** An unset clock is named — `Phase Crafter: CLOCK UNSET -
+   this bot is permanently overdue` — and an elapsed time is clamped to its phase. A silly number
+   reads as a display glitch; a named one reads as a bug.
+
+And because it should now be impossible, `Bots.Population` **counts bots with an unset phase clock
+and warns**. That is the deliberate-failure check for this class of fault: it hid for three sessions
+behind a number that looked like a rendering error.
+
+It was not only cosmetic. The life probe went from 15–21 brain changes to **26 with 6 lifecycle
+transitions**, back in line with the pre-7e baseline — bots now serve a real first phase instead of
+being rolled the instant they are born.
+
+### A legacy Crafter has a sub-type, and everything must ask for it
+
+`BotClass.Crafter` is one class with a `CrafterSpec` behind it — Smith, Tailor or Fisherman. Both
+`StationFor` and `CrafterProfiles` are keyed on the *real* trade classes, and `Crafter` is not one
+of them, so a bot reporting *"Class Crafter, tier Adept"* standing at the forge was told it had **no
+station on this facet** and given a null profile.
+
+`PlayerBot.TradeClass` resolves it — identical to `Class` for everyone else — and the bot-aware
+overloads `BotClassHelper.StationFor(PlayerBot)` and `CrafterProfiles.For(PlayerBot)` use it. Prefer
+those wherever a bot is in hand. `[BotInfo` now prints the sub-type, because *"Class Crafter"* alone
+hides the very thing that decides where it works:
+
+```
+Sub-type Blacksmith (works as Blacksmith).
+```
+
+The failure message was wrong in the same way and is now specific: a Miner handed a `Crafter` brain
+is told **"Miner has no crafting station"** rather than the misleading *"no station on this facet"*,
+which suggested the graph was at fault when the class was.
 
 ### Probes report when they are done, not when the clock runs out
 

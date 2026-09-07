@@ -154,12 +154,14 @@ namespace Server.Custom
         {
             base.OnAttached(bot);
 
-            _profile = CrafterProfiles.For(bot.Class);
+            _profile = CrafterProfiles.For(bot);
             _anchor = bot.Location;
 
-            ChatCategories = bot.Class == BotClass.Smith ? SmithChat
-                           : bot.Class == BotClass.Tailor ? TailorChat
-                           : bot.Class == BotClass.Carpenter ? CarpenterChat
+            // TradeClass, not Class: a legacy Crafter-class bot still talks like the smith,
+            // tailor or carpenter its sub-type makes it.
+            ChatCategories = bot.TradeClass == BotClass.Smith ? SmithChat
+                           : bot.TradeClass == BotClass.Tailor ? TailorChat
+                           : bot.TradeClass == BotClass.Carpenter ? CarpenterChat
                            : CraftChat;
 
             // A Crafter reached by the arrival handoff is already standing on a validated arrival
@@ -178,9 +180,11 @@ namespace Server.Custom
                     return;
                 }
 
-                Blocked = DestinationId == null
-                    ? "it has no station on this facet"
-                    : "it cannot reach its station";
+                Blocked = DestinationId != null
+                    ? "it cannot reach its station"
+                    : CrafterProfiles.For(bot) == null
+                        ? BotClassHelper.DisplayName(bot.Class) + " has no crafting station"
+                        : "there is no " + BotClassHelper.StationFor(bot) + " on this facet";
             }
 
             Settle(bot);
@@ -190,7 +194,7 @@ namespace Server.Custom
         private static string FindStation(PlayerBot bot)
         {
             List<NavDestination> usable =
-                BotWorkSites.Available(bot.Map, BotClassHelper.StationFor(bot.Class));
+                BotWorkSites.Available(bot.Map, BotClassHelper.StationFor(bot));
 
             NavDestination best = null;
             int bestDistance = Int32.MaxValue;
@@ -289,7 +293,7 @@ namespace Server.Custom
             bot.Home = _anchor;
             bot.RangeHome = 0;
 
-            if (bot.Class == BotClass.Smith)
+            if (bot.TradeClass == BotClass.Smith)
             {
                 FaceNearestFixture(bot);
             }

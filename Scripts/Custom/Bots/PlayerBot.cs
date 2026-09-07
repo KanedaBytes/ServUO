@@ -72,6 +72,35 @@ namespace Server.Custom
         /// </summary>
         public DateTime PhaseStartedAt { get; set; }
 
+        /// <summary>
+        /// True when the phase clock has never been set — which should now be impossible.
+        ///
+        /// Kept as a named check rather than a bare comparison because it is the symptom of a bug
+        /// that hid for three sessions: a bot with an unset clock is permanently overdue for a
+        /// lifecycle roll, so anything you set its behaviour to is overwritten within seconds.
+        /// Bots.Population counts these and [BotInfo refuses to print an elapsed time from one.
+        /// </summary>
+        public bool PhaseClockUnset
+        {
+            get { return PhaseStartedAt == DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// The class whose TRADE this bot works.
+        ///
+        /// Identical to Class for everyone except the legacy BotClass.Crafter, which is one class
+        /// with a CrafterSpec sub-type behind it. Asking Class alone is why a "Class Crafter" bot
+        /// standing at the forge was told it had no station on the facet: StationFor and
+        /// CrafterProfiles are both keyed on the real trade classes, and Crafter is not one.
+        /// </summary>
+        public BotClass TradeClass
+        {
+            get
+            {
+                return Class == BotClass.Crafter ? CrafterTypeHelper.ToBotClass(CrafterSpec) : Class;
+            }
+        }
+
         /// <summary>How many times this bot's brain has changed since it was created. Transient.</summary>
         public int BehaviorChanges { get; private set; }
 
@@ -169,6 +198,16 @@ namespace Server.Custom
             SkillTier = tier;
             CrafterSpec = CrafterTypeHelper.RollRandom();
             Personality = BotPersonality.RollRandom();
+
+            // THE PHASE CLOCK STARTS NOW, and forgetting this was a real bug rather than a tidy-up.
+            //
+            // BotLifecycle has a "first sight" branch that assigns a personality and starts the
+            // clock together - but the constructor above already assigns one, so that branch never
+            // fired and PhaseStartedAt stayed at DateTime.MinValue for the life of the bot. Every
+            // bot was therefore permanently overdue: `CustomTime.Now - MinValue` is two thousand
+            // years, which is greater than any phase length, so the roller wanted to transition it
+            // on every single pass. [BotInfo showed it as "63924344915s of 14160s elapsed".
+            PhaseStartedAt = CustomTime.Now;
 
             _behavior = new IdleBehavior();
 
