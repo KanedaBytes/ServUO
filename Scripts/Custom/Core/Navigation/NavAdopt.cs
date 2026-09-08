@@ -453,27 +453,59 @@ namespace Server.Custom
                 Subdivide(pending, from, to, path);
             }
 
-            /// <summary>Cut a walked path into hops no longer than the cap, minting waypoints.</summary>
+            /// <summary>
+            /// Cut a walked path into hops no longer than the cap, minting waypoints.
+            ///
+            /// THE ENDS ARE THE AUTHORED POSITIONS, NOT THE PATH'S. `NavCorridor.TryPath` SNAPS
+            /// both ends to the nearest standable tile - up to `SnapRadius`, 8 - because a
+            /// waypoint's own tile is often not one a mobile can occupy. So `path[0]` and the last
+            /// point are not where the waypoints are, and measuring the cut against the path while
+            /// WRITING an edge between the waypoints let a hop come out at 12 + 8. That is exactly
+            /// the `uo-wp-204-s1 -> uo-wp-205` at 15 tiles in the log: cap held against the path
+            /// and the edge was written against the records.
+            ///
+            /// So the walk is re-expressed between the real endpoints first, and the cut is made
+            /// where the NEXT point would break the cap rather than where the current one already
+            /// has - which is what makes every emitted hop measure under it.
+            /// </summary>
             private void Subdivide(PendingEdge pending, NavWaypoint from, NavWaypoint to, List<Point3D> path)
             {
                 int cap = NavigationSystem.HopMaxTiles;
 
+                // The path with its snapped ends replaced by the records the edge will name.
+                var points = new List<Point3D>();
+
+                points.Add(new Point3D(from.X, from.Y, from.Z));
+
+                for (int i = 1; i < path.Count - 1; i++)
+                {
+                    points.Add(path[i]);
+                }
+
+                points.Add(new Point3D(to.X, to.Y, to.Z));
+
                 string previous = from.Id;
-                Point3D anchor = new Point3D(from.X, from.Y, from.Z);
+                Point3D anchor = points[0];
                 int minted = 0;
 
-                for (int i = 1; i < path.Count; i++)
+                for (int i = 1; i < points.Count; i++)
                 {
-                    Point3D at = path[i];
-                    bool last = i == path.Count - 1;
+                    bool last = i == points.Count - 1;
 
-                    int span = Math.Max(Math.Abs(at.X - anchor.X), Math.Abs(at.Y - anchor.Y));
-
-                    if (!last && span < cap)
+                    // Cut at the point BEFORE the cap breaks, not after. Looking ahead is what
+                    // keeps the emitted hop under it; looking behind emits the one that broke it.
+                    if (!last)
                     {
-                        continue;
+                        int ahead = Math.Max(
+                            Math.Abs(points[i + 1].X - anchor.X), Math.Abs(points[i + 1].Y - anchor.Y));
+
+                        if (ahead <= cap)
+                        {
+                            continue;
+                        }
                     }
 
+                    Point3D at = points[i];
                     string next;
 
                     if (last)
