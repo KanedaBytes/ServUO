@@ -689,7 +689,7 @@ function serveArtTile(pathname, response) {
  * placeholder - so by the time this runs there is always a real file.
  */
 function serveArtPick(parts, response) {
-    art.pick(parts.layer, parts.floor, parts.x, parts.y).then(
+    art.pick(parts.layer, parts.floor, parts.level, parts.x, parts.y).then(
         (file) => {
             fs.readFile(file, (error, data) => {
                 if (error) {

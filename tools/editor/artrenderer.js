@@ -380,19 +380,28 @@ class ArtRenderer {
     /**
      * The pick sidecar for a tile: which world tile and standing Z each of its pixels belongs to.
      *
-     * It takes no level. There is only ever one - the deepest - because a pick map is read by
-     * turning a screen point into a facet-global canvas pixel, which is the same number at every
-     * zoom, so the 1:1 sidecar answers 1:2 and 1:8 exactly as well. See PickMap.cs.
+     * There is only ever one level - the deepest - because a pick map is read by turning a screen
+     * point into a facet-global canvas pixel, which is the same number at every zoom, so the 1:1
+     * sidecar answers 1:2 and 1:8 exactly as well. See PickMap.cs.
+     *
+     * IT IS STILL TAKEN AND STILL CHECKED. Serving the deepest tile for a URL that names a
+     * different level would answer a request for tile 170,129 at 1:2 with tile 170,129 at 1:1 - a
+     * different part of the world, confidently, with a 200. The level segment is part of the
+     * identity, not decoration.
      *
      * An items tile with no items in it composes to precisely the map layer's pick, so the renderer
      * answers `empty` and the MAP LAYER'S FILE IS THE ANSWER rather than a second identical copy of
      * it on disk. That is why this resolves a path from a different layer than it was asked about,
      * and why the caller never has to know.
      */
-    async pick(layer, floor, x, y) {
+    async pick(layer, floor, level, x, y) {
         await this.start();
 
-        const level = this.info.pickLevel;
+        if (level !== this.info.pickLevel) {
+            throw new Error(
+                `A pick map exists only at level ${this.info.pickLevel} (asked for ${level}).`);
+        }
+
         const own = await this.sidecar(layer, floor, level, x, y);
 
         return own === null && layer !== 'map' ? this.sidecar('map', floor, level, x, y) : own;

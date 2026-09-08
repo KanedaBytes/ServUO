@@ -768,6 +768,24 @@ test('the browser read path lands on the tile it was aimed at, end to end', asyn
         'the pick map did not name the tile the projection aimed at');
 });
 
+test('a pick asked for at the wrong level is refused, not answered with another tile', async () => {
+    // There is only one pick level, and the temptation is to ignore the one in the URL. Doing that
+    // answered a request for tile 170,129 at 1:2 with tile 170,129 at 1:1 - a different part of the
+    // world, confidently, with a 200. The level segment is part of the identity.
+    const info = await (await fetch(origin + '/api/artinfo')).json();
+
+    if (!info.available) {
+        return;
+    }
+
+    const wrong = info.pickLevel - 1;
+    const response = await fetch(
+        `${origin}/tiles/iso/Trammel/v${info.version}/map/all/${wrong}/170/129.pick`);
+
+    assert.strictEqual(response.status, 503);
+    assert.match(await response.text(), /only at level/i);
+});
+
 test('landz validates its tile list before it reaches the renderer', async () => {
     const refused = [
         '',                       // absent
