@@ -564,21 +564,54 @@ pets stabled for the length of the sentence.
 
 ## 16. Commit checkpoints
 
-**Sean runs every git command by hand.** At a commit checkpoint, print exactly three lines, in
-**PowerShell** form, and nothing else:
+**Commit your own work. Never push.** At a commit checkpoint, run:
 
 ```powershell
 git add -A
 git commit -m "<message>"
+```
+
+**`git push` is Sean's, always.** At hand-over, print exactly one line for him:
+
+```powershell
 git push origin pub57
 ```
 
+plus a final `git add -A` / `git commit -m "..."` pair *only* if the tree is still dirty — which it
+should not be, because you commit as you go.
+
+### Why this changed
+
+It used to be that Sean ran every git command by hand and printing them *was* the deliverable. That
+assumed he was watching. He is not: a session runs for an hour and the printed commands pile up
+unrun, so the working tree keeps growing while three or four checkpoints' worth of "commit this now"
+scroll past above it.
+
+**And `git add -A` is what makes that actively harmful.** It stages whatever is dirty at the moment
+it finally runs, not what was dirty when the message was written. Commit `61afaf41` is the evidence:
+its message says *"gitattributes: tools/ is LF throughout"* and it contains the gitattributes
+change, the nav-import test fix **and** the whole of stretched terrain — three separate checkpoints
+swept into one commit under the first one's message, because the first two were never run at the
+time. The history then says something that is not true, and no amount of care over the message
+prevents it.
+
+Committing as you go fixes it at the source: the tree is clean at every checkpoint, so `git add -A`
+can only ever stage the thing the message describes.
+
+### The rules that did not change
+
 Never a bash heredoc or `\` line continuation, never an enumerated file list, and **never `-F`
-with a temp file**. They are all things to retype or clean up before they will run, and a command
-that has to be edited before it works is not a command.
+with a temp file**. They were originally about commands Sean had to retype, but they earn their
+keep anyway: `git add -A` over a clean tree needs no file list, and a message that needs a heredoc
+is a message that has stopped being one line.
 
-The practical consequence: **`-m` takes one line, so the message has to fit on one.** Say what
-changed and why in a sentence; the explanation belongs in the code comments and the folder README,
-which is where somebody reading the code a year from now will actually be standing.
+**`-m` takes one line, so the message has to fit on one.** Say what changed and why in a sentence;
+the explanation belongs in the code comments and the folder README, which is where somebody reading
+the code a year from now will actually be standing.
 
-Do not run `git commit` or `git push` unless asked to. Printing the commands *is* the deliverable.
+### If a commit is refused
+
+The permission classifier can refuse `git commit`. **Say so plainly, then fall back to printing the
+commands** in the PowerShell form above for Sean to run. A refusal that is reported is a two-second
+detour; a refusal that is swallowed leaves the tree dirty, and the next checkpoint sweeps it up —
+which is the failure this whole section exists to stop.

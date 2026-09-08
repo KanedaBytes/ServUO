@@ -51,6 +51,11 @@ Useful switches: `-NoShard` when a shard is already running, `-NoBrowser`, `-Til
 - Custom `.cfg` files go in `Config/` like any other — they are auto-discovered at boot.
 - Keep everything **Mono-safe**: no Windows-only APIs (registry, WinForms, Windows-only path
   assumptions), so the Linux path keeps working.
+- **Claude commits its own work as it goes; `git push` is Sean's.** A session runs long and nobody
+  is watching it, so printed `git commit` lines used to pile up unrun - and `git add -A` then swept
+  several checkpoints into one commit under the earliest message. Committing at each checkpoint
+  keeps the tree clean, so `git add -A` can only stage what the message describes. See `CLAUDE.md`
+  §16, including what to do when a commit is refused.
 
 ## Build and run
 
