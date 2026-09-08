@@ -2924,7 +2924,15 @@ function wireInput() {
                 return;
             }
 
-            refusePlacing();
+            // No pick, and the two reasons are not alike. NOTHING WAS DRAWN under the cursor - open
+            // sea, or off the edge of the facet - is not a failure and there is nothing to say
+            // about it; the click deselects and pans like a click on any empty ground. A renderer
+            // that could not answer is worth a sentence.
+            if (pickmap.problem()) {
+                refusePlacing();
+            } else {
+                select(null);
+            }
 
             if (state.buttonDown) {
                 beginPan(event);
