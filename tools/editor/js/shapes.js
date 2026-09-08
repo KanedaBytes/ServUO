@@ -20,6 +20,7 @@
  */
 import { edgeColor } from './coverage.js';
 import { traceWorldRect } from './iso.js';
+import { groundAt } from './landz.js';
 import { HOP_CAP } from './validate.js';
 
 export const LAYERS = {
@@ -394,7 +395,12 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
         // A world rect is a rect on screen in radar and a diamond in art, so `w * view.scale` is
         // only a rect in one of the two. traceWorldRect paths the four projected corners and says
         // whether it did; radar keeps the fillRect/strokeRect pair, unchanged.
-        if (traceWorldRect(ctx, view, x, y, w, h)) {
+        // ON THE GROUND, not the ground plane. A zone carries no Z in its schema and none is being
+        // added; where the land is under each corner is asked for instead (js/landz.js), from the
+        // same map.GetAverageZ the pick map records. Without it a zone in Britain's upper town sat
+        // about 2.7 tiles uphill of the land it covers - and, worse, hitTest used the same z=0
+        // corners, so the diamond you clicked was not the diamond you saw.
+        if (traceWorldRect(ctx, view, x, y, w, h, groundAt)) {
             ctx.globalAlpha = opacity * (isHovered && !isSelected ? 0.3 : 0.18);
             ctx.fill();
             ctx.globalAlpha = opacity;
@@ -412,7 +418,9 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
 
         if (isSelected) {
             for (const [hx, hy] of rectHandles(shape.rect)) {
-                const [px, py] = view.toScreen(hx, hy);
+                // The same corner Z the quad was traced with, so a handle sits on the corner it
+                // grabs. In radar toScreen ignores it, exactly as it always has.
+                const [px, py] = view.toScreen(hx, hy, (view.isArt && groundAt(hx, hy)) || 0);
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(px - HANDLE / 2, py - HANDLE / 2, HANDLE, HANDLE);
             }
@@ -521,7 +529,9 @@ export function drawDraft(ctx, view, draft) {
     if (draft.rect) {
         const [x, y, w, h] = draft.rect;
 
-        if (traceWorldRect(ctx, view, x, y, w, h)) {
+        // The rubber band gets the same treatment as the zone it is about to become, so a zone does
+        // not jump onto the hillside the moment the mouse comes up.
+        if (traceWorldRect(ctx, view, x, y, w, h, groundAt)) {
             ctx.stroke();
         } else {
             const [sx, sy] = view.toScreen(x, y);
@@ -712,9 +722,13 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY, screenX
         : (a, b) => nearSegment(a, b, worldX, worldY, slack);
 
     /** Is the cursor inside a world rect, projected? A rect is a diamond in art. */
+    // The rect corners are projected at the GROUND Z they were drawn at, not at zero. Anything else
+    // and the diamond you click is not the diamond you see - which is how it behaved until the land
+    // Z became a question the renderer could answer.
     const insideRect = art
         ? ([x, y, w, h]) => insidePolygon(
-            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map((corner) => at(corner)),
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+                .map(([cx, cy]) => at([cx, cy, groundAt(cx, cy) || 0])),
             screenX,
             screenY)
         : ([x, y, w, h]) => worldX >= x && worldX <= x + w && worldY >= y && worldY <= y + h;

@@ -39,6 +39,7 @@ import { liveStatusText } from './live.js';
 import * as adopt from './adopt.js';
 import * as iso from './iso.js';
 import * as pickmap from './pickmap.js';
+import * as landz from './landz.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -180,6 +181,11 @@ async function boot() {
         state.facet = facet;
         view.setFacet(facet);
         view.goTo(BRITAIN.x, BRITAIN.y, 2);
+
+        // A zone corner's ground Z arrives after the frame that asked for it, so the answer has to
+        // be able to ask for another one - otherwise a zone stays on the ground plane until
+        // something else happens to redraw.
+        landz.configure(requestRender);
 
         setStatus(
             `${status.waypoints} waypoints, ${status.destinations} destinations.`,
@@ -2758,7 +2764,10 @@ function tileAt(event) {
     const estimate = { x: Math.floor(worldX), y: Math.floor(worldY), z: null, exact: !view.isArt };
 
     if (!view.isArt) {
-        return estimate;
+        // Radar has no surface under the cursor to read, but the land under a tile is still a
+        // question with an answer, and it is the same one the pick map records. Asked here so a
+        // hover warms it and a placement finds it already there.
+        return { ...estimate, z: landz.at(estimate.x, estimate.y) };
     }
 
     const [screenX, screenY] = screenAt(event);
@@ -2782,7 +2791,14 @@ function tileAt(event) {
  */
 async function pickedTile(event) {
     if (!view.isArt) {
-        return tileAt(event);
+        const tile = tileAt(event);
+
+        // THE ONE STEP OUTSIDE THIS SESSION'S SCOPE, and taken deliberately: every record the
+        // editor has ever created was written `z: 0`, and the query that fixes the art view fixes
+        // this too for ten lines. It resolves null rather than failing when there is no renderer -
+        // a placement must never depend on MapExport having been built - and the readout says the Z
+        // was not sampled rather than letting a silent 0 look like a measurement.
+        return { ...tile, z: tile.z === null ? await landz.resolve(tile.x, tile.y) : tile.z };
     }
 
     const [screenX, screenY] = screenAt(event);
@@ -2794,19 +2810,32 @@ async function pickedTile(event) {
 
 /** The coordinate strip, from wherever the cursor was last seen. */
 function refreshReadout() {
-    if (!view.facet || !dom.coords || !state.cursor) {
-        return;
-    }
-
-    if (!view.isArt) {
+    if (!view.facet || !dom.coords || !state.cursor || !view.isArt) {
         return;
     }
 
     const found = pickmap.at(view, state.cursor[0], state.cursor[1]);
 
-    dom.coords.textContent = found
-        ? `${found.x}, ${found.y}  z${found.z}`
-        : dom.coords.textContent;
+    if (found) {
+        dom.coords.textContent = readoutFor({ ...found, exact: true });
+    }
+}
+
+/**
+ * The coordinate strip's text for a tile.
+ *
+ * A `~` means the number is the ground-plane guess - the pick map for this tile has not arrived -
+ * and is off by about 2.7 tiles where Britain stands. `z?` means the land Z was not sampled, which
+ * is what a radar placement writes as 0. Both used to be shown as if they were measurements.
+ */
+function readoutFor(tile) {
+    const where = tile.exact ? `${tile.x}, ${tile.y}` : `~${tile.x}, ${tile.y}`;
+
+    if (tile.z !== null && tile.z !== undefined) {
+        return `${where}  z${tile.z}`;
+    }
+
+    return tile.exact && landz.problem() ? `${where}  z?` : where;
 }
 
 /**
@@ -2986,9 +3015,7 @@ function wireInput() {
         const tile = tileAt(event);
 
         if (view.facet && dom.coords) {
-            dom.coords.textContent = tile.exact
-                ? `${tile.x}, ${tile.y}${tile.z === null ? '' : `  z${tile.z}`}`
-                : `~${tile.x}, ${tile.y}`;
+            dom.coords.textContent = readoutFor(tile);
         }
 
         // Why an adopted road broke, where it broke. The reason comes from the shard's own walker,

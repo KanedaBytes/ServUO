@@ -63,8 +63,10 @@ test('the inverse recovers the tile it was given, at the Z it was given', () => 
 });
 
 test('the inverse at the wrong Z is wrong by z*4/44 tiles, in both axes', () => {
-    // This is the reason placing and dragging are refused in art view, so it is worth having as a
-    // number rather than as a claim in a comment. Britain stands near z 30.
+    // The number the pick map exists to replace, worth having as an assertion rather than as a claim
+    // in a comment. Britain stands near z 30, and this is what a placement from the ground-plane
+    // inverse would have been out by - which is why the readout marks that estimate with a ~ rather
+    // than showing it as a measurement.
     const { ix, iy } = iso.worldToIso(1424, 1557, 30);
     const ground = iso.isoToWorld(ix, iy, 0);
 
@@ -290,6 +292,72 @@ test('a canvas pixel off the north-west of the facet is outside the pyramid, not
     const off = iso.canvasToTile(-1, -1, max, max);
 
     assert.ok(off.tileX < 0 && off.tileY < 0, 'a negative canvas pixel is not tile 0');
+});
+
+// --- a rect on the ground -------------------------------------------------------------------------
+
+test('a world rect is traced at the ground under its corners, or on the plane without one', () => {
+    // A zone carries no Z in its schema and none is being added: where the land is under each
+    // corner is a question with an answer, so it is asked. Until it was, a zone in Britain's upper
+    // town sat about 2.7 tiles uphill of the land it covers - and hitTest used the same z=0 corners,
+    // so the diamond you clicked was not the diamond you saw.
+    const path = [];
+    const ctx = {
+        beginPath() {}, closePath() {},
+        moveTo(x, y) { path.push([x, y]); },
+        lineTo(x, y) { path.push([x, y]); }
+    };
+
+    // The camera stub from editor.test.js, small enough to keep here rather than share: art
+    // projection, scale 22, honouring Z.
+    const view = {
+        isArt: true,
+        toScreen: (x, y, z = 0) => [(x - y) * 22, (x + y) * 22 - (z * 4)]
+    };
+
+    iso.traceWorldRect(ctx, view, 1470, 1640, 10, 10);
+    const flat = path.splice(0, path.length);
+
+    iso.traceWorldRect(ctx, view, 1470, 1640, 10, 10, () => 30);
+    const lifted = path.splice(0, path.length);
+
+    assert.strictEqual(flat.length, 4);
+    assert.strictEqual(lifted.length, 4);
+
+    for (let i = 0; i < 4; i++) {
+        assert.strictEqual(lifted[i][0], flat[i][0], 'lifting a corner must not move it sideways');
+        assert.strictEqual(lifted[i][1], flat[i][1] - 120, 'z 30 is 120 pixels up, four per Z');
+    }
+});
+
+test('a corner whose ground Z is not known yet stays on the plane rather than vanishing', () => {
+    // landz.at answers null until the batch comes back. Null has to read as "not yet" and draw at
+    // zero for a frame, not as NaN - a zone that disappears while its corners are in flight would
+    // be a worse bug than the one this fixes.
+    const path = [];
+    const ctx = {
+        beginPath() {}, closePath() {},
+        moveTo(x, y) { path.push([x, y]); },
+        lineTo(x, y) { path.push([x, y]); }
+    };
+
+    const view = { isArt: true, toScreen: (x, y, z = 0) => [(x - y) * 22, (x + y) * 22 - (z * 4)] };
+
+    iso.traceWorldRect(ctx, view, 1470, 1640, 10, 10, () => null);
+
+    assert.strictEqual(path.length, 4);
+    assert.ok(path.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y)));
+});
+
+test('radar is untouched by a ground Z, because a rect there is still a rect', () => {
+    let touched = false;
+    const ctx = { beginPath() { touched = true; }, closePath() {}, moveTo() {}, lineTo() {} };
+
+    assert.strictEqual(
+        iso.traceWorldRect(ctx, { isArt: false }, 0, 0, 1, 1, () => 30),
+        false);
+
+    assert.strictEqual(touched, false, 'radar must not even begin a path');
 });
 
 // --- the two copies -------------------------------------------------------------------------------

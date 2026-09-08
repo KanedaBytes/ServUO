@@ -27,7 +27,7 @@
 // as the momentary estimate the readout marks with a ~ while a pick tile is still in flight.
 //
 // The real answer is a lookup: `canvasToTile` below turns a canvas pixel into a tile and a pixel
-// inside it, and js/pick.js reads what the renderer recorded there while it was drawing.
+// inside it, and js/pickmap.js reads what the renderer recorded there while it was drawing.
 
 export const HALF_WIDTH = 22;
 export const HALF_HEIGHT = 22;
@@ -235,10 +235,20 @@ function floorMod(value, span) {
  * fillRect/strokeRect when this returns false: that is the same picture in radar, and it is what
  * the drawing tests pin.
  *
+ * `groundZ` is an optional `(x, y) => z | null` - where the land is under each corner. Without it
+ * the quad sits on the ground plane, which is where it used to sit always, and is about 2.7 tiles
+ * uphill of the land anywhere Britain's upper town stands. A corner it answers null for stays at
+ * zero, so a zone drawn before its Zs have arrived is on the ground plane for a frame rather than
+ * missing.
+ *
+ * A FUNCTION RATHER THAN FOUR NUMBERS, because the callers walk the corners in different orders -
+ * this one is NW, NE, SE, SW and `rectHandles` is NW, NE, SW, SE - and an array would be one
+ * transposition away from a zone drawn on one hillside and clicked on another.
+ *
  * It takes a ctx, which is the one impure thing in this module - but the alternative is the rule
  * for "what shape is a rect" living in four files again, which is how it went wrong the first time.
  */
-export function traceWorldRect(ctx, view, x, y, width, height) {
+export function traceWorldRect(ctx, view, x, y, width, height, groundZ = null) {
     if (!view.isArt) {
         return false;
     }
@@ -248,7 +258,7 @@ export function traceWorldRect(ctx, view, x, y, width, height) {
     ctx.beginPath();
 
     corners.forEach(([cx, cy], i) => {
-        const [sx, sy] = view.toScreen(cx, cy, 0);
+        const [sx, sy] = view.toScreen(cx, cy, (groundZ && groundZ(cx, cy)) || 0);
         i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
     });
 
