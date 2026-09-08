@@ -682,6 +682,67 @@ test('the shard-written snapshots are readable and not writable', () => {
     }
 });
 
+// --- the Z that used to be thrown away ------------------------------------------------------------
+
+test('a created record carries the Z it was placed at, not zero', async () => {
+    // EVERY record the editor has ever created was written `"z": 0`, because buildShape flattened
+    // it - survivable only because navigation.json's Z is advisory and the shard falls back to
+    // map.GetAverageZ when the authored one will not fit. The art view now knows the real Z from
+    // the renderer's pick map, and the radar view asks for it, so throwing it away is no longer
+    // merely wasteful: it would make a placement on the art disagree with what the client shows
+    // standing there, which is the acceptance test for the whole feature.
+    const { buildShape } = await import('./js/build.js');
+
+    const cases = [
+        ['waypoint', { id: 'wp', tags: '', arrivalRange: '0' }, { points: [[1424, 1557, 30]] }, {}],
+        ['destination', { id: 'd', name: 'D', type: 'shop' }, { points: [[1424, 1557, 30]] }, {}],
+        ['arrival', { exclusive: false }, { points: [[1424, 1557, 30]] },
+            { ownerId: 'brit-forge', arrivalIndex: 0 }],
+        ['spawner', { id: 'sp', name: 'S', file: 'trammel/GG_Test.xml' },
+            { points: [[1424, 1557, 30]] }, {}],
+        ['site', { id: 's', name: 'S', type: 'mine' },
+            { points: [[1424, 1557, 30]], rect: [1420, 1550, 8, 8] }, { arrivals: [] }]
+    ];
+
+    for (const [key, props, draft, context] of cases) {
+        const built = buildShape(key, props, 'Trammel', draft, context);
+        const shape = Array.isArray(built) ? built[0] : built;
+
+        assert.strictEqual(shape.points[0][2], 30, `${key} flattened the Z`);
+    }
+});
+
+test("a site's arrivals carry the Z the SHARD measured them at", async () => {
+    // Not the pick map's. The reach probe measured canFit at that Z - a bot actually standing
+    // there - which is a stronger statement than "this is the surface the renderer drew".
+    const { buildShape } = await import('./js/build.js');
+
+    const built = buildShape(
+        'site',
+        { id: 'face', name: 'Face', type: 'mine' },
+        'Trammel',
+        { points: [[1451, 1517, 43]], rect: [1445, 1512, 12, 12] },
+        { arrivals: [[1451, 1518, 43], [1452, 1519, 45]] });
+
+    const arrivals = built.filter((shape) => shape.layer === 'nav-arrivals');
+
+    assert.strictEqual(arrivals.length, 2);
+    assert.strictEqual(arrivals[0].points[0][2], 43);
+    assert.strictEqual(arrivals[1].points[0][2], 45);
+});
+
+test('a point placed with no Z at all is still written at zero, not undefined', async () => {
+    // The radar view with no renderer to ask, and the older drafts in this very file. A missing Z
+    // has to be 0 rather than undefined: unproject writes the number it is given, and `"z": null`
+    // is not something JsonConfig will read back.
+    const { buildShape } = await import('./js/build.js');
+
+    const built = buildShape(
+        'waypoint', { id: 'wp', tags: '', arrivalRange: '0' }, 'Trammel', { points: [[10, 20]] }, {});
+
+    assert.strictEqual(built.points[0][2], 0);
+});
+
 // --- the seam between the tools and the writer --------------------------------------------------
 
 test('every tool produces a shape unproject can write, with the right fields in the right order', async () => {

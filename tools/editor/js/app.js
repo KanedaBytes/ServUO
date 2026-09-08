@@ -131,7 +131,16 @@ const state = {
      * can correct the readout. Without it, stopping dead on a tile nobody has hovered before leaves
      * the readout showing the ground-plane estimate until the mouse twitches.
      */
-    cursor: null
+    cursor: null,
+
+    /**
+     * Whether the left button is still held.
+     *
+     * A press whose pick map has to be fetched is answered a frame or two late, and by then the
+     * click may be over. Starting a drag or a pan at that point would leave one stuck until the
+     * next mouseup, which is the sort of thing that reads as the editor having frozen.
+     */
+    buttonDown: false
 };
 
 const canvas = $('map');
@@ -1905,6 +1914,15 @@ function deleteSelected() {
 
 // --- the tools ----------------------------------------------------------------------------------
 
+/**
+ * Starts a create tool, optionally with the tile it should place at already decided.
+ *
+ * `placeAt` is the context menu's "Add here", and it is a PICKED TILE - `{x, y, z}` - rather than a
+ * pair. It used to be `[floor(worldX), floor(worldY)]` from the ground-plane inverse, and it called
+ * toolClick directly, past canPlace: right-clicking Waypoint in the art view created one about 2.7
+ * tiles from where the menu had been opened, silently, while every other route into the same tool
+ * was refusing to guess.
+ */
 function startTool(key, placeAt = null) {
     const tool = TOOLS[key];
 
@@ -1931,7 +1949,7 @@ function startTool(key, placeAt = null) {
     updateToolbar();
 
     if (placeAt && tool.kind === 'point') {
-        toolClick(placeAt[0], placeAt[1]);
+        toolClick(placeAt, placeAt.x, placeAt.y);
     }
 
     requestRender();
@@ -1953,18 +1971,22 @@ function cancelTool() {
  * them, an arrival belongs to a destination. A click that hits nothing collectable says so rather
  * than doing nothing, which is the classic way click-to-collect feels broken.
  */
-function toolClick(worldX, worldY) {
+function toolClick(tile, worldX, worldY, screenX = null, screenY = null) {
     const tool = state.tool;
 
     if (!tool) {
         return false;
     }
 
-    const x = Math.floor(worldX);
-    const y = Math.floor(worldY);
+    // The tile is the pick - which tile the cursor is ON, and the Z a mobile would stand at there.
+    // The world pair beside it is the fractional cursor, and is only for hit testing the shapes a
+    // collecting tool picks: sub-tile in radar, ignored in art in favour of the screen pair.
+    const x = tile.x;
+    const y = tile.y;
+    const z = tile.z === null || tile.z === undefined ? 0 : tile.z;
 
     if (tool.kind === 'point') {
-        state.draft.points = [[x, y, 0]];
+        state.draft.points = [[x, y, z]];
         completeTool();
         return true;
     }
@@ -1977,7 +1999,7 @@ function toolClick(worldX, worldY) {
     // somebody has in mind: two ways round a building can differ by a handful of tiles and by a
     // great deal of sense.
     if (tool.kind === 'point-chain') {
-        state.draft.points.push([x, y, 0]);
+        state.draft.points.push([x, y, z]);
 
         setHint(state.draft.points.length === 1
             ? tool.hint2
@@ -1992,7 +2014,7 @@ function toolClick(worldX, worldY) {
     // remember to reach for all three; together they are the thing being made.
     if (tool.kind === 'site') {
         if (tool.phase === 0) {
-            state.draft.points = [[x, y, 0]];
+            state.draft.points = [[x, y, z]];
 
             // The form comes HERE rather than at the end, alone among the tools, because the site
             // type decides which harvest definition the reach probe measures against - and the
@@ -2011,7 +2033,11 @@ function toolClick(worldX, worldY) {
         return true;
     }
 
-    const hit = tool.picks ? pick(view, state.shapes, state.visible, worldX, worldY) : null;
+    // The screen pair matters here: in art view hitTest compares projected anchors, and without it
+    // an edge, a route or an arrival could not collect the shape it was clicked on at all.
+    const hit = tool.picks
+        ? pick(view, state.shapes, state.visible, worldX, worldY, screenX, screenY)
+        : null;
 
     if (tool.picks && (!hit || hit.layer !== tool.picks)) {
         setStatus(`Click a ${LAYERS[tool.picks].label.toLowerCase().replace(/s$/, '')}.`, 'error');
@@ -2026,7 +2052,7 @@ function toolClick(worldX, worldY) {
             return true;
         }
 
-        state.draft.points = [[x, y, 0]];
+        state.draft.points = [[x, y, z]];
         completeTool();
         return true;
     }
@@ -2507,7 +2533,9 @@ async function takeArrival(x, y) {
     const offered = worksites.candidateAt(x, y);
 
     if (offered) {
-        tool.arrivals.push([x, y]);
+        // The shard's own Z for the tile, not the pick's. It measured canFit AT that Z, so it is
+        // the one number here that has already been checked against a bot actually standing there.
+        tool.arrivals.push([x, y, offered.z]);
         worksites.setTaken(tool.arrivals);
         setToolStep();
         requestRender();
@@ -2538,7 +2566,7 @@ async function takeArrival(x, y) {
     } else if (measured.reach < measured.min) {
         setStatus(`${x},${y} reaches ${measured.reach}, needs ${measured.min}.`, 'error');
     } else {
-        tool.arrivals.push([x, y]);
+        tool.arrivals.push([x, y, measured.z]);
         setStatus(`${x},${y} taken, reach ${measured.reach}.`, 'ok');
     }
 
@@ -2782,20 +2810,27 @@ function refreshReadout() {
 }
 
 /**
- * Whether a gesture that needs to turn a screen point into a WORLD point is allowed right now.
+ * Whether a gesture that needs to turn a screen point into a WORLD point can be answered.
  *
- * In art view it is not - yet. The readout above already knows where the cursor is, but the create
- * tools and the drag still take their coordinates from the ground-plane inverse, so letting them
- * run would place things about 2.7 tiles from where they were clicked. Wiring them to the pick is
- * the next change; until then the refusal stands, because a click that looks right and is wrong is
- * worse than one that is refused.
+ * It used to be `!view.isArt` flat, because the isometric inverse is not a function: a screen pixel
+ * names a world tile only once a Z is assumed, and a waypoint placed 2.7 tiles from where it was
+ * clicked would look right and be wrong. The pick map is that Z, so the art view places and drags
+ * like radar - and what is refused now is not a projection but a MISSING ANSWER: no renderer built,
+ * or a render that failed. There is no zoom gate, because one 1:1 sidecar answers every art level.
  */
 function canPlace() {
-    return !view.isArt;
+    return !view.isArt || Boolean(view.art);
 }
 
 function refusePlacing() {
-    setStatus('Placing and dragging need the radar view; the art view can only select.', 'error');
+    const reason = pickmap.problem();
+
+    setStatus(
+        reason
+            ? `The renderer could not say what is under the cursor: ${reason}`
+            : 'The art view needs the renderer to say what is under the cursor. Build MapExport, or '
+                + 'switch to the radar view.',
+        'error');
 }
 
 function wireInput() {
@@ -2813,29 +2848,74 @@ function wireInput() {
             return;
         }
 
-        const [worldX, worldY] = worldAt(event);
+        state.buttonDown = true;
+
+        const tile = tileAt(event);
+
+        // The common case by a long way: the mousemove that put the cursor here already asked for
+        // this tile's pick map, so the answer is in memory and the gesture starts synchronously.
+        if (tile.exact) {
+            press(event, tile, true);
+            return;
+        }
+
+        // It is not, so it is WAITED FOR rather than answered from the ground-plane guess - about
+        // 13 ms for a tile nobody has hovered before, against a placement 2.7 tiles from where it
+        // was clicked. `live` says whether there is still a button held by the time it lands: a
+        // click that was over before the answer arrived is still a click, but there is no gesture
+        // left to start a drag or a pan with, and starting one would leave it stuck.
+        pickedTile(event).then((picked) => {
+            if (picked) {
+                press(event, picked, state.buttonDown);
+                return;
+            }
+
+            refusePlacing();
+
+            if (state.buttonDown) {
+                beginPan(event);
+            }
+        });
+    });
+
+    /**
+     * A left press, once the tile under it is known.
+     *
+     * Split out of the listener because the answer can arrive a frame late - see above - and the
+     * two paths have to do the same thing rather than nearly the same thing.
+     */
+    function press(event, tile, live) {
         const [screenX, screenY] = screenAt(event);
+
+        // Two different points, deliberately. hitTest wants the FRACTIONAL world position, because
+        // its slack is sub-tile in radar - and in art it ignores this pair entirely and compares
+        // screen pixels. The gesture wants the PICKED TILE, which is the answer that is right in
+        // both projections and is what ends up in a record.
+        const [worldX, worldY] = worldAt(event);
+        const originX = view.isArt ? tile.x : worldX;
+        const originY = view.isArt ? tile.y : worldY;
 
         if (state.tool) {
             if (!canPlace()) {
                 refusePlacing();
-                beginPan(event);
+
+                if (live) {
+                    beginPan(event);
+                }
+
                 return;
             }
 
             if (state.tool.kind === 'rect'
                 || state.tool.kind === 'adopt-rect'
                 || (state.tool.kind === 'site' && state.tool.phase === 1)) {
-                const x = Math.floor(worldX);
-                const y = Math.floor(worldY);
-
-                state.drag = { kind: 'draw-rect', startX: x, startY: y };
-                state.draft.rect = [x, y, 1, 1];
+                state.drag = { kind: 'draw-rect', startX: tile.x, startY: tile.y };
+                state.draft.rect = [tile.x, tile.y, 1, 1];
                 requestRender();
                 return;
             }
 
-            toolClick(worldX, worldY);
+            toolClick(tile, worldX, worldY, screenX, screenY);
             return;
         }
 
@@ -2844,7 +2924,11 @@ function wireInput() {
 
         if (!hit) {
             select(null);
-            beginPan(event);
+
+            if (live) {
+                beginPan(event);
+            }
+
             return;
         }
 
@@ -2852,8 +2936,11 @@ function wireInput() {
             select(hit.shape);
         }
 
-        if (!isWritable(hit.shape)) {
-            beginPan(event);
+        if (!isWritable(hit.shape) || !live) {
+            if (live) {
+                beginPan(event);
+            }
+
             return;
         }
 
@@ -2879,14 +2966,14 @@ function wireInput() {
             kind: hit.mode === 'resize' ? 'resize' : hit.mode === 'node' ? 'node' : 'move',
             shape: hit.shape,
             index: hit.index,
-            originX: worldX,
-            originY: worldY,
+            originX,
+            originY,
             before: geometryOf(hit.shape),
             moved: false
         };
 
         canvas.classList.add('dragging');
-    });
+    }
 
     window.addEventListener('mousemove', (event) => {
         // Bound to the window, not the canvas: a drag that leaves the canvas has to keep tracking,
@@ -2896,9 +2983,9 @@ function wireInput() {
         // The tile under the cursor, and in art view the Z of the surface there. A `~` says the
         // pick map for this tile has not arrived and the number is the ground-plane guess, which is
         // off by about 2.7 tiles where Britain stands - a distinction the readout used to hide.
-        if (view.facet && dom.coords) {
-            const tile = tileAt(event);
+        const tile = tileAt(event);
 
+        if (view.facet && dom.coords) {
             dom.coords.textContent = tile.exact
                 ? `${tile.x}, ${tile.y}${tile.z === null ? '' : `  z${tile.z}`}`
                 : `~${tile.x}, ${tile.y}`;
@@ -2931,8 +3018,11 @@ function wireInput() {
         }
 
         if (drag.kind === 'draw-rect') {
-            const x = Math.floor(worldX);
-            const y = Math.floor(worldY);
+            // The picked tile, so a zone dragged across the art covers the tiles it was dragged
+            // over rather than the ones the ground plane put under the cursor. In radar the pick
+            // IS the floored world position, so this is the line it always was.
+            const x = tile.x;
+            const y = tile.y;
 
             state.draft.rect = [
                 Math.min(drag.startX, x),
@@ -2945,19 +3035,37 @@ function wireInput() {
             return;
         }
 
+        // A drag follows the GROUND IT IS DRAGGED OVER in art view, and the fractional cursor in
+        // radar. `tile` is the pick in art and the floored cursor in radar; `dragX/dragY` keeps the
+        // radar path sub-tile, which is what makes a one-tile nudge land on the tile you aimed at
+        // rather than one early. A tile whose pick has not arrived reports inexact and the drag
+        // holds where it was for that frame rather than jumping to the ground-plane guess.
+        const dragX = view.isArt ? tile.x : worldX;
+        const dragY = view.isArt ? tile.y : worldY;
+
+        if (view.isArt && !tile.exact) {
+            return;
+        }
+
         if (drag.kind === 'resize') {
-            resizeRect(drag.shape, drag.index, worldX, worldY);
+            resizeRect(drag.shape, drag.index, dragX, dragY);
         } else if (drag.kind === 'node') {
-            moveNode(drag.shape, drag.index, worldX, worldY);
+            moveNode(drag.shape, drag.index, dragX, dragY);
         } else {
-            const dx = Math.round(worldX - drag.originX);
-            const dy = Math.round(worldY - drag.originY);
+            const dx = Math.round(dragX - drag.originX);
+            const dy = Math.round(dragY - drag.originY);
 
             if (dx === 0 && dy === 0) {
                 return;
             }
 
             moveShape(drag.shape, dx, dy);
+
+            // A point dragged up a hill carries the hill. Only for `point` shapes: a rect has no Z
+            // in its schema, and a polyline's is derived from the waypoints it names.
+            if (view.isArt && drag.shape.kind === 'point' && tile.z !== null) {
+                drag.shape.points[0][2] = tile.z;
+            }
 
             // Re-derived on every frame of the drag, not just at the end: a hop that only caught
             // up on mouse-up would make the road look broken for the length of the gesture.
@@ -2976,6 +3084,7 @@ function wireInput() {
     window.addEventListener('mouseup', () => {
         const drag = state.drag;
 
+        state.buttonDown = false;
         state.drag = null;
         canvas.classList.remove('dragging');
 
@@ -3048,13 +3157,22 @@ function wireInput() {
         if (hit && hit.layer === 'nav-edges' && isWritable(hit)) {
             event.preventDefault();
 
-            // Inserting needs a position on the hop, which is a world point from the cursor.
+            // Inserting needs a position ON the hop, which is a world point from the cursor - so
+            // it is the pick in art view and the cursor in radar, awaited either way because a
+            // double click is the rarest gesture there is.
             if (!canPlace()) {
                 refusePlacing();
                 return;
             }
 
-            insertOnHop(hit, worldX, worldY);
+            pickedTile(event).then((tile) => {
+                if (tile) {
+                    insertOnHop(hit, tile.x, tile.y);
+                    return;
+                }
+
+                refusePlacing();
+            });
         }
     });
 
@@ -3093,14 +3211,21 @@ function wireInput() {
             items.push({ heading: 'Add here' });
         }
 
-        for (const [key, tool] of Object.entries(TOOLS)) {
-            items.push({
-                label: tool.label,
-                run: () => startTool(key, [Math.floor(worldX), Math.floor(worldY)])
-            });
-        }
+        // "Add here" needs a tile, and in art view that means the pick. It is fetched before the
+        // menu opens rather than when an entry is chosen, so an entry that cannot be honoured is
+        // not offered - the alternative is a menu that looks the same and quietly does nothing.
+        pickedTile(event).then((tile) => {
+            if (tile) {
+                for (const [key, tool] of Object.entries(TOOLS)) {
+                    items.push({ label: tool.label, run: () => startTool(key, tile) });
+                }
+            } else if (hit) {
+                // The heading is already in; leave it saying why nothing follows it.
+                items[items.length - 1] = { heading: 'Add here - no pick map' };
+            }
 
-        showMenu(event.clientX, event.clientY, items);
+            showMenu(event.clientX, event.clientY, items);
+        });
     });
 
     window.addEventListener('keydown', (event) => {

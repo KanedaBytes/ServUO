@@ -19,11 +19,19 @@ export function buildShape(key, props, map, draft, context = {}) {
     const common = { layer: LAYER_FOR[key], map, fields: [] };
     const point = draft.points && draft.points[0];
 
+    // THE Z IS THE DRAFT'S, not zero. Every one of these used to write `0` flat, and every record
+    // the editor has ever created carries `"z": 0` because of it - survivable only because
+    // navigation.json's Z is advisory and the shard falls back to map.GetAverageZ when the authored
+    // one will not fit. The art view knows the real Z from the renderer's pick map and the radar
+    // view asks for it, so there is no longer any reason to throw it away. createProposal at the
+    // corridor tool has always overwritten it afterwards with the Z its walker found; that is now
+    // an override of a real number rather than a workaround for a missing one.
+
     switch (key) {
         case 'waypoint':
             return {
                 ...common, id: `wp:${props.id}`, kind: 'point', label: props.name || props.id,
-                points: [[point[0], point[1], 0]],
+                points: [[point[0], point[1], point[2] || 0]],
                 props: {
                     id: props.id,
                     // Omitted when blank rather than written empty: the schema marks name
@@ -43,7 +51,7 @@ export function buildShape(key, props, map, draft, context = {}) {
         case 'destination':
             return {
                 ...common, id: `dest:${props.id}`, kind: 'point', label: props.name || props.id,
-                points: [[point[0], point[1], 0]],
+                points: [[point[0], point[1], point[2] || 0]],
                 props: {
                     id: props.id, name: props.name, type: props.type,
                     tags: props.tags || '', waypoints: props.waypoints || ''
@@ -61,7 +69,7 @@ export function buildShape(key, props, map, draft, context = {}) {
             return {
                 ...common, id: `arr:${context.ownerId}#${context.arrivalIndex}`, kind: 'point',
                 label: `${context.ownerId} arrival${props.exclusive ? ' (exclusive)' : props.exact ? ' (exact)' : ''}`,
-                points: [[point[0], point[1], 0]],
+                points: [[point[0], point[1], point[2] || 0]],
                 props: {
                     destination: context.ownerId,
                     exclusive: props.exclusive === true,
@@ -115,7 +123,7 @@ export function buildShape(key, props, map, draft, context = {}) {
             const site = {
                 ...common, layer: 'nav-destinations',
                 id: `dest:${props.id}`, kind: 'point', label: props.name || props.id,
-                points: [[point[0], point[1], 0]],
+                points: [[point[0], point[1], point[2] || 0]],
                 props: {
                     id: props.id,
                     name: props.name,
@@ -142,11 +150,11 @@ export function buildShape(key, props, map, draft, context = {}) {
                 fields: [{ key: 'tags', label: 'Tags', type: 'string' }]
             };
 
-            const arrivals = (context.arrivals || []).map(([x, y], index) => ({
+            const arrivals = (context.arrivals || []).map(([x, y, z], index) => ({
                 ...common, layer: 'nav-arrivals',
                 id: `arr:${props.id}#${index}`, kind: 'point',
                 label: `${props.id} arrival`,
-                points: [[x, y, 0]],
+                points: [[x, y, z || 0]],
                 props: {
                     destination: props.id,
                     exclusive: false,
