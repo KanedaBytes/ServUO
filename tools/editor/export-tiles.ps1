@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Renders the radar tile pyramid the editor draws on.
+    Renders the radar tile pyramid the editor draws on, and optionally warms the art cache.
 
 .DESCRIPTION
     Reads the client files through ServUO's own Server.TileMatrix, so the tiles can never disagree
@@ -18,13 +18,25 @@
 .PARAMETER Client
     Client directory. Defaults to DataPath.CustomPath in Config/DataPath.cfg.
 
+.PARAMETER Prerender
+    A world rectangle "x,y,width,height" to warm the ISOMETRIC art cache over, after the radar
+    pyramid. Optional, and never required: art tiles are rendered on demand by the bridge and
+    cached forever, so a region becomes art simply by being looked at. This only makes the first
+    look at somewhere a pan rather than a short wait at every step.
+
+    There is no whole-facet art export and there cannot be one - Trammel's isometric canvas is
+    247,808 pixels square, 61 gigapixels per floor.
+
+    Britain is roughly:  -Prerender 1380,1495,365,345
+
 .EXAMPLE
     .\tools\editor\export-tiles.ps1
     .\tools\editor\export-tiles.ps1 -Facet Felucca
 #>
 param(
     [string]$Facet = 'Trammel',
-    [string]$Client
+    [string]$Client,
+    [string]$Prerender
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +69,25 @@ Write-Host ""
 if ($LASTEXITCODE -ne 0) {
     Write-Host "TILE EXPORT FAILED (exit $LASTEXITCODE)." -ForegroundColor Red
     exit $LASTEXITCODE
+}
+
+if ($Prerender) {
+    Write-Host ""
+    Write-Host "Warming the isometric art cache over $Prerender..." -ForegroundColor Cyan
+    Write-Host ""
+
+    $artArgs = @('--facet', $Facet, '--prerender', $Prerender)
+
+    if ($Client) {
+        $artArgs += @('--client', $Client)
+    }
+
+    & $exe @artArgs
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "PRERENDER FAILED (exit $LASTEXITCODE). The radar tiles are fine." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
 }
 
 Write-Host ""

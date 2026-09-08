@@ -433,3 +433,39 @@ button:disabled { opacity: .45; cursor: default; }
 #tool-guide #tool-hint { color: var(--accent); }
 #tool-guide #tool-legend:empty { display: none; }
 #tool-guide #tool-legend { font-size: 12px; opacity: .7; }
+
+/*
+ * The base-map and floor controls in the View section. `hidden` does the hiding - there is no
+ * display rule here - because a `display` set by the author beats the [hidden] attribute and the
+ * element would then never go away.
+ */
+#basemap,
+#floor-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0;
+    font-size: 12px;
+}
+
+#basemap label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+#basemap input[disabled] + span,
+#basemap label:has(input[disabled]) {
+    opacity: .45;
+    cursor: default;
+}
+
+#floor-row input[type="range"] {
+    flex: 1;
+    margin: 0;
+}
+
+#floor-row.inactive {
+    opacity: .45;
+}

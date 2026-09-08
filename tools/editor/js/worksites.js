@@ -152,7 +152,7 @@ export function draw(ctx, view) {
 
     for (const site of sites.values()) {
         for (const point of site.points) {
-            mark(ctx, view, point.x, point.y, point.reach, site.min, false);
+            mark(ctx, view, point.x, point.y, point.z || 0, point.reach, site.min, false);
         }
     }
 
@@ -165,15 +165,17 @@ export function draw(ctx, view) {
     // thing distinguishing the two states, and without it the tool offered fifteen identical
     // dashed circles and no way to tell which of them were going to be written.
     for (const point of probe) {
-        mark(ctx, view, point.x, point.y, point.reach, point.min,
+        mark(ctx, view, point.x, point.y, point.z || 0, point.reach, point.min,
             !taken.has(tileKey(point.x, point.y)), point.canFit);
     }
 
     ctx.restore();
 }
 
-function mark(ctx, view, x, y, reach, min, hollow, canFit) {
-    const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+function mark(ctx, view, x, y, z, reach, min, hollow, canFit) {
+    // The Z is the tile's own, so in art a candidate on a cliff face draws on the cliff face -
+    // which is where the whole question of standing on it is decided.
+    const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z);
     const width = ctx.canvas.clientWidth;
     const height = ctx.canvas.clientHeight;
 

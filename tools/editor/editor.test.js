@@ -869,3 +869,147 @@ test('the smallest rectangle wins, so a district cannot swallow the town inside 
 
     assert.strictEqual(hit.shape, yard);
 });
+
+// --- the art projection ---------------------------------------------------------------------------
+//
+// Two things change when the base map is isometric, and both are things the radar code took for
+// granted: a world rect is no longer a screen rect, and the cursor's world position is no longer
+// knowable. The stub below is the smallest view that behaves like the art one - `isArt` true and a
+// toScreen that honours Z - which is exactly the interface the drawing and picking code is
+// written against.
+
+function stubArtView(scale = 22) {
+    const s = scale / 22;
+
+    return {
+        scale,
+        isArt: true,
+        facet: { name: 'Trammel', width: 7168, height: 4096 },
+        toScreen: (x, y, z = 0) => [
+            ((x - y) * 22 - (1475 - 1645) * 22) * s + 600,
+            ((x + y) * 22 - z * 4 - (1475 + 1645) * 22) * s + 400
+        ]
+    };
+}
+
+test('a world rect is a rect in radar and four projected corners in art', () => {
+    const zone = {
+        layer: 'nav-zones', id: 'zone:town', kind: 'rect', map: 'Trammel',
+        rect: [1470, 1640, 10, 10], props: {}
+    };
+
+    const visible = new Set(['nav-zones']);
+
+    // Radar: unchanged, and still the fillRect/strokeRect pair the rest of these tests pin.
+    {
+        const { ctx, calls } = stubContext();
+        shapes.draw(ctx, stubView(1), [zone], visible, null, null, new Set());
+
+        assert.strictEqual(calls.filter((c) => c.name === 'strokeRect').length, 1);
+        assert.strictEqual(calls.filter((c) => c.name === 'lineTo').length, 0);
+    }
+
+    // Art: no rect calls at all, and a closed four-corner path instead. A world rect is a diamond
+    // here, so `w * view.scale` would have drawn a square in the wrong place at the wrong angle.
+    {
+        const { ctx, calls } = stubContext();
+        shapes.draw(ctx, stubArtView(), [zone], visible, null, null, new Set());
+
+        assert.strictEqual(calls.filter((c) => c.name === 'strokeRect').length, 0);
+        assert.strictEqual(calls.filter((c) => c.name === 'moveTo').length, 1);
+        assert.strictEqual(calls.filter((c) => c.name === 'lineTo').length, 3);
+        assert.strictEqual(calls.filter((c) => c.name === 'closePath').length, 1);
+    }
+});
+
+test('a point is drawn at its own Z in art, and Z is ignored in radar', () => {
+    const high = {
+        layer: 'nav', id: 'wp:high', kind: 'point', map: 'Trammel',
+        points: [[1475, 1645, 60]], props: {}
+    };
+
+    const low = {
+        layer: 'nav', id: 'wp:low', kind: 'point', map: 'Trammel',
+        points: [[1475, 1645, 0]], props: {}
+    };
+
+    const visible = new Set(['nav']);
+
+    const arcsIn = (view, shape) => {
+        const { ctx, calls } = stubContext();
+        shapes.draw(ctx, view, [shape], visible, null, null, new Set());
+        return calls.filter((c) => c.name === 'arc')[0].args;
+    };
+
+    // Radar has no Z in its projection at all, so the two land on the same pixel.
+    assert.deepStrictEqual(arcsIn(stubView(1), high).slice(0, 2), arcsIn(stubView(1), low).slice(0, 2));
+
+    // Art lifts by 4px per Z at 1:1, so sixty Z is 240 pixels up and the X does not move.
+    const artHigh = arcsIn(stubArtView(), high);
+    const artLow = arcsIn(stubArtView(), low);
+
+    assert.strictEqual(artHigh[0], artLow[0]);
+    assert.strictEqual(artLow[1] - artHigh[1], 60 * 4);
+});
+
+test('in art a waypoint is picked by where it was DRAWN, not by the ground under the cursor', () => {
+    // The isometric inverse is not a function, so the world position of a click is a ground-plane
+    // guess and is off by z*4/44 tiles - about 2.7 where Britain stands. Picking in world space
+    // there would select whatever is three tiles north-west of what was clicked. The editor drew
+    // this waypoint itself, at its own Z, so the screen comparison is exact.
+    const waypoint = {
+        layer: 'nav', id: 'wp:forge', kind: 'point', map: 'Trammel',
+        points: [[1424, 1557, 30]], props: {}
+    };
+
+    const view = stubArtView();
+    const visible = new Set(['nav']);
+
+    const [sx, sy] = view.toScreen(1424.5, 1557.5, 30);
+
+    // Clicking where it was drawn takes it, whatever the world coordinates say.
+    assert.strictEqual(
+        shapes.hitTest(view, [waypoint], visible, null, 0, 0, sx, sy).shape,
+        waypoint);
+
+    // And clicking where a ground-plane inverse would have put it does not.
+    const [groundX, groundY] = view.toScreen(1424.5, 1557.5, 0);
+
+    assert.strictEqual(
+        shapes.hitTest(view, [waypoint], visible, null, 0, 0, groundX, groundY),
+        null,
+        'the z=30 marker was picked from the z=0 position, which is the bug this replaces');
+});
+
+test('in art a zone is picked by its projected diamond, not its world box', () => {
+    const zone = {
+        layer: 'nav-zones', id: 'zone:town', kind: 'rect', map: 'Trammel',
+        rect: [1400, 1600, 100, 100], props: {}
+    };
+
+    const view = stubArtView(4);
+    const visible = new Set(['nav-zones']);
+
+    const centre = view.toScreen(1450, 1650, 0);
+    assert.strictEqual(shapes.hitTest(view, [zone], visible, null, 0, 0, centre[0], centre[1]).shape, zone);
+
+    // The corner of the world box is a corner of the DIAMOND, so a point beyond it in screen space
+    // is outside even though a world-space box test would have taken it.
+    const outside = view.toScreen(1400, 1600, 0);
+    assert.strictEqual(
+        shapes.hitTest(view, [zone], visible, null, 0, 0, outside[0], outside[1] - 40),
+        null);
+});
+
+test('without a screen point, hit testing stays in world space even in art', () => {
+    // Every caller in app.js passes one, but pick() and hitTest() are public and the fallback has
+    // to be the old behaviour rather than a crash - and radar must be entirely unaffected.
+    const waypoint = {
+        layer: 'nav', id: 'wp:a', kind: 'point', map: 'Trammel',
+        points: [[1475, 1645, 0]], props: {}
+    };
+
+    const found = shapes.hitTest(stubArtView(), [waypoint], new Set(['nav']), null, 1475.5, 1645.5);
+
+    assert.strictEqual(found.shape, waypoint);
+});

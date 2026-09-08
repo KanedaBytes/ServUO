@@ -25,6 +25,27 @@
         <section>
             <h2>View</h2>
             <button id="go-britain" type="button">Britain</button>
+
+            <!--
+                Base map. Radar is the facet-wide pyramid; art is the real client art drawn
+                isometrically, rendered on demand. Art is disabled when the renderer has not been
+                built, and the reason is put in the title rather than left as a dead control.
+            -->
+            <div class="choice" id="basemap">
+                <label><input type="radio" name="basemap" value="radar" checked> Radar</label>
+                <label><input type="radio" name="basemap" value="art" id="basemap-art"> Art</label>
+            </div>
+
+            <!--
+                The floor slider. The title carries the rule, because a slider with three unlabelled
+                stops is a control you have to experiment with to understand.
+            -->
+            <div class="choice" id="floor-row" hidden>
+                <input id="floor" type="range" min="0" max="2" step="1" value="2"
+                    title="Ground: statics below the land + 20. First floor: below the land + 40. All: everything. Heights are above the land surface, so the upper and lower town behave alike.">
+                <span id="floor-label" class="muted">All</span>
+            </div>
+
             <input id="filter" type="search" placeholder="Filter by name or id">
             <ul id="matches"></ul>
         </section>

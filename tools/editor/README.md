@@ -9,9 +9,13 @@ author routes by clicking waypoints in order; and edit the daily-life config as 
 writes the file, asks the shard to reload it, and tells you what the shard said.
 
 ```
-tools\editor\export-tiles.ps1      # render the map, once
+tools\editor\export-tiles.ps1      # render the radar map, once
 node tools\editor\bridge.js        # then browse http://127.0.0.1:8081/
 ```
+
+The base map is radar by default. **Base map → Art** draws the real client art isometrically, with
+a floor slider; those tiles are rendered on demand rather than exported, because a facet-wide
+isometric render is 61 gigapixels per floor. See **The art view**.
 
 ## Why a file bridge and not an API in the shard
 
@@ -51,7 +55,9 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `modules.test.js` | That the browser code loads at all - see **Why `node --check` is not enough** |
 | `js/`, `index.html`, `style.css` | The editor |
 | `tiles/` | Rendered map, gitignored |
-| `../MapExport/` | The tile renderer |
+| `artrenderer.js` | The isometric renderer's child process, its queue and its cache paths |
+| `js/iso.js` | The isometric projection - one formula, shared by the camera and every layer |
+| `../MapExport/` | The tile renderers, radar and isometric |
 
 ## Security
 
@@ -357,11 +363,162 @@ The level count must match `view.js maxZoomFor()` exactly or the editor requests
 never rendered; both ceil-halve until the facet fits one tile.
 
 **A finer level is not an upscaling problem.** Below one pixel per game tile there is no more
-radar data — a genuine detail level would mean rendering art tiles instead of radar colours,
-which is a different tool. The editor magnifies with nearest-neighbour, which is honest about
-what the data is. Deferred.
+radar data. The editor magnifies with nearest-neighbour, which is honest about what the data is —
+and the genuine detail level, rendering art tiles instead of radar colours, is the art view below.
 
 A second facet is another run, not a code change: `export-tiles.ps1 -Facet Felucca`.
+
+## The art view
+
+The real client art, drawn isometrically. **Base map → Art** in the sidebar.
+
+```
+tools\editor\export-tiles.ps1 -Prerender 1380,1495,365,345   # optional; warms Britain
+node tools\editor\bridge.js
+```
+
+### There is no batch export, and there cannot be
+
+Trammel's isometric canvas is `(7168 + 4096) × 22 = 247,808` pixels on each side — **61
+gigapixels per floor**, about 937,000 tiles at 1:1, and roughly 70 GB and tens of hours across
+three floors. So art is not exported. **A tile is rendered the first time somebody asks for it and
+then kept forever.** Britain becomes art because you look at Britain; Trinsic becomes art by
+panning there. `-Prerender` exists only so the first look at somewhere is a pan rather than a
+short wait at every step; nothing depends on having run it.
+
+```
+browser ──GET /tiles/iso/…/z/x/y.png──▶ bridge ──"tile …" on stdin──▶ MapExport.exe --serve
+            (radar drawn underneath)      │  hit: serve from disk        (one long-lived process,
+                                          │  miss: render, then serve     warm art + TileMatrix)
+                                          └──◀ "ok <ms> <bytes>" ─────────┘
+```
+
+**A miss blocks the HTTP request until the tile is drawn**, and that is the whole placeholder
+protocol: there isn't one. Radar is drawn *under* the art layer always, so a tile that has not
+arrived, one off the edge of the map, and one the renderer refused all look the same — radar shows
+through. The browser's own six-connection cap is what throttles the queue, which suits a renderer
+that has to be serial anyway (`Server.TileMatrix` keeps its block buffers in static fields).
+
+The queue in `artrenderer.js` is **LIFO and deduped**. A pan asks for a screenful and abandons it a
+moment later; answering the newest first means the tiles you are looking at now do not wait behind
+the ones you have already left.
+
+Measured on this machine, per tile: **1:1 about 13 ms, 1:2 about 9 ms, 1:4 about 21 ms, 1:8 about
+260 ms** — so a screenful is well under a second at every level. `GET /api/artstats` carries the
+counts and the last render time; the bridge logs each miss.
+
+Prerendering the whole of Britain — `-Prerender 1380,1495,365,345`, 365 × 345 tiles — is **16,608
+tiles in 3m26s and 873 MB**, at 12 ms each. Which is the argument for on demand rather than an
+argument against art: that is one town out of a facet, and nobody pays it for the parts of the map
+they never open.
+
+### Which levels are art, and which have floors
+
+| level | scale | world tiles per tile | floors |
+| --- | --- | --- | --- |
+| max (1:1) | 44px per game tile | ~12 × 12 | Ground / First floor / All |
+| max−1 (1:2) | 22 | ~23 × 23 | Ground / First floor / All |
+| max−2 (1:4) | 11 | ~46 × 46 | **All only** |
+| max−3 (1:8) | 5.5 | ~93 × 93 | **All only** |
+| below | — | — | **radar** |
+
+Each step out quadruples the world area one render has to walk, and level 0 is the entire facet —
+so art stops four levels down and the view falls back to radar, which is what radar is good at. A
+coarse tile is rendered at 1:1 into a scratch buffer and box-downsampled, not sampled every Nth
+column: a road one tile wide has to survive being zoomed out.
+
+Floors stop two levels down for a different reason — at 1:4 a storey is five pixels tall and
+peeling it off shows nothing. The slider stays visible there and goes inactive saying so, rather
+than disappearing; a control that vanishes when you zoom out reads as a bug.
+
+### The floor slider
+
+Cut by **height above the land surface**, never absolute Z: Britain's upper and lower town differ
+by about thirty Z and one absolute threshold cannot suit both.
+
+| stop | keeps | also |
+| --- | --- | --- |
+| Ground | statics below `landZ + 20` | drops `TileFlag.Roof` |
+| First floor | statics below `landZ + 40` | drops `TileFlag.Roof` |
+| All | everything | — |
+
+UO's storey height is 20, which is where the numbers come from. Both are `--floor-ground` and
+`--floor-first` on the renderer and are reported by `/api/artinfo`, because this is the rule most
+likely to want an eyeball tune and a rebuild is a poor way to try a number. Roofs are dropped
+outright below the top stop: the height cutoff alone would keep a one-storey roof at `landZ + 20`
+on the First floor stop, which is exactly the thing the slider is being moved to get rid of.
+
+### The cache key carries the renderer version
+
+```
+tools/editor/tiles/iso/<Facet>/v<N>/<floor>/<level>/<x>/<y>.png
+```
+
+`v<N>` is `TileServer.Version`, handed to the bridge in the handshake and to the editor by
+`/api/artinfo`. Bumping it — stretched terrain, a draw-order fix, a hue fix — orphans the whole old
+tree in one directory instead of leaving a cache that is half old and half new. `/tools/editor/tiles`
+is already gitignored, which matters more here than for radar: **rendered client art is licensed
+and must never be committed.**
+
+### The projection, once
+
+`js/iso.js` and `tools/MapExport/IsoTransform.cs` are two copies of one formula, taken from
+`Ultima/Multis.cs:502-511` — the one working isometric renderer already in the tree:
+
+```
+anchor(x, y, z) = ((x - y) * 22, (x + y) * 22 - z * 4)
+```
+
+and any sprite hangs by its **bottom centre** from that anchor. Land art is 44×44, so a land tile
+lands at `(ix - 22, iy - 44)`: the same rule, not a special case. `iso.test.js` pins the two copies
+together by reading the C# constants out of the file, because a projection that exists twice and
+drifts once puts every layer a couple of tiles off the art it is drawn on — which reads as bad nav
+data rather than a bad projection.
+
+Two things follow, and they are why this was a small change rather than a rewrite:
+
+- **Twenty-two iso pixels per world tile, per axis.** So `view.scale` goes on meaning screen pixels
+  per game tile in both projections, and every `labelAt` threshold, cull margin and hit-test slack
+  keeps the meaning it already had. 1:1 art is scale 22.
+- **At z=0 the projection is linear.** So the radar underlay is drawn by handing the matrix to
+  `setTransform` and reusing the existing world-space tile loop — a radar tile becomes a rotated
+  square and `drawImage` does the rest.
+
+The camera stays in world space, so `centerOn`, `goTo`, `fitAll`, the Britain button and the
+filter's jump-to-shape all work unchanged.
+
+### Why placing and dragging are disabled in art view
+
+**The inverse is not a function.** A screen pixel names a world tile only once you assume a Z, so
+`isoToWorld` answers for the ground plane and is off by `z*4/44` tiles — about **2.7 tiles** where
+Britain stands, near z 30. A waypoint dropped three tiles from where it was clicked would look
+right and be wrong, which is worse than a refusal.
+
+**Selecting still works**, because the editor drew every one of these shapes itself and drew them
+at their own Z. So `hitTest` compares in *screen* space in art view: the projected anchor of each
+candidate against the cursor's pixel. Points by anchor, polylines by projected segment, rects by
+point-in-projected-diamond. No depth buffer needed, and no inverse.
+
+Nudging with the arrow keys works too — it moves by whole tiles from the keyboard and never asks
+where the cursor is.
+
+The fix for the rest is a per-pixel pick map from the renderer, which is the next session's first
+job.
+
+### What the art does not show
+
+- **Dynamic items.** The renderer reads the client's map and statics files, so anything the shard
+  places at runtime is absent — including `[Decorate`'s work. The forge and anvil at `brit-forge`
+  are `SmallForgeAddon` and `AnvilEastAddon` from `Data/Decoration/Britannia/britain.cfg`, so the
+  smithy yard draws as empty paving with the nav markers on it. Live entities still draw, from
+  `entities.json`, as they do in radar.
+- **Sloped terrain.** The client stretches each land tile across its four corner Zs using
+  `texmaps.mul`; we draw the flat 44×44 diamond at the tile's own Z, so hills terrace rather than
+  slope. Britain's town is level enough not to care; the mountain west of it is visibly stepped.
+  That is the named next step for the art view, and it is a renderer-version bump when it lands.
+- **A zone rect at its true height.** Zones carry no Z in the schema, so they project on the ground
+  plane and sit about 2.7 tiles off where Britain stands. Fixing it needs a land-Z lookup from the
+  renderer, which is the same data the pick map needs.
 
 ## Coverage-gap overlay
 
@@ -712,6 +869,15 @@ competitors; the fix is to let fewer things compete at each zoom.
 
 At the default view that goes from 39 of 206 to **27 of 33**, and what survives is zones and
 destination names rather than an arbitrary fifth of everything. A test pins it.
+
+## Art tiles are the one route that is not a static file
+
+`GET /tiles/iso/<facet>/v<n>/<floor>/<level>/<x>/<y>.png` is a real handler rather than
+`serveStatic`, because a miss has to be rendered before it can be answered. Every segment is
+checked against what it is allowed to *be* — three floor names and non-negative integers — and the
+path is then rebuilt from those numbers, so there is nothing to traverse because there is nothing
+to steer. Radar tiles keep falling through to `serveStatic`; they are exported ahead of time and
+there is nothing to render.
 
 ## The request channel
 

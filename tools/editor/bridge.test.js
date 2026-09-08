@@ -75,7 +75,8 @@ process.env.GG_EDITOR_ROOT = root;
 process.env.GG_ACK_TIMEOUT_MS = '600';
 
 const whitelist = require('./whitelist.js');
-const { handleRequest, hashOf } = require('./bridge.js');
+const bridge = require('./bridge.js');
+const { handleRequest, hashOf } = bridge;
 const fakeShard = require('./fake-shard.js');
 
 const NAV = whitelist.FILES.navigation;
@@ -95,6 +96,12 @@ test.before(async () => {
 
 test.after(() => {
     if (shard) shard.stop();
+
+    // /api/artinfo starts the renderer, which is a long-lived child process holding the client
+    // files open. Without this the test run finishes and node never exits, because the child is
+    // still there - which is exactly the leak the bridge's own SIGINT handler exists to prevent.
+    bridge.art.stop();
+
     server.close();
     fs.rmSync(root, { recursive: true, force: true });
 });
@@ -588,5 +595,72 @@ test('every reload the editor can ask for exists in the shard dispatcher', async
     for (const name of wanted) {
         assert.ok(poller.includes(`case "${name}":`),
             `the editor asks for '${name}' and RequestPoller.Dispatch has no case for it`);
+    }
+});
+
+// ---- the isometric art tiles ------------------------------------------------------------------
+//
+// The renderer itself is a C# child process and these tests do not build it, so what is checked
+// here is the bridge's half: that a malformed path is refused before anything is spawned, and that
+// the two info routes answer whether or not there is a renderer to answer for.
+
+const { parseTilePath } = require('./artrenderer.js');
+
+test('a tile path is parsed into numbers, or refused', () => {
+    assert.deepStrictEqual(
+        parseTilePath('/tiles/iso/Trammel/v1/ground/10/340/259.png'),
+        { facet: 'Trammel', version: 1, floor: 'ground', level: 10, x: 340, y: 259 });
+
+    // Every segment is checked against what it is allowed to BE rather than sanitised - the same
+    // rule the token names follow. There is no spelling of a path that reaches the filesystem,
+    // because the path is rebuilt from the numbers rather than taken from the caller.
+    const refused = [
+        '/tiles/iso/Trammel/v1/attic/10/340/259.png',      // not a floor
+        '/tiles/iso/Trammel/v1/all/10/340/259.jpg',        // not a png
+        '/tiles/iso/Trammel/v1/all/10/-1/259.png',         // negative
+        '/tiles/iso/Trammel/v1/all/10/340.png',            // too few segments
+        '/tiles/iso/Trammel/v1/all/10/340/259/extra.png',  // too many
+        '/tiles/iso/../../v1/all/10/340/259.png',
+        '/tiles/iso/Trammel/v1/all/10/340/%2e%2e%2fboot.png'
+    ];
+
+    for (const bad of refused) {
+        assert.strictEqual(parseTilePath(bad), null, bad + ' was accepted');
+    }
+});
+
+test('a malformed art tile path is a 400 and never reaches the renderer', async () => {
+    const response = await fetch(origin + '/tiles/iso/Trammel/v1/attic/10/340/259.png');
+
+    assert.strictEqual(response.status, 400);
+});
+
+test('artinfo and artstats always answer, renderer or no renderer', async () => {
+    // `available: false` is a normal answer - MapExport.exe may simply not have been built - and
+    // it has to be an answer rather than a 500, because the editor asks this at boot and would
+    // otherwise report the bridge as unreachable over a tool that is merely absent.
+    const info = await (await fetch(origin + '/api/artinfo')).json();
+    assert.strictEqual(typeof info.available, 'boolean');
+
+    if (!info.available) {
+        assert.ok(info.reason, 'an unavailable renderer has to say why');
+    } else {
+        assert.strictEqual(typeof info.maxLevel, 'number');
+        assert.strictEqual(typeof info.version, 'number');
+    }
+
+    const stats = await (await fetch(origin + '/api/artstats')).json();
+
+    for (const key of ['available', 'running', 'rendered', 'failed', 'queued', 'lastMs', 'avgMs']) {
+        assert.ok(key in stats, 'artstats is missing ' + key);
+    }
+});
+
+test('the art cache is not writable through the save path', () => {
+    // tiles/ is derived data the renderer owns; whitelist.resolveSave serves a three-entry table
+    // plus the spawn files, so there is no name that reaches it. Asserted rather than assumed,
+    // because "there is nothing to steer" is only true while the table stays a table.
+    for (const name of ['iso', 'tiles', 'tiles/iso', '../tools/editor/tiles/iso']) {
+        assert.strictEqual(whitelist.resolveSave(name), null, name + ' resolved');
     }
 });

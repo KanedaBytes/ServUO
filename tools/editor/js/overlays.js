@@ -4,6 +4,8 @@
 // boundaries a new zone will sit inside. It is deliberately quiet - thin lines, small marks, no
 // labels unless zoomed in - because the whole job of these layers is to be looked past.
 
+import { traceWorldRect } from './iso.js';
+
 export const OVERLAY_LAYERS = {
     stockSpawners: { label: 'Upstream spawners', color: '#8a7f6d' },
     teleporters: { label: 'Teleporters', color: '#59b8a8' },
@@ -73,7 +75,12 @@ function drawRegions(ctx, view, regions) {
                 continue;
             }
 
-            ctx.strokeRect(sx, sy, sw, sh);
+            // A region rect is a world rect, so in art it is a diamond.
+            if (traceWorldRect(ctx, view, x, y, w, h)) {
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(sx, sy, sw, sh);
+            }
         }
     }
 

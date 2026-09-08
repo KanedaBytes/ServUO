@@ -1,0 +1,184 @@
+// The isometric projection. One formula, used by the renderer, the camera and every layer.
+//
+// THE FORMULA IS NOT INVENTED HERE. It is Ultima/Multis.cs:502-511 - the one working isometric
+// renderer already in this tree - and tools/MapExport/IsoTransform.cs is the other copy of it.
+// `iso.test.js` pins the two together against the literals in that file, because a projection that
+// exists twice and drifts once puts every layer a couple of tiles off the art it is drawn on.
+//
+//     anchor(x, y, z) = ((x - y) * 22, (x + y) * 22 - z * 4)
+//
+// and any sprite is drawn with its BOTTOM CENTRE on that anchor. Land art is 44x44, so a land tile
+// lands at (ix - 22, iy - 44): the same rule, not a special case.
+//
+// Two things follow, and they are why the art view was a small change rather than a rewrite.
+//
+// TWENTY-TWO ISO PIXELS PER WORLD TILE, PER AXIS. So `view.scale` can go on meaning screen pixels
+// per game tile in both projections, and every `labelAt` threshold, cull margin and hit-test slack
+// in the editor keeps the meaning it already had. 1:1 art is scale 22.
+//
+// AT Z=0 THE PROJECTION IS LINEAR. dx moves the screen point by (+scale, +scale) and dy by
+// (-scale, +scale), so it is an ordinary canvas matrix - which is how the radar underlay is drawn
+// beneath the art with the existing world-space tile loop and a setTransform.
+//
+// THE INVERSE IS NOT A FUNCTION. A screen pixel names a world tile only once you assume a Z, so
+// `isoToWorld` answers for the ground plane and is off by z*4/44 tiles - about 2.7 in Britain,
+// which sits near z 30. That is why placing and dragging are disabled in art view: a click that
+// looks right and is wrong is worse than one that is refused.
+
+export const HALF_WIDTH = 22;
+export const HALF_HEIGHT = 22;
+export const Z_STEP = 4;
+
+/** Land art is always 44x44 (Ultima/Art.cs:528-529). */
+export const LAND_ART_SIZE = 44;
+
+// Must match tools/MapExport/IsoTransform.cs. The renderer reports them in its handshake and the
+// editor prefers what it is told; these are the fallback for a bridge with no renderer yet.
+export const MAX_SPRITE_HEIGHT = 512;
+export const Z_LIFT = 128 * Z_STEP;
+export const HEADROOM_TOP = Z_LIFT + MAX_SPRITE_HEIGHT;
+export const HEADROOM_BOTTOM = Z_LIFT;
+export const TILE_SIZE = 256;
+
+/** How many of the deepest levels are art at all; below that the editor draws radar. */
+export const ART_LEVEL_DEPTH = 4;
+
+/** How many of the deepest levels carry separate floors; below that there is one composite. */
+export const FLOOR_LEVEL_DEPTH = 2;
+
+export const FLOORS = ['ground', 'first', 'all'];
+
+export function worldToIso(x, y, z = 0) {
+    return {
+        ix: (x - y) * HALF_WIDTH,
+        iy: (x + y) * HALF_HEIGHT - z * Z_STEP
+    };
+}
+
+/**
+ * The ground-plane inverse. Pass the z you are assuming; the caller has to know it is assuming
+ * one. Derived by adding and subtracting the two equations above.
+ */
+export function isoToWorld(ix, iy, z = 0) {
+    const lifted = iy + z * Z_STEP;
+
+    return {
+        x: (lifted / HALF_HEIGHT + ix / HALF_WIDTH) / 2,
+        y: (lifted / HALF_HEIGHT - ix / HALF_WIDTH) / 2
+    };
+}
+
+/** Where a w x h sprite's top-left goes, given its anchor. Ultima/Multis.cs:505-507. */
+export function spriteTopLeft(ix, iy, width, height) {
+    return { x: ix - Math.floor(width / 2), y: iy - height };
+}
+
+/**
+ * The canvas transform for the world->screen projection at z=0, as ctx.setTransform's first four
+ * arguments: [a, b, c, d] = [dsx/dx, dsy/dx, dsx/dy, dsy/dy].
+ */
+export function isoMatrix(scale) {
+    return [scale, scale, -scale, scale];
+}
+
+/** The iso pixel that is canvas column 0. Negative: (0, height-1) projects a long way left. */
+export function originX(facetHeight) {
+    return -(facetHeight * HALF_WIDTH);
+}
+
+/** The iso pixel that is canvas row 0. Negative, to leave room for lifted, tall sprites. */
+export function originY() {
+    return -HEADROOM_TOP;
+}
+
+export function canvasWidth(facetWidth, facetHeight) {
+    return (facetWidth + facetHeight) * HALF_WIDTH;
+}
+
+export function canvasHeight(facetWidth, facetHeight) {
+    return (facetWidth + facetHeight) * HALF_HEIGHT + HEADROOM_TOP + HEADROOM_BOTTOM;
+}
+
+/**
+ * Ceil-halve until the canvas fits one tile - the same rule as IsoTransform.MaxLevel and, for the
+ * radar pyramid, TilePyramid.LevelCount and view.js maxZoomFor. It has to stay the same rule or
+ * the editor asks for a level the renderer does not believe in.
+ */
+export function maxLevel(facetWidth, facetHeight, tileSize = TILE_SIZE) {
+    let width = canvasWidth(facetWidth, facetHeight);
+    let height = canvasHeight(facetWidth, facetHeight);
+    let levels = 0;
+
+    while (width > tileSize || height > tileSize) {
+        width = Math.ceil(width / 2);
+        height = Math.ceil(height / 2);
+        levels++;
+    }
+
+    return levels;
+}
+
+/** Iso pixels per rendered pixel at a level. 1 at the deepest. */
+export function divisor(level, max) {
+    return 2 ** (max - level);
+}
+
+/** Whether a level has its own floors, or only the composite. */
+export function hasFloors(level, max) {
+    return level > max - FLOOR_LEVEL_DEPTH;
+}
+
+/** The shallowest level that is rendered as art. Below it the editor falls back to radar. */
+export function minArtLevel(max) {
+    return Math.max(0, max - (ART_LEVEL_DEPTH - 1));
+}
+
+/**
+ * Which world tile and pixel a point lands on, in the art pyramid at a level. The numeric half of
+ * "the brit-forge marker sits on the forge tile", and what iso.test.js asserts.
+ */
+export function tileFor(x, y, z, level, max, facetHeight, tileSize = TILE_SIZE) {
+    const { ix, iy } = worldToIso(x, y, z);
+    const canvasX = ix - originX(facetHeight);
+    const canvasY = iy - originY();
+    const span = tileSize * divisor(level, max);
+
+    return {
+        canvasX,
+        canvasY,
+        tileX: Math.floor(canvasX / span),
+        tileY: Math.floor(canvasY / span),
+        pixelX: Math.floor((canvasX % span) / divisor(level, max)),
+        pixelY: Math.floor((canvasY % span) / divisor(level, max))
+    };
+}
+
+/**
+ * Paths a world rectangle's four projected corners, and says whether it did.
+ *
+ * A world rect is a rectangle on screen in radar and a diamond in art, so every place that built
+ * one out of `w * view.scale` needs the corners projected instead. Callers keep their existing
+ * fillRect/strokeRect when this returns false: that is the same picture in radar, and it is what
+ * the drawing tests pin.
+ *
+ * It takes a ctx, which is the one impure thing in this module - but the alternative is the rule
+ * for "what shape is a rect" living in four files again, which is how it went wrong the first time.
+ */
+export function traceWorldRect(ctx, view, x, y, width, height) {
+    if (!view.isArt) {
+        return false;
+    }
+
+    const corners = [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
+
+    ctx.beginPath();
+
+    corners.forEach(([cx, cy], i) => {
+        const [sx, sy] = view.toScreen(cx, cy, 0);
+        i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+    });
+
+    ctx.closePath();
+
+    return true;
+}

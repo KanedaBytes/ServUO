@@ -37,6 +37,7 @@ import { nextId, insertedId, insertedName } from './ids.js';
 import { buildShape } from './build.js';
 import { liveStatusText } from './live.js';
 import * as adopt from './adopt.js';
+import * as iso from './iso.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -147,7 +148,9 @@ async function boot() {
         bannerReapply: $('banner-reapply'),
         createButtons: $('create-buttons'), layers: $('layers'), health: $('health'),
         liveStatus: $('live-status'), bots: $('bots'), botFilter: $('bot-filter'),
-        botDetail: $('bot-detail')
+        botDetail: $('bot-detail'),
+        basemap: $('basemap'), basemapArt: $('basemap-art'),
+        floorRow: $('floor-row'), floor: $('floor'), floorLabel: $('floor-label')
     });
 
     initTools();
@@ -180,6 +183,7 @@ async function boot() {
     setInterval(updateLiveStatus, 1000);
 
     wireInput();
+    wireBaseMap();
 
     // Demand-driven from here: every mutation calls requestRender, and these are the three things
     // that change what is on screen without any mutation at all.
@@ -188,6 +192,92 @@ async function boot() {
     watchPixelRatio();
 
     requestRender();
+}
+
+// --- the base map -------------------------------------------------------------------------------
+//
+// Two controls and one asynchronous fact. The fact is whether there is an art renderer at all:
+// MapExport.exe may simply not have been built, in which case the Art option is disabled with the
+// reason in its tooltip rather than left as a control that does nothing.
+//
+// FLOORS ONLY EXIST AT THE TWO CLOSEST ZOOM LEVELS. Coarser than that the renderer draws one
+// composite, because at 1:4 a storey is five pixels tall and peeling it off shows nothing. The
+// slider stays visible and goes inactive there, saying why, rather than disappearing - a control
+// that vanishes when you zoom out reads as a bug.
+
+const FLOOR_LABELS = { ground: 'Ground', first: 'First floor', all: 'All' };
+
+async function wireBaseMap() {
+    if (dom.floor) {
+        dom.floor.addEventListener('input', () => {
+            view.setFloor(iso.FLOORS[Number(dom.floor.value)] || 'all');
+            updateFloorRow();
+            requestRender();
+        });
+    }
+
+    if (dom.basemap) {
+        dom.basemap.addEventListener('change', (event) => {
+            if (event.target.name !== 'basemap') {
+                return;
+            }
+
+            view.setProjection(event.target.value);
+            updateFloorRow();
+            setStatus(view.isArt
+                ? 'Art view: selection works, placing and dragging need radar.'
+                : 'Radar view.', 'ok');
+            requestRender();
+        });
+    }
+
+    let info;
+
+    try {
+        info = await api.artInfo();
+    } catch (error) {
+        info = { available: false, reason: error.message };
+    }
+
+    if (!info.available) {
+        if (dom.basemapArt) {
+            dom.basemapArt.disabled = true;
+            dom.basemapArt.title = info.reason || 'No art renderer.';
+        }
+
+        return;
+    }
+
+    view.setArtInfo(info);
+
+    // /api/artinfo starts the renderer, which takes a second or so on a cold TileMatrix, and the
+    // radio is live the whole time. Somebody who clicked Art while it was in flight got radar and
+    // a checked Art button, which reads as the art view being broken rather than not ready yet.
+    if (dom.basemapArt && dom.basemapArt.checked) {
+        view.setProjection('art');
+        updateFloorRow();
+        requestRender();
+    }
+}
+
+/** Keeps the floor row's visibility, label and active state in step with the view. */
+function updateFloorRow() {
+    if (!dom.floorRow) {
+        return;
+    }
+
+    dom.floorRow.hidden = !view.isArt;
+
+    if (!view.isArt) {
+        return;
+    }
+
+    const composite = view.effectiveFloor !== view.floor;
+
+    dom.floorRow.classList.toggle('inactive', composite);
+    dom.floorLabel.textContent = composite
+        ? `${FLOOR_LABELS[view.floor]} (all, at this zoom)`
+        : FLOOR_LABELS[view.floor];
 }
 
 /**
@@ -1286,6 +1376,10 @@ function requestRender() {
 
 function render() {
     pending = false;
+
+    // The floor row says whether the stop it is on is the one being drawn, and that depends on
+    // the zoom - so it is updated from the render rather than only from the slider.
+    updateFloorRow();
 
     view.resize();
     view.drawMap();
@@ -2534,6 +2628,32 @@ function worldAt(event) {
     return view.toWorld(event.clientX - rect.left, event.clientY - rect.top);
 }
 
+/**
+ * The cursor in canvas pixels. hitTest wants this in art view, where the world position is a
+ * ground-plane guess and the screen position is exact - see the note at the top of hitTest.
+ */
+function screenAt(event) {
+    const rect = canvas.getBoundingClientRect();
+
+    return [event.clientX - rect.left, event.clientY - rect.top];
+}
+
+/**
+ * Whether a gesture that needs to turn a screen point into a WORLD point is allowed right now.
+ *
+ * In art view it is not. Reading and selecting work, because the editor knows where it drew every
+ * shape; putting something new at the cursor, or dragging one to it, needs the inverse projection,
+ * and the inverse is not a function without a per-pixel depth. Refusing is the honest answer - a
+ * waypoint placed three tiles from where it was clicked would look right and be wrong.
+ */
+function canPlace() {
+    return !view.isArt;
+}
+
+function refusePlacing() {
+    setStatus('Placing and dragging need the radar view; the art view can only select.', 'error');
+}
+
 function wireInput() {
     canvas.addEventListener('mousedown', (event) => {
         hideMenu();
@@ -2550,8 +2670,15 @@ function wireInput() {
         }
 
         const [worldX, worldY] = worldAt(event);
+        const [screenX, screenY] = screenAt(event);
 
         if (state.tool) {
+            if (!canPlace()) {
+                refusePlacing();
+                beginPan(event);
+                return;
+            }
+
             if (state.tool.kind === 'rect'
                 || state.tool.kind === 'adopt-rect'
                 || (state.tool.kind === 'site' && state.tool.phase === 1)) {
@@ -2568,7 +2695,8 @@ function wireInput() {
             return;
         }
 
-        const hit = hitTest(view, state.shapes, state.visible, state.selected, worldX, worldY);
+        const hit = hitTest(
+            view, state.shapes, state.visible, state.selected, worldX, worldY, screenX, screenY);
 
         if (!hit) {
             select(null);
@@ -2581,6 +2709,12 @@ function wireInput() {
         }
 
         if (!isWritable(hit.shape)) {
+            beginPan(event);
+            return;
+        }
+
+        // Selected above, so the inspector opens either way; only the DRAG is refused.
+        if (!canPlace()) {
             beginPan(event);
             return;
         }
@@ -2757,10 +2891,18 @@ function wireInput() {
     // thrown that away by the time it was chosen.
     canvas.addEventListener('dblclick', (event) => {
         const [worldX, worldY] = worldAt(event);
-        const hit = pick(view, state.shapes, state.visible, worldX, worldY);
+        const [screenX, screenY] = screenAt(event);
+        const hit = pick(view, state.shapes, state.visible, worldX, worldY, screenX, screenY);
 
         if (hit && hit.layer === 'nav-edges' && isWritable(hit)) {
             event.preventDefault();
+
+            // Inserting needs a position on the hop, which is a world point from the cursor.
+            if (!canPlace()) {
+                refusePlacing();
+                return;
+            }
+
             insertOnHop(hit, worldX, worldY);
         }
     });
@@ -2776,7 +2918,8 @@ function wireInput() {
         event.preventDefault();
 
         const [worldX, worldY] = worldAt(event);
-        const hit = pick(view, state.shapes, state.visible, worldX, worldY);
+        const [screenX, screenY] = screenAt(event);
+        const hit = pick(view, state.shapes, state.visible, worldX, worldY, screenX, screenY);
         const items = [];
 
         if (hit) {
@@ -2967,7 +3110,8 @@ function updateHover(event, worldX, worldY) {
         return;
     }
 
-    const hovered = pick(view, state.shapes, state.visible, worldX, worldY);
+    const [screenX, screenY] = screenAt(event);
+    const hovered = pick(view, state.shapes, state.visible, worldX, worldY, screenX, screenY);
 
     if (hovered !== state.hovered) {
         state.hovered = hovered;

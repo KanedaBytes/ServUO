@@ -19,6 +19,8 @@
 // edges out of it - all of those read as covered. Making it truthful needs a walkability raster
 // exported from the server's own movement rules, which is the natural follow-up.
 
+import { traceWorldRect } from './iso.js';
+
 const MAX_CELLS = 12000;
 
 let cache = null;
@@ -144,6 +146,8 @@ export function draw(ctx, view) {
 
             const [px, py] = view.toScreen(minX + c * cell, minY + r * cell);
 
+            // The cull uses the projected corner in both projections; in art a cell is a diamond
+            // whose widest point is `size` from that corner, so the same margin still holds.
             if (px + size < 0 || py + size < 0 || px > ctx.canvas.clientWidth || py > ctx.canvas.clientHeight) {
                 continue;
             }
@@ -157,7 +161,12 @@ export function draw(ctx, view) {
                 ctx.fillStyle = `rgba(255, 40, 0, ${alpha})`;
             }
 
-            ctx.fillRect(px, py, size, size);
+            // A coverage cell is a world square, so in art it is a diamond like every other rect.
+            if (traceWorldRect(ctx, view, minX + c * cell, minY + r * cell, cell, cell)) {
+                ctx.fill();
+            } else {
+                ctx.fillRect(px, py, size, size);
+            }
         }
     }
 }

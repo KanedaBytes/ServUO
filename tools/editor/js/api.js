@@ -75,6 +75,8 @@ export const api = {
     hops: () => request('GET', '/api/hops'),
     spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
+    artInfo: () => request('GET', '/api/artinfo'),
+    artStats: () => request('GET', '/api/artstats'),
 
     /**
      * Asks the shard to do something by dropping a request token.

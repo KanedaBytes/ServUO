@@ -19,6 +19,7 @@
  * code because they are per-layer editorial decisions, not geometry.
  */
 import { edgeColor } from './coverage.js';
+import { traceWorldRect } from './iso.js';
 import { HOP_CAP } from './validate.js';
 
 export const LAYERS = {
@@ -313,12 +314,13 @@ function hopColor(shape) {
 
 function labelAnchor(shape) {
     if (shape.rect) {
-        return [shape.rect[0] + shape.rect[2] / 2, shape.rect[1]];
+        // A rect has no Z in the schema, so its label sits on the ground plane like its outline.
+        return [shape.rect[0] + shape.rect[2] / 2, shape.rect[1], 0];
     }
 
     // Tile centre, matching where the marker itself is drawn. The two used to disagree by half a
     // tile, which is invisible until you are zoomed in far enough to see the marker as a circle.
-    return [shape.points[0][0] + 0.5, shape.points[0][1] + 0.5];
+    return [shape.points[0][0] + 0.5, shape.points[0][1] + 0.5, shape.points[0][2] || 0];
 }
 
 function placeLabel(ctx, view, shape, occupied) {
@@ -326,8 +328,8 @@ function placeLabel(ctx, view, shape, occupied) {
         return;
     }
 
-    const [worldX, worldY] = labelAnchor(shape);
-    const [sx, sy] = view.toScreen(worldX, worldY);
+    const [worldX, worldY, worldZ] = labelAnchor(shape);
+    const [sx, sy] = view.toScreen(worldX, worldY, worldZ);
 
     ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
 
@@ -387,16 +389,26 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
 
     if (shape.kind === 'rect') {
         const [x, y, w, h] = shape.rect;
-        const [sx, sy] = view.toScreen(x, y);
-        const sw = w * view.scale;
-        const sh = h * view.scale;
-
         const opacity = ctx.globalAlpha;
 
-        ctx.globalAlpha = opacity * (isHovered && !isSelected ? 0.3 : 0.18);
-        ctx.fillRect(sx, sy, sw, sh);
-        ctx.globalAlpha = opacity;
-        ctx.strokeRect(sx, sy, sw, sh);
+        // A world rect is a rect on screen in radar and a diamond in art, so `w * view.scale` is
+        // only a rect in one of the two. traceWorldRect paths the four projected corners and says
+        // whether it did; radar keeps the fillRect/strokeRect pair, unchanged.
+        if (traceWorldRect(ctx, view, x, y, w, h)) {
+            ctx.globalAlpha = opacity * (isHovered && !isSelected ? 0.3 : 0.18);
+            ctx.fill();
+            ctx.globalAlpha = opacity;
+            ctx.stroke();
+        } else {
+            const [sx, sy] = view.toScreen(x, y);
+            const sw = w * view.scale;
+            const sh = h * view.scale;
+
+            ctx.globalAlpha = opacity * (isHovered && !isSelected ? 0.3 : 0.18);
+            ctx.fillRect(sx, sy, sw, sh);
+            ctx.globalAlpha = opacity;
+            ctx.strokeRect(sx, sy, sw, sh);
+        }
 
         if (isSelected) {
             for (const [hx, hy] of rectHandles(shape.rect)) {
@@ -420,8 +432,8 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
 
         ctx.beginPath();
 
-        points.forEach(([x, y], i) => {
-            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+        points.forEach(([x, y, z], i) => {
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
             i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
 
@@ -435,8 +447,8 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
         ctx.stroke();
 
         if (isSelected) {
-            for (const [hx, hy] of points) {
-                const [px, py] = view.toScreen(hx + 0.5, hy + 0.5);
+            for (const [hx, hy, hz] of points) {
+                const [px, py] = view.toScreen(hx + 0.5, hy + 0.5, hz || 0);
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(px - HANDLE / 2, py - HANDLE / 2, HANDLE, HANDLE);
             }
@@ -448,10 +460,11 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     if (shape.kind === 'polyline') {
         ctx.beginPath();
 
-        shape.points.forEach(([x, y], i) => {
+        shape.points.forEach(([x, y, z], i) => {
             // Route nodes are tile centres, not corners; the half-tile offset is what makes a line
-            // drawn between them sit on the tiles the NPC actually walks.
-            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+            // drawn between them sit on the tiles the NPC actually walks. The Z rides along, so in
+            // art an edge climbing the hill out of town is drawn climbing it.
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
             i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
 
@@ -461,8 +474,8 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
 
         ctx.stroke();
 
-        for (const [x, y] of shape.points) {
-            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+        for (const [x, y, z] of shape.points) {
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
             ctx.fillStyle = isSelected ? '#ffffff' : isHovered ? '#cfe4ff' : color;
             ctx.fillRect(sx - HANDLE / 2, sy - HANDLE / 2, HANDLE, HANDLE);
         }
@@ -470,8 +483,8 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
         return;
     }
 
-    const [x, y] = shape.points[0];
-    const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+    const [x, y, z] = shape.points[0];
+    const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
 
     ctx.beginPath();
     ctx.arc(sx, sy, isSelected || isHovered ? 6 : 4, 0, Math.PI * 2);
@@ -480,8 +493,8 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
 }
 
 /** The shape a click would take right now - same rules as hitTest, ignoring handles. */
-export function pick(view, shapes, visible, worldX, worldY) {
-    const found = hitTest(view, shapes, visible, null, worldX, worldY);
+export function pick(view, shapes, visible, worldX, worldY, screenX = null, screenY = null) {
+    const found = hitTest(view, shapes, visible, null, worldX, worldY, screenX, screenY);
 
     return found ? found.shape : null;
 }
@@ -507,8 +520,13 @@ export function drawDraft(ctx, view, draft) {
     // already. Keying the drawing off `kind` conflated them.
     if (draft.rect) {
         const [x, y, w, h] = draft.rect;
-        const [sx, sy] = view.toScreen(x, y);
-        ctx.strokeRect(sx, sy, w * view.scale, h * view.scale);
+
+        if (traceWorldRect(ctx, view, x, y, w, h)) {
+            ctx.stroke();
+        } else {
+            const [sx, sy] = view.toScreen(x, y);
+            ctx.strokeRect(sx, sy, w * view.scale, h * view.scale);
+        }
     }
 
     // A rect-drag tool starts with no points at all, which the early return above used to treat
@@ -516,15 +534,15 @@ export function drawDraft(ctx, view, draft) {
     if (draft.kind !== 'rect' && draft.points.length > 0) {
         ctx.beginPath();
 
-        draft.points.forEach(([x, y], i) => {
-            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+        draft.points.forEach(([x, y, z], i) => {
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
             i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
 
         ctx.stroke();
 
-        for (const [x, y] of draft.points) {
-            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5);
+        for (const [x, y, z] of draft.points) {
+            const [sx, sy] = view.toScreen(x + 0.5, y + 0.5, z || 0);
             ctx.fillRect(sx - 3, sy - 3, 6, 6);
         }
     }
@@ -574,7 +592,7 @@ export function drawEntities(ctx, view, entities) {
             continue;
         }
 
-        const [sx, sy] = view.toScreen(entity.x + 0.5, entity.y + 0.5);
+        const [sx, sy] = view.toScreen(entity.x + 0.5, entity.y + 0.5, entity.z || 0);
 
         // Culled, unlike the original. It had no cull and no cap because its entity list was
         // bounded by design; ours can be pointed at a whole town with [LiveMap all.
@@ -589,6 +607,9 @@ export function drawEntities(ctx, view, entities) {
             ctx.moveTo(sx, sy);
 
             for (let i = 2; i < entity.route.length; i += 2) {
+                // A route is a flat [x, y, ...] list with no Z, so it draws on the ground under
+                // the bot rather than at its feet. Close enough to read as a route; a Z per step
+                // would be three times the snapshot for a line.
                 const [rx, ry] = view.toScreen(entity.route[i] + 0.5, entity.route[i + 1] + 0.5);
                 ctx.lineTo(rx, ry);
             }
@@ -651,23 +672,67 @@ function rectHandles([x, y, w, h]) {
  * What is under the cursor, nearest first. Handles beat bodies so a corner is always grabbable
  * even when it sits inside another shape.
  */
-export function hitTest(view, shapes, visible, selected, worldX, worldY) {
+export function hitTest(view, shapes, visible, selected, worldX, worldY, screenX = null, screenY = null) {
     const slack = GRAB / view.scale;
+
+    // IN ART, PICKING HAPPENS IN SCREEN SPACE.
+    //
+    // The isometric inverse is not a function - a screen pixel names a world tile only once you
+    // assume a Z - so `worldX, worldY` in art view is the GROUND-PLANE guess and is off by z*4/44
+    // tiles, about 2.7 in Britain. Comparing in world space there would select whatever happens to
+    // be three tiles north-west of what you clicked.
+    //
+    // But the editor drew every one of these shapes itself, and it drew them by projecting their
+    // own Z. So the screen position of each candidate is known exactly, and the cursor's screen
+    // position is known exactly, and the comparison is just a distance. No depth buffer needed.
+    // What this does NOT give is a world position for a point the editor did not draw, which is
+    // why placing and dragging stay disabled in art view until the renderer can hand over a pick
+    // map.
+    const art = Boolean(view.isArt) && screenX !== null && screenY !== null;
+
+    const at = (point) => view.toScreen(point[0], point[1], point[2] || 0);
+
+    const hits = art
+        ? (point) => {
+            const [sx, sy] = at(point);
+            return Math.abs(sx - screenX) <= GRAB && Math.abs(sy - screenY) <= GRAB;
+        }
+        : (point) => near(point, worldX, worldY, slack);
+
+    const hitsSegment = art
+        ? (a, b) => {
+            const [ax, ay] = at([a[0] + 0.5, a[1] + 0.5, a[2]]);
+            const [bx, by] = at([b[0] + 0.5, b[1] + 0.5, b[2]]);
+
+            // nearSegment offsets its ends to tile centres, so the projected pair is passed back
+            // already offset and then un-offset. Ugly, and cheaper than a second copy of the
+            // point-to-segment maths.
+            return nearSegment([ax - 0.5, ay - 0.5], [bx - 0.5, by - 0.5], screenX, screenY, GRAB);
+        }
+        : (a, b) => nearSegment(a, b, worldX, worldY, slack);
+
+    /** Is the cursor inside a world rect, projected? A rect is a diamond in art. */
+    const insideRect = art
+        ? ([x, y, w, h]) => insidePolygon(
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map((corner) => at(corner)),
+            screenX,
+            screenY)
+        : ([x, y, w, h]) => worldX >= x && worldX <= x + w && worldY >= y && worldY <= y + h;
 
     if (selected && visible.has(selected.layer) && selected.map === view.facet.name) {
         if (selected.kind === 'rect') {
             const handles = rectHandles(selected.rect);
 
             for (let i = 0; i < handles.length; i++) {
-                if (near(handles[i], worldX, worldY, slack)) {
+                if (hits(handles[i])) {
                     return { shape: selected, mode: 'resize', index: i };
                 }
             }
         } else {
             for (let i = 0; i < selected.points.length; i++) {
-                const [px, py] = selected.points[i];
+                const [px, py, pz] = selected.points[i];
 
-                if (near([px + 0.5, py + 0.5], worldX, worldY, slack)) {
+                if (hits([px + 0.5, py + 0.5, pz])) {
                     return { shape: selected, mode: 'node', index: i };
                 }
             }
@@ -712,9 +777,9 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
         }
 
         for (let n = 0; n < shape.points.length; n++) {
-            const [px, py] = shape.points[n];
+            const [px, py, pz] = shape.points[n];
 
-            if (near([px + 0.5, py + 0.5], worldX, worldY, slack)) {
+            if (hits([px + 0.5, py + 0.5, pz])) {
                 return { shape, mode: shape.kind === 'point' ? 'move' : 'node', index: n };
             }
         }
@@ -745,7 +810,7 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
         }
 
         for (let n = 1; n < shape.points.length; n++) {
-            if (nearSegment(shape.points[n - 1], shape.points[n], worldX, worldY, slack)) {
+            if (hitsSegment(shape.points[n - 1], shape.points[n])) {
                 return { shape, mode: 'body' };
             }
         }
@@ -779,12 +844,20 @@ export function hitTest(view, shapes, visible, selected, worldX, worldY) {
 
         const [x, y, w, h] = shape.rect;
 
-        if (worldX < x || worldX > x + w || worldY < y || worldY > y + h) {
+        if (!insideRect(shape.rect)) {
             continue;
         }
 
-        if (shape.kind === 'poly' && !insidePolygon(shape.points, worldX, worldY)) {
-            continue;
+        // The bounding box rejected almost everything above; this is the real test. In art the
+        // polygon's own vertices are projected too, each at its own Z.
+        if (shape.kind === 'poly') {
+            const inside = art
+                ? insidePolygon(shape.points.map((point) => at(point)), screenX, screenY)
+                : insidePolygon(shape.points, worldX, worldY);
+
+            if (!inside) {
+                continue;
+            }
         }
 
         if (w * h < bestArea) {

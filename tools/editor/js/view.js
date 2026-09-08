@@ -1,12 +1,34 @@
-// The camera, and the tile pyramid underneath it.
+// The camera, and the tile pyramids underneath it.
 //
 // World coordinates are game tiles. Screen coordinates are CSS pixels. `scale` is screen pixels
-// per game tile, so scale 1 is the deepest rendered zoom - one pixel per tile - and anything above
-// that is nearest-neighbour magnification of the same images. Radar colour is one flat colour per
-// tile, so magnifying loses nothing; rendering deeper levels would cost four times the disk for no
-// extra detail.
+// per game tile in BOTH projections, which is the whole reason the art view was a small change:
+// every labelAt threshold, cull margin and hit-test slack elsewhere in the editor keeps the
+// meaning it already had.
+//
+// RADAR is one flat colour per tile from radarcol.mul, a facet-wide pyramid rendered once. scale 1
+// is its deepest level - one pixel per tile - and anything above that is nearest-neighbour
+// magnification of the same images. Rendering deeper levels would cost four times the disk for no
+// extra detail, because there is no more radar data.
+//
+// ART is the real client art drawn isometrically, twenty-two iso pixels per world tile per axis,
+// so 1:1 art is scale 22. It cannot be a facet-wide pyramid - Trammel's iso canvas is 61
+// gigapixels per floor - so its tiles are rendered by the bridge on demand and cached forever, and
+// only the deepest few levels exist at all. Below those the art view draws radar, which is what
+// radar is good at.
+//
+// RADAR IS ALWAYS DRAWN UNDER ART. A tile that has not been rendered yet, one off the edge of the
+// map, and one the renderer refused all look the same to this file: nothing is drawn and the radar
+// shows through. That is why there is no placeholder protocol here.
+
+import * as iso from './iso.js';
 
 const TILE_SIZE = 256;
+
+/** Radar magnifies a flat colour, so past 16 there is nothing more to see. */
+const MAX_RADAR_SCALE = 16;
+
+/** Art tops out a little past 1:1 (scale 22), which is where a tile is 44px across. */
+const MAX_ART_SCALE = 32;
 
 /*
  * Where to open a facet. Britannia is 7168x4096 and almost entirely empty of anything this editor
@@ -34,6 +56,18 @@ export class View {
         this.scale = 1;
         this.images = new Map();
         this.onTileLoaded = null;
+
+        // 'radar' or 'art'. Art needs `this.art` - what /api/artinfo said the renderer is - so it
+        // can address a tile; without that it stays radar however it is set.
+        this.projection = 'radar';
+        this.floor = 'all';
+        this.art = null;
+
+        // Art tiles are rendered on request, so a failure can be a timeout rather than a fact.
+        // Radar's onerror deliberately caches the miss forever; art's has to be able to try again,
+        // or one slow tile is blank for the rest of the session. Bounded, so a tile the renderer
+        // genuinely cannot draw is not asked for on every frame.
+        this.artFailures = new Map();
     }
 
     setFacet(facet) {
@@ -50,6 +84,35 @@ export class View {
         this.clampCenter();
     }
 
+    /** What the renderer told the bridge about itself, or null if there is no renderer. */
+    setArtInfo(info) {
+        this.art = info && info.version ? info : null;
+
+        if (!this.art && this.projection === 'art') {
+            this.projection = 'radar';
+        }
+    }
+
+    setProjection(projection) {
+        this.projection = projection === 'art' && this.art ? 'art' : 'radar';
+        this.scale = Math.min(this.scale, this.maxScale());
+        this.clampCenter();
+    }
+
+    setFloor(floor) {
+        this.floor = iso.FLOORS.indexOf(floor) >= 0 ? floor : 'all';
+    }
+
+    get isArt() {
+        return this.projection === 'art' && this.art !== null;
+    }
+
+    maxScale() {
+        return this.isArt ? MAX_ART_SCALE : MAX_RADAR_SCALE;
+    }
+
+    // ---- radar addressing ----------------------------------------------------------------------
+
     /** Level whose pixels are closest to the current scale, clamped to what was rendered. */
     get zoom() {
         const wanted = this.maxZoom + Math.floor(Math.log2(this.scale));
@@ -61,14 +124,89 @@ export class View {
         return TILE_SIZE * 2 ** (this.maxZoom - this.zoom);
     }
 
-    toScreen(x, y) {
+    // ---- art addressing ------------------------------------------------------------------------
+
+    get artMaxLevel() {
+        return this.art ? this.art.maxLevel : 0;
+    }
+
+    /**
+     * The art level closest to the current scale. 1:1 is scale 22, and each level out halves it,
+     * so the level is maxLevel + floor(log2(scale / 22)) - the same "prefer the coarser tile and
+     * magnify" rule the radar zoom uses.
+     */
+    get artLevel() {
+        const max = this.artMaxLevel;
+        const wanted = max + Math.floor(Math.log2(this.scale / iso.HALF_WIDTH));
+
+        return Math.max(iso.minArtLevel(max), Math.min(max, wanted));
+    }
+
+    /** True when the current scale is inside the range that has art at all. */
+    get artAvailable() {
+        if (!this.isArt) {
+            return false;
+        }
+
+        const max = this.artMaxLevel;
+        return max + Math.floor(Math.log2(this.scale / iso.HALF_WIDTH)) >= iso.minArtLevel(max);
+    }
+
+    /** The floor actually drawn: coarse levels carry only the composite. */
+    get effectiveFloor() {
+        return iso.hasFloors(this.artLevel, this.artMaxLevel) ? this.floor : 'all';
+    }
+
+    /** Screen pixels per iso pixel. */
+    get isoScale() {
+        return this.scale / iso.HALF_WIDTH;
+    }
+
+    isoToScreen(ix, iy) {
+        const s = this.isoScale;
+        const centre = iso.worldToIso(this.centerX, this.centerY, 0);
+
+        return [
+            (ix - centre.ix) * s + this.canvas.clientWidth / 2,
+            (iy - centre.iy) * s + this.canvas.clientHeight / 2
+        ];
+    }
+
+    // ---- the projection ------------------------------------------------------------------------
+
+    /**
+     * Z is honoured in the art projection and ignored in radar, exactly as the two maps do. A
+     * caller with no Z passes none and gets the ground plane.
+     */
+    toScreen(x, y, z = 0) {
+        if (this.isArt) {
+            const { ix, iy } = iso.worldToIso(x, y, z);
+            return this.isoToScreen(ix, iy);
+        }
+
         return [
             (x - this.centerX) * this.scale + this.canvas.clientWidth / 2,
             (y - this.centerY) * this.scale + this.canvas.clientHeight / 2
         ];
     }
 
+    /**
+     * The inverse. In art this ANSWERS FOR THE GROUND PLANE and is off by z*4/44 tiles for
+     * anything standing above it - about 2.7 tiles in Britain. Good enough to pan and zoom with,
+     * which is all it is used for in art view; picking goes through projected screen anchors
+     * instead, and placing and dragging are disabled.
+     */
     toWorld(px, py) {
+        if (this.isArt) {
+            const s = this.isoScale;
+            const centre = iso.worldToIso(this.centerX, this.centerY, 0);
+            const ix = (px - this.canvas.clientWidth / 2) / s + centre.ix;
+            const iy = (py - this.canvas.clientHeight / 2) / s + centre.iy;
+            const { x, y } = iso.isoToWorld(ix, iy, 0);
+
+            return [x, y];
+        }
+
         return [
             (px - this.canvas.clientWidth / 2) / this.scale + this.centerX,
             (py - this.canvas.clientHeight / 2) / this.scale + this.centerY
@@ -79,7 +217,7 @@ export class View {
     zoomAt(px, py, factor) {
         const [worldX, worldY] = this.toWorld(px, py);
 
-        this.scale = clamp(this.scale * factor, this.minScale(), 16);
+        this.scale = clamp(this.scale * factor, this.minScale(), this.maxScale());
 
         const [afterX, afterY] = this.toWorld(px, py);
 
@@ -88,9 +226,16 @@ export class View {
         this.clampCenter();
     }
 
+    /**
+     * Converts the screen delta through the projection rather than dividing by scale, because in
+     * art a drag to the right is a move along both world axes at once.
+     */
     panBy(dx, dy) {
-        this.centerX -= dx / this.scale;
-        this.centerY -= dy / this.scale;
+        const [fromX, fromY] = this.toWorld(0, 0);
+        const [toX, toY] = this.toWorld(dx, dy);
+
+        this.centerX -= toX - fromX;
+        this.centerY -= toY - fromY;
         this.clampCenter();
     }
 
@@ -103,7 +248,7 @@ export class View {
     /** Jump to a place, optionally changing zoom. */
     goTo(x, y, scale = null) {
         if (scale !== null) {
-            this.scale = Math.max(Math.min(scale, 16), this.minScale());
+            this.scale = Math.max(Math.min(scale, this.maxScale()), this.minScale());
         }
 
         this.centerOn(x, y);
@@ -116,10 +261,15 @@ export class View {
     }
 
     minScale() {
-        // Never zoom out past the whole facet fitting on screen.
+        // Never zoom out past the whole facet fitting on screen. In art the facet is a diamond
+        // (width + height) tiles across on both screen axes, not a width x height rectangle.
+        const across = this.isArt
+            ? { x: this.facet.width + this.facet.height, y: this.facet.width + this.facet.height }
+            : { x: this.facet.width, y: this.facet.height };
+
         return Math.min(
-            this.canvas.clientWidth / this.facet.width,
-            this.canvas.clientHeight / this.facet.height
+            this.canvas.clientWidth / across.x,
+            this.canvas.clientHeight / across.y
         ) * 0.9;
     }
 
@@ -153,25 +303,55 @@ export class View {
 
     drawMap() {
         const ctx = this.ctx;
-        const width = this.canvas.clientWidth;
-        const height = this.canvas.clientHeight;
 
         ctx.imageSmoothingEnabled = false;
         ctx.fillStyle = '#0a0c10';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
+
+        this.drawRadarMap();
+
+        if (this.isArt && this.artAvailable) {
+            this.drawArtMap();
+        }
+    }
+
+    /**
+     * The radar pyramid. In art this is the underlay, drawn through a canvas matrix rather than a
+     * second tile loop: at z=0 the isometric projection is linear, so the same world-space loop
+     * places a radar tile as a rotated square with no other change.
+     */
+    drawRadarMap() {
+        const ctx = this.ctx;
+        const width = this.canvas.clientWidth;
+        const height = this.canvas.clientHeight;
 
         const span = this.worldPerTile;
-        const [left, top] = this.toWorld(0, 0);
-        const [right, bottom] = this.toWorld(width, height);
 
-        const firstX = Math.max(0, Math.floor(left / span));
-        const firstY = Math.max(0, Math.floor(top / span));
-        const lastX = Math.floor(Math.min(right, this.facet.width - 1) / span);
-        const lastY = Math.floor(Math.min(bottom, this.facet.height - 1) / span);
+        const bounds = this.worldBounds();
+        const firstX = Math.max(0, Math.floor(bounds.left / span));
+        const firstY = Math.max(0, Math.floor(bounds.top / span));
+        const lastX = Math.floor(Math.min(bounds.right, this.facet.width - 1) / span);
+        const lastY = Math.floor(Math.min(bounds.bottom, this.facet.height - 1) / span);
+
+        const art = this.isArt;
+
+        if (art) {
+            ctx.save();
+
+            const ratio = window.devicePixelRatio || 1;
+            const [a, b, c, d] = iso.isoMatrix(this.scale);
+            const centre = iso.worldToIso(this.centerX, this.centerY, 0);
+            const s = this.isoScale;
+            const e = -centre.ix * s + width / 2;
+            const f = -centre.iy * s + height / 2;
+
+            ctx.setTransform(a * ratio, b * ratio, c * ratio, d * ratio, e * ratio, f * ratio);
+        }
 
         // Draw a hair wider than the tile: adjacent tiles otherwise show a seam at fractional
-        // scales, where two neighbours round to screen positions a pixel apart.
-        const size = span * this.scale + 1;
+        // scales, where two neighbours round to screen positions a pixel apart. Under the art
+        // matrix the units are world tiles, so the fudge is one screen pixel's worth of them.
+        const size = art ? span + 1 / this.scale : span * this.scale + 1;
 
         for (let tx = firstX; tx <= lastX; tx++) {
             for (let ty = firstY; ty <= lastY; ty++) {
@@ -181,10 +361,81 @@ export class View {
                     continue;
                 }
 
-                const [sx, sy] = this.toScreen(tx * span, ty * span);
+                if (art) {
+                    ctx.drawImage(image, tx * span, ty * span, size, size);
+                } else {
+                    const [sx, sy] = this.toScreen(tx * span, ty * span);
+                    ctx.drawImage(image, sx, sy, size, size);
+                }
+            }
+        }
+
+        if (art) {
+            ctx.restore();
+        }
+    }
+
+    /** The isometric art, in canvas-pixel space rather than world space. */
+    drawArtMap() {
+        const ctx = this.ctx;
+        const width = this.canvas.clientWidth;
+        const height = this.canvas.clientHeight;
+
+        const level = this.artLevel;
+        const max = this.artMaxLevel;
+        const floor = this.effectiveFloor;
+        const span = (this.art.tileSize || TILE_SIZE) * iso.divisor(level, max);
+        const size = span * this.isoScale + 1;
+
+        const centre = iso.worldToIso(this.centerX, this.centerY, 0);
+        const s = this.isoScale;
+
+        const left = (0 - width / 2) / s + centre.ix - iso.originX(this.facet.height);
+        const right = (width - width / 2) / s + centre.ix - iso.originX(this.facet.height);
+        const top = (0 - height / 2) / s + centre.iy - iso.originY();
+        const bottom = (height - height / 2) / s + centre.iy - iso.originY();
+
+        const firstX = Math.max(0, Math.floor(left / span));
+        const firstY = Math.max(0, Math.floor(top / span));
+        const lastX = Math.floor(right / span);
+        const lastY = Math.floor(bottom / span);
+
+        for (let tx = firstX; tx <= lastX; tx++) {
+            for (let ty = firstY; ty <= lastY; ty++) {
+                const image = this.artTile(level, floor, tx, ty);
+
+                if (!image || !image.complete || image.naturalWidth === 0) {
+                    continue;
+                }
+
+                const [sx, sy] = this.isoToScreen(
+                    tx * span + iso.originX(this.facet.height),
+                    ty * span + iso.originY()
+                );
+
                 ctx.drawImage(image, sx, sy, size, size);
             }
         }
+    }
+
+    /** The world rectangle on screen. In art the corners of the viewport are not the corners. */
+    worldBounds() {
+        const width = this.canvas.clientWidth;
+        const height = this.canvas.clientHeight;
+
+        const corners = [
+            this.toWorld(0, 0),
+            this.toWorld(width, 0),
+            this.toWorld(0, height),
+            this.toWorld(width, height)
+        ];
+
+        return {
+            left: Math.min(...corners.map(c => c[0])),
+            right: Math.max(...corners.map(c => c[0])),
+            top: Math.min(...corners.map(c => c[1])),
+            bottom: Math.max(...corners.map(c => c[1]))
+        };
     }
 
     tile(tx, ty) {
@@ -201,6 +452,42 @@ export class View {
 
         // A missing tile is normal at the edges; cache the failure so it is not re-fetched forever.
         image.onerror = () => {};
+
+        this.images.set(key, image);
+
+        return image;
+    }
+
+    /**
+     * An art tile. The request may take a second: the bridge renders a miss before it answers, so
+     * the browser's own connection cap is what throttles the queue.
+     */
+    artTile(level, floor, tx, ty) {
+        const key = `iso/${this.facet.name}/v${this.art.version}/${floor}/${level}/${tx}/${ty}`;
+        const cached = this.images.get(key);
+
+        if (cached) {
+            return cached;
+        }
+
+        const image = new Image();
+        image.src = `/tiles/${key}.png`;
+        image.onload = () => {
+            this.artFailures.delete(key);
+            this.onTileLoaded && this.onTileLoaded();
+        };
+
+        // Unlike radar, drop it so a later pan can ask again - a 503 here usually means the render
+        // ran past the bridge's timeout, not that the tile does not exist. Bounded, so a tile the
+        // renderer truly cannot draw stops being asked for.
+        image.onerror = () => {
+            const failures = (this.artFailures.get(key) || 0) + 1;
+            this.artFailures.set(key, failures);
+
+            if (failures < 3) {
+                this.images.delete(key);
+            }
+        };
 
         this.images.set(key, image);
 

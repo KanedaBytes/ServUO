@@ -24,6 +24,7 @@ const { project, unproject } = require('./project.js');
 const spawners = require('./spawners.js');
 const reference = require('./reference.js');
 const whitelist = require('./whitelist.js');
+const { ArtRenderer, parseTilePath } = require('./artrenderer.js');
 
 const DEFAULT_PORT = 8081;
 const HOST = '127.0.0.1';
@@ -44,6 +45,12 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload'
 ]);
+
+// The isometric art tiles are rendered on demand rather than exported in a batch, because a
+// facet-wide iso render is 61 gigapixels per floor. This owns the child process that draws them;
+// it starts on the first art tile anybody asks for and not before, so a session that never leaves
+// radar never launches it. See artrenderer.js.
+const art = new ArtRenderer({ log: (line) => console.log(line) });
 
 // validate.js is a browser ES module and this file is CommonJS, so it arrives as a promise. That
 // is fine: every place it is awaited is already async, and awaiting a settled promise is free.
@@ -275,6 +282,29 @@ const ROUTES = {
         });
     },
 
+    /**
+     * What the art renderer is, so the editor can address a tile without holding a second copy of
+     * the projection or the level maths. `available: false` is a normal answer - the tool may not
+     * be built - and the editor stays in radar rather than offering a view it cannot draw.
+     */
+    '/api/artinfo': (request, response) => {
+        if (!art.available) {
+            sendJson(response, 200, { available: false, reason: 'MapExport.exe has not been built.' });
+            return;
+        }
+
+        // Started lazily so a bridge nobody switches to art never launches a renderer, but
+        // /api/artinfo is asked once at boot, and the answer needs the handshake.
+        art.start().then(
+            (info) => sendJson(response, 200, Object.assign({ available: true }, info)),
+            (error) => sendJson(response, 200, { available: false, reason: error.message }));
+    },
+
+    /** Cached and rendered counts, and how long the last tile took. */
+    '/api/artstats': (request, response) => {
+        sendJson(response, 200, art.counters());
+    },
+
     '/api/shapes': (request, response) => {
         const shapes = project({
             navigation: readJson(whitelist.FILES.navigation) || {},
@@ -490,6 +520,14 @@ function handleRequest(request, response) {
         return;
     }
 
+    // An art tile is rendered on a miss, so it cannot be served as a static file: the request
+    // is held until the renderer answers. Radar tiles fall through to serveStatic as they always
+    // have - they are exported ahead of time and there is nothing to render.
+    if (pathname.startsWith('/tiles/iso/')) {
+        serveArtTile(pathname, response);
+        return;
+    }
+
     if (pathname.startsWith('/api/ack/')) {
         const file = whitelist.resolveAck(pathname.slice('/api/ack/'.length));
 
@@ -503,6 +541,44 @@ function handleRequest(request, response) {
     }
 
     serveStatic(pathname, response);
+}
+
+/**
+ * Serves one isometric art tile, rendering it first if it is not cached.
+ *
+ * A miss BLOCKS this request rather than answering with a placeholder, which is why there is no
+ * placeholder protocol anywhere in the editor: the browser's Image simply takes a moment, and the
+ * radar underlay is what is on screen until it arrives. A render that runs past the renderer's
+ * timeout answers 503, and the editor drops that tile from its cache so a later pan asks again.
+ */
+function serveArtTile(pathname, response) {
+    const parts = parseTilePath(pathname);
+
+    if (!parts) {
+        sendError(response, 400, 'Bad tile path.');
+        return;
+    }
+
+    art.tile(parts.floor, parts.level, parts.x, parts.y).then(
+        (file) => {
+            fs.readFile(file, (error, data) => {
+                if (error) {
+                    sendError(response, 500, 'The tile was rendered but could not be read.');
+                    return;
+                }
+
+                response.writeHead(200, {
+                    'Content-Type': 'image/png',
+                    'Content-Length': data.length,
+                    // Immutable: the renderer version is in the path, so a change of pixels is a
+                    // change of URL and there is nothing to invalidate.
+                    'Cache-Control': 'public, max-age=86400'
+                });
+
+                response.end(data);
+            });
+        },
+        (error) => sendError(response, 503, error.message));
 }
 
 /**
@@ -851,11 +927,25 @@ function main() {
         if (!fs.existsSync(path.join(__dirname, 'tiles'))) {
             console.log('No tiles yet - run tools/editor/export-tiles.ps1');
         }
+
+        if (!art.available) {
+            console.log('No art renderer - build it with: dotnet build tools/MapExport/MapExport.csproj -c Release');
+        }
     });
+
+    // The renderer is a child process holding the client files open, so it has to go when the
+    // bridge does. Without this a Ctrl-C leaves a MapExport.exe behind, and the next run's child
+    // competes with it for the same cache files.
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+        process.on(signal, () => {
+            art.stop();
+            process.exit(0);
+        });
+    }
 }
 
 if (require.main === module) {
     main();
 }
 
-module.exports = { handleRequest, isSameSite, hashOf, ACK_TIMEOUT_MS };
+module.exports = { handleRequest, isSameSite, hashOf, ACK_TIMEOUT_MS, art };

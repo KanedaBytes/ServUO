@@ -416,6 +416,35 @@ Map tiles are derived data, gitignored, and safe to render while the shard is up
 builds its `Server.csproj` reference into its own folder rather than the repo root. A second facet
 is another run: `export-tiles.ps1 -Facet Felucca`.
 
+**The art view (5d-2).** The base map has two settings. **Radar** is the facet-wide pyramid above.
+**Art** is the real client art drawn isometrically, with a floor slider - Ground, First floor, All -
+that peels the roof off a building so its interior is visible.
+
+There is no batch export of the art and there cannot be: Trammel's isometric canvas is
+`(7168 + 4096) x 22 = 247,808` pixels on each side, 61 gigapixels per floor. So a tile is rendered
+the first time somebody looks at it and cached forever - the bridge holds the request while
+`MapExport.exe --serve` draws it, and radar shows through underneath until it arrives. Britain
+becomes art because you look at Britain; Trinsic becomes art by panning there. Roughly 13 ms a tile
+at 1:1 and 260 ms at 1:8, so a screenful is well under a second.
+`export-tiles.ps1 -Prerender 1380,1495,365,345` warms the whole of Britain - 16,608 tiles, 3m26s,
+873 MB - and is never required. That number is the argument FOR on demand: it is one town out of a
+facet, and nobody pays it for the map they never open.
+
+Art is read-only this session: selecting works, because the editor knows where it drew every shape,
+but placing and dragging need the inverse projection and the inverse is not a function - a screen
+pixel names a world tile only once you assume a Z, which is 2.7 tiles of error where Britain stands.
+A per-pixel pick map from the renderer is the fix.
+
+**The named next step for the art view is stretched terrain.** The client stretches each land tile
+across its four corner Zs using `texmaps.mul`; we draw the flat 44x44 diamond at the tile's own Z,
+so hills terrace rather than slope. Britain's town is level enough not to notice; the mountain west
+of it is visibly stepped. The renderer version is a path segment in the cache, so landing it
+orphans the flat tiles rather than leaving a mixed cache.
+
+Also absent, and for a different reason: **anything the shard places at runtime**, `[Decorate`
+included. The forge and anvil at `brit-forge` are decoration addons, so the smithy yard draws as
+empty paving with the nav markers on it. Live entities still draw, from `entities.json`.
+
 A reload ack now carries the shard's validator strings themselves (`errors` and `warnings`), not
 just a count of them, so the editor can say which problem to fix rather than that there are three.
 

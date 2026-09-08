@@ -5,7 +5,12 @@ using System.IO.Compression;
 namespace Server.Custom.MapExport
 {
     /// <summary>
-    /// A minimal 8-bit truecolour PNG encoder.
+    /// A minimal 8-bit truecolour PNG encoder, RGB or RGBA.
+    ///
+    /// The radar pyramid writes RGB; the isometric renderer writes RGBA, because a rectangular
+    /// tile over a diamond projection is mostly empty at its corners and opaque black there would
+    /// read as real map. Transparency is also what lets the radar underlay show through an art
+    /// tile that only partly covers the world.
     ///
     /// Hand-rolled because the repo has no imaging dependency and does not want one:
     /// System.Drawing.Common is Windows-only from .NET 7 onward, and this shard is meant to run
@@ -24,6 +29,16 @@ namespace Server.Custom.MapExport
 
         public static void Write(string path, byte[] pixels, int width, int height)
         {
+            Write(path, pixels, width, height, 3);
+        }
+
+        public static void Write(string path, byte[] pixels, int width, int height, int bytesPerPixel)
+        {
+            if (bytesPerPixel != 3 && bytesPerPixel != 4)
+            {
+                throw new ArgumentOutOfRangeException("bytesPerPixel", "Only 3 (RGB) and 4 (RGBA) are supported.");
+            }
+
             string directory = Path.GetDirectoryName(path);
 
             if (!String.IsNullOrEmpty(directory))
@@ -39,13 +54,13 @@ namespace Server.Custom.MapExport
                 WriteInt32(header, 0, width);
                 WriteInt32(header, 4, height);
                 header[8] = 8;  // bit depth
-                header[9] = 2;  // colour type 2 = truecolour RGB
+                header[9] = (byte)(bytesPerPixel == 4 ? 6 : 2); // 2 = truecolour RGB, 6 = RGB + alpha
                 header[10] = 0; // deflate
                 header[11] = 0; // adaptive filtering
                 header[12] = 0; // no interlace
 
                 WriteChunk(file, "IHDR", header);
-                WriteChunk(file, "IDAT", Compress(pixels, width, height));
+                WriteChunk(file, "IDAT", Compress(pixels, width, height, bytesPerPixel));
                 WriteChunk(file, "IEND", new byte[0]);
             }
         }
@@ -54,9 +69,9 @@ namespace Server.Custom.MapExport
         /// Filters each scanline with type 1 (Sub) and deflates the lot, wrapped in a zlib
         /// container that DeflateStream does not provide on its own.
         /// </summary>
-        private static byte[] Compress(byte[] pixels, int width, int height)
+        private static byte[] Compress(byte[] pixels, int width, int height, int bytesPerPixel)
         {
-            int stride = width * 3;
+            int stride = width * bytesPerPixel;
 
             var raw = new byte[(stride + 1) * height];
 
@@ -69,7 +84,7 @@ namespace Server.Custom.MapExport
 
                 for (int x = 0; x < stride; x++)
                 {
-                    byte left = x >= 3 ? pixels[source + x - 3] : (byte)0;
+                    byte left = x >= bytesPerPixel ? pixels[source + x - bytesPerPixel] : (byte)0;
                     raw[target + 1 + x] = (byte)(pixels[source + x] - left);
                 }
             }
