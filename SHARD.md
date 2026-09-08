@@ -139,6 +139,39 @@ transitions it between `Traveler` and `Idle` when its phase expires and it is no
 about it survives a restart. There is no spawner, no session curve and no population yet; that is
 the population session.
 
+Rules in force for bots and occupied tiles, each with its row in the README's Deviations table:
+
+- **A bot walks through other bots and daily-life actors, free** - uo-offline's `CheckShove => true`,
+  with the reason recorded (the engine's full-stamina rule jammed their plazas). A `BaseCreature` is
+  refused before its `CheckShove` is asked, so the *shoved* side consents through `BotShove`. A real
+  player shoving a bot pays the player rule. **A bot yields to real players and stock NPCs** - a
+  vendor, a guard, an animal - because those two `OnMoveOver` overrides are upstream files; when a
+  walker is wedged, its rung log names what stands on the goal tile or within two tiles of it.
+- **An arrival can be a place**: `NavArrival.range` rides on the route's last step and the walker
+  accepts arrival from inside it. The forge arrivals author 2 (uo-offline's `DriftArriveRange`);
+  banks, shops and guard posts keep the tile. A shop spot is scattered by `Custom.NavArrivalScatter`
+  and validated for standing, never for reachability, and the last-hop wedges the probes still show
+  are that: a scattered spot behind a counter with nobody to name.
+- **A crafting station's stand tile is chosen on arrival**, for what the bot came to do: every
+  standable tile inside the arrivals' ranges with the trade's fixtures in crafting reach, free
+  first, nearest second; an occupied tile when the apron is full; another station of its kind in
+  the same town only when reach holds no standable tile at all. No waiting state.
+- **A laden gatherer delivers from where its walk ends** when a buyer is within twelve tiles of
+  the destination, arrived or not - upstream's `DeliverMaterials` after a stalled drift.
+- **The walker has uo-offline's frozen watchdog**: two tiles in six hop timeouts (120 s, not their
+  60 s, because our rungs are 20 s apart and a shorter window pre-empts a Skip) sends a rooted
+  mobile straight to the top rung.
+- **The probes** derive the life window from the graph and pin every probe bot's home to the spawn
+  town; the life probe counts a teleport only on a bot still wearing the Traveler brain; the work
+  probe expects the packed forge - first smith on the station tile, the ore reaching whichever
+  smith is at the bench, a second smith from town settling on a free tile and working.
+
+Running a chain headlessly: set `BotSmokeOnStart=True` in `Config/Custom.cfg`, start `ServUO.exe`
+with its console redirected to a file, drop `Data/Live/requests/livemap-on.token` (body `2 custom`)
+so `Data/Live/botlog.json` records each bot's route, rung and arrival events, and read the console
+for the five result lines. Put the flag back to `False` before committing - a `git add -A` at a
+checkpoint has shipped it as `True` once already.
+
 ## Staff commands
 
 | Command | Access | Effect |
