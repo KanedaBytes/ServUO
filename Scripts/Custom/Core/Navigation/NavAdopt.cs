@@ -64,12 +64,18 @@ namespace Server.Custom
         /// <summary>
         /// How far a join may reach to find one of our waypoints to land on.
         ///
-        /// The hop cap: a join is an ordinary edge once it is written, so it has to be one the
-        /// walker can plan. Beyond this there is nothing to join to and the edge is not proposed.
+        /// A HUNDRED TILES, not the hop cap. The first version used the cap, reasoning that a join
+        /// is an ordinary edge once written - but a join is not written as one edge. It is WALKED
+        /// and subdivided like any other, so the only thing the reach has to satisfy is that a
+        /// road exists, not that it fits in one hop.
+        ///
+        /// Using the cap meant a join needed one of our waypoints within twelve tiles of the
+        /// crossing edge's inside end, and our Britain graph does not reach the south gate. One
+        /// adopt of 481 waypoints made exactly ONE join and left 371 of them unreachable.
         /// </summary>
         public static int JoinReach
         {
-            get { return NavigationSystem.HopMaxTiles; }
+            get { return Config.Get("Custom.NavAdoptJoinReach", 100); }
         }
 
         /// <summary>Edges walked per LoopQueue pass. Each is a flood-fill; this is the budget.</summary>
@@ -155,7 +161,19 @@ namespace Server.Custom
                     return;
                 }
 
+                // Try to connect what is left before calling it an island. A region only
+                // joins where one of THEIR edges happened to cross into ground we
+                // authored, and that is not where a road meets a town - one adopt made a
+                // single join and left 372 waypoints floating. Each cut-off piece gets a
+                // corridor of its own.
+                if (job.PlanComponentJoins())
+                {
+                    LoopQueue.Post(() => Step(job));
+                    return;
+                }
+
                 job.FindIslands();
+                job.PruneUnreachable();
 
                 _running = false;
 
@@ -203,9 +221,13 @@ namespace Server.Custom
 
             /// <summary>Proposed waypoints no surviving edge reaches. Accept drops these.</summary>
             public readonly List<string> Stranded = new List<string>();
+
+            /// <summary>Destinations skipped for having no arrival a bot could route away from.</summary>
+            public readonly List<string> SkippedNoReach = new List<string>();
             public readonly List<string> Islands = new List<string>();
 
             public int Next;
+            private bool _joinsPlanned;
             public int SkippedAuthored;
             public int SkippedRegion;
             public int SkippedNoArrival;
@@ -312,8 +334,8 @@ namespace Server.Custom
 
                         if (ours == null)
                         {
-                            // Inside a zone we authored but with no waypoint near enough to hang
-                            // an edge on. Nothing to join to, so there is nothing to propose.
+                            // Nothing of ours within reach at all. Rare now the reach is a
+                            // hundred tiles, and genuinely nothing to join to when it happens.
                             SkippedAuthored++;
                             continue;
                         }
@@ -661,6 +683,19 @@ namespace Server.Custom
                     }
                 }
 
+                // The one line that matters most when it applies, so it goes first: a region that
+                // joins nothing can only ever be an island, and the author should be told that
+                // before reading anything else about it.
+                if (Links == 0)
+                {
+                    Islands.Insert(0, String.Format(
+                        "NO JOIN WAS MADE. Nothing in this region reaches a waypoint we already "
+                        + "have within {0} tiles, so everything proposed here would be cut off "
+                        + "from the rest of the graph. Adopt a region that overlaps ground you "
+                        + "have already saved first.",
+                        JoinReach));
+                }
+
                 if (Stranded.Count > 0)
                 {
                     Islands.Add(String.Format(
@@ -703,6 +738,285 @@ namespace Server.Custom
                     Waypoints.Count + Subdivisions.Count,
                     Links == 0 ? " (this region touches nothing already authored)" : "",
                     Name(cutOff)));
+            }
+
+            /// <summary>
+            /// Drop arrivals nothing can stand at, and destinations left with none.
+            ///
+            /// Two faults, one rule. Dropping a stranded waypoint orphans every arrival that named
+            /// it - one adopt dropped `uo-wp-990` and left four arrivals for a dock still pointing
+            /// at it. And a destination whose arrivals are all further than the hop cap from any
+            /// waypoint is one a bot can be sent to and cannot leave, which is exactly what
+            /// `Nav.Data` warns about at load.
+            ///
+            /// So the test is the one Nav.Data applies: is there a waypoint within the cap of this
+            /// arrival, counting the ones we are proposing and the ones we already have. An
+            /// arrival that fails it is not written, and a destination with none left is skipped
+            /// and listed rather than written to warn on the next boot.
+            ///
+            /// Runs AFTER the walk, because subdivision mints waypoints - a tile out of reach of
+            /// the reference's own waypoints is often within reach of one cut into the road.
+            /// </summary>
+            public void PruneUnreachable()
+            {
+                int cap = NavigationSystem.HopMaxTiles;
+                var stranded = new HashSet<string>(Stranded, StringComparer.OrdinalIgnoreCase);
+                var surviving = new List<Point2D>();
+
+                foreach (KeyValuePair<string, NavWaypoint> pair in Waypoints)
+                {
+                    if (!stranded.Contains(pair.Key))
+                    {
+                        surviving.Add(new Point2D(pair.Value.X, pair.Value.Y));
+                    }
+                }
+
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    if (!stranded.Contains(Subdivisions[i].Id))
+                    {
+                        surviving.Add(new Point2D(Subdivisions[i].X, Subdivisions[i].Y));
+                    }
+                }
+
+                var kept = new List<NavArrival>();
+                var reachable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (NavArrival arrival in Arrivals)
+                {
+                    if (!InReach(arrival.X, arrival.Y, surviving, cap))
+                    {
+                        continue;
+                    }
+
+                    kept.Add(arrival);
+                    reachable.Add(arrival.DestinationId);
+                }
+
+                var keptDestinations = new List<NavDestination>();
+
+                foreach (NavDestination destination in Destinations)
+                {
+                    if (reachable.Contains(destination.Id))
+                    {
+                        keptDestinations.Add(destination);
+                        continue;
+                    }
+
+                    SkippedNoReach.Add(destination.Id);
+                }
+
+                Arrivals.Clear();
+                Arrivals.AddRange(kept);
+
+                Destinations.Clear();
+                Destinations.AddRange(keptDestinations);
+
+                if (SkippedNoReach.Count > 0)
+                {
+                    Islands.Add(String.Format(
+                        "{0} destination(s) skipped: no arrival within the {1}-tile hop cap of any "
+                        + "waypoint, so a bot sent there could not route away again. {2}",
+                        SkippedNoReach.Count, cap, Name(SkippedNoReach)));
+                }
+            }
+
+            /// <summary>
+            /// Walk a corridor from each cut-off piece of the proposal to the graph we have.
+            ///
+            /// The joins made during selection are opportunistic: they exist only where one of
+            /// THEIR edges happens to cross into ground we authored. That is not where a road
+            /// meets a town. Britain's own graph does not reach the south gate, so the road south
+            /// was cut at the edge of our zones and everything beyond it floated free - one join
+            /// out of 482 waypoints.
+            ///
+            /// This asks the other question: for each piece that cannot reach us, which of its
+            /// waypoints is nearest to one of ours, and is there a road between them? The corridor
+            /// is walked and subdivided like any other edge, so a join is never longer than a hop
+            /// and is verified rather than asserted.
+            ///
+            /// Returns true when it queued work, so the caller keeps stepping - each corridor is a
+            /// flood-fill and belongs in the same budget as the rest.
+            /// </summary>
+            public bool PlanComponentJoins()
+            {
+                if (_joinsPlanned)
+                {
+                    return false;
+                }
+
+                _joinsPlanned = true;
+
+                HashSet<string> reached = Reachable();
+                Dictionary<string, List<string>> links = BuildLinks();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int queued = 0;
+
+                foreach (KeyValuePair<string, NavWaypoint> pair in Waypoints)
+                {
+                    if (reached.Contains(pair.Key) || seen.Contains(pair.Key))
+                    {
+                        continue;
+                    }
+
+                    // The whole cut-off piece this waypoint belongs to, so one corridor is walked
+                    // for it rather than one per waypoint.
+                    List<NavWaypoint> piece = Piece(pair.Key, links, reached, seen);
+
+                    NavWaypoint mine = null;
+                    NavWaypoint ours = null;
+                    int best = Int32.MaxValue;
+
+                    for (int i = 0; i < piece.Count; i++)
+                    {
+                        NavWaypoint near = NavigationSystem.Graph.Nearest(
+                            new Point3D(piece[i].X, piece[i].Y, piece[i].Z), Map, JoinReach);
+
+                        if (near == null)
+                        {
+                            continue;
+                        }
+
+                        int span = Math.Max(
+                            Math.Abs(near.X - piece[i].X), Math.Abs(near.Y - piece[i].Y));
+
+                        if (span < best)
+                        {
+                            best = span;
+                            mine = piece[i];
+                            ours = near;
+                        }
+                    }
+
+                    if (mine == null || ours == null)
+                    {
+                        continue;
+                    }
+
+                    Pending.Add(new PendingEdge
+                    {
+                        Edge = new NavEdge
+                        {
+                            From = ours.Id, To = mine.Id, KindName = "walk", Tags = "road"
+                        },
+                        FromId = ours.Id,
+                        ToId = mine.Id,
+                        IsJoin = true,
+                        OurId = ours.Id
+                    });
+
+                    queued++;
+                }
+
+                Links += queued;
+
+                return queued > 0;
+            }
+
+            /// <summary>Every waypoint in one cut-off piece, marking them all seen.</summary>
+            private List<NavWaypoint> Piece(
+                string start, Dictionary<string, List<string>> links,
+                HashSet<string> reached, HashSet<string> seen)
+            {
+                var members = new List<NavWaypoint>();
+                var queue = new Queue<string>();
+
+                seen.Add(start);
+                queue.Enqueue(start);
+
+                while (queue.Count > 0)
+                {
+                    string current = queue.Dequeue();
+                    NavWaypoint waypoint;
+
+                    if (Waypoints.TryGetValue(current, out waypoint))
+                    {
+                        members.Add(waypoint);
+                    }
+
+                    List<string> neighbours;
+
+                    if (!links.TryGetValue(current, out neighbours))
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i < neighbours.Count; i++)
+                    {
+                        if (!reached.Contains(neighbours[i]) && seen.Add(neighbours[i]))
+                        {
+                            queue.Enqueue(neighbours[i]);
+                        }
+                    }
+                }
+
+                return members;
+            }
+
+            /// <summary>Which proposed waypoints can already reach the graph we have.</summary>
+            private HashSet<string> Reachable()
+            {
+                Dictionary<string, List<string>> links = BuildLinks();
+                var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var queue = new Queue<string>();
+
+                foreach (KeyValuePair<string, List<string>> pair in links)
+                {
+                    if (NavigationSystem.Graph.Node(pair.Key) != null)
+                    {
+                        reached.Add(pair.Key);
+                        queue.Enqueue(pair.Key);
+                    }
+                }
+
+                while (queue.Count > 0)
+                {
+                    string current = queue.Dequeue();
+                    List<string> neighbours;
+
+                    if (!links.TryGetValue(current, out neighbours))
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i < neighbours.Count; i++)
+                    {
+                        if (reached.Add(neighbours[i]))
+                        {
+                            queue.Enqueue(neighbours[i]);
+                        }
+                    }
+                }
+
+                return reached;
+            }
+
+            private Dictionary<string, List<string>> BuildLinks()
+            {
+                var links = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < Edges.Count; i++)
+                {
+                    Add(links, Edges[i].From, Edges[i].To);
+                    Add(links, Edges[i].To, Edges[i].From);
+                }
+
+                return links;
+            }
+
+            /// <summary>Whether any surviving waypoint is within the cap of this tile.</summary>
+            private static bool InReach(int x, int y, List<Point2D> waypoints, int cap)
+            {
+                for (int i = 0; i < waypoints.Count; i++)
+                {
+                    if (Math.Max(Math.Abs(waypoints[i].X - x), Math.Abs(waypoints[i].Y - y)) <= cap)
+                    {
+                        return true;
+                    }
+                }
+
+                // And ours, which an adopted arrival at the edge of a join legitimately uses.
+                return NavigationSystem.Graph.Nearest(new Point3D(x, y, 0), null, cap) != null;
             }
 
             private static void Add(Dictionary<string, List<string>> links, string from, string to)
@@ -877,6 +1191,7 @@ namespace Server.Custom
             WriteArrivals(builder, job);
             WriteFailures(builder, job);
             WriteStrings(builder, "stranded", job.Stranded, true);
+            WriteStrings(builder, "skippedNoReach", job.SkippedNoReach, true);
             WriteStrings(builder, "islands", job.Islands, false);
 
             builder.Append("}\n");
