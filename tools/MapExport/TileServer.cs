@@ -38,10 +38,15 @@ namespace Server.Custom.MapExport
     {
         /// <summary>
         /// Bumped whenever a render would produce different pixels - a draw-order fix, a hue fix,
-        /// stretched terrain. It is a path segment in the cache, so a bump orphans the whole old
-        /// tree in one directory instead of leaving a cache that is half old and half new.
+        /// stretched terrain, a change to what a floor stop keeps. It is a path segment in the
+        /// cache, so a bump orphans the whole old tree in one directory instead of leaving a cache
+        /// that is half old and half new.
+        ///
+        /// 2: land stretched between its four corner heights.
+        /// 3: a storey measured from the land around a column rather than the land under it, so a
+        ///    wall on a cliff edge belongs to its building instead of to the drop below it.
         /// </summary>
-        public const int Version = 2;
+        public const int Version = 3;
 
         /// <summary>The map layer's directory. Items live under `items-&lt;snapshot id&gt;` beside it.</summary>
         public const string MapLayer = "map";
@@ -371,6 +376,98 @@ namespace Server.Custom.MapExport
             {
                 log(String.Format(CultureInfo.InvariantCulture, "    ... and {0} more.", ids.Count - 12));
             }
+        }
+
+        /// <summary>
+        /// Everything the map holds on each column of a box: the land tile and every static, with
+        /// the Zs and the flags that decide how each one is drawn.
+        ///
+        /// A read-only window into the data the renderer works from. It exists because two
+        /// questions came up that could not be answered by looking at a picture - why a wall
+        /// vanished at one floor stop, and what a cave passage is actually made of - and guessing
+        /// at either from a render is how you end up fixing the wrong thing.
+        /// </summary>
+        public static void ColumnReport(
+            TileMatrix tiles,
+            WorldItems items,
+            int facetWidth,
+            int facetHeight,
+            Rectangle2D bounds,
+            Action<string> log)
+        {
+            int x0 = Math.Max(0, bounds.Start.X);
+            int y0 = Math.Max(0, bounds.Start.Y);
+            int x1 = Math.Min(facetWidth - 1, bounds.End.X);
+            int y1 = Math.Min(facetHeight - 1, bounds.End.Y);
+
+            for (int y = y0; y <= y1; y++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    LandTile land = tiles.GetLandTile(x, y);
+                    LandData landData = TileData.LandTable[land.ID & 0x3FFF];
+
+                    log(String.Format(
+                        CultureInfo.InvariantCulture,
+                        "{0},{1}  land 0x{2:X4} z{3,-5} {4}{5}",
+                        x, y, land.ID & 0x3FFF, land.Z,
+                        landData.Name,
+                        (landData.Flags & TileFlag.Impassable) != 0 ? "  [impassable]" : ""));
+
+                    StaticTile[] column = tiles.GetStaticTiles(x, y);
+
+                    if (column != null)
+                    {
+                        for (int i = 0; i < column.Length; i++)
+                        {
+                            ItemData data = TileData.ItemTable[column[i].ID & TileData.MaxItemValue];
+
+                            log(String.Format(
+                                CultureInfo.InvariantCulture,
+                                "          stat 0x{0:X4} z{1,-5} h{2,-3} {3,-24} {4}",
+                                column[i].ID, column[i].Z, data.CalcHeight, Trim(data.Name, 24),
+                                Flags(data)));
+                        }
+                    }
+
+                    List<WorldItem> here = items == null ? null : items.At(x, y);
+
+                    if (here != null)
+                    {
+                        for (int i = 0; i < here.Count; i++)
+                        {
+                            ItemData data = TileData.ItemTable[here[i].ID & TileData.MaxItemValue];
+
+                            log(String.Format(
+                                CultureInfo.InvariantCulture,
+                                "          item 0x{0:X4} z{1,-5} h{2,-3} {3,-24} {4}",
+                                here[i].ID, here[i].Z, data.CalcHeight, Trim(data.Name, 24),
+                                Flags(data)));
+                        }
+                    }
+                }
+            }
+        }
+
+        private static string Trim(string value, int width)
+        {
+            value = value ?? String.Empty;
+            return value.Length <= width ? value : value.Substring(0, width);
+        }
+
+        private static string Flags(ItemData data)
+        {
+            var found = new List<string>();
+
+            if ((data.Flags & TileFlag.Surface) != 0) { found.Add("surface"); }
+            if ((data.Flags & TileFlag.Impassable) != 0) { found.Add("impassable"); }
+            if ((data.Flags & TileFlag.Wall) != 0) { found.Add("wall"); }
+            if ((data.Flags & TileFlag.Roof) != 0) { found.Add("roof"); }
+            if ((data.Flags & TileFlag.Background) != 0) { found.Add("background"); }
+            if ((data.Flags & TileFlag.Foliage) != 0) { found.Add("foliage"); }
+            if ((data.Flags & TileFlag.NoShoot) != 0) { found.Add("noshoot"); }
+
+            return String.Join(" ", found.ToArray());
         }
 
         private static int EdgeZ(TileMatrix tiles, int x, int y, int facetWidth, int facetHeight)

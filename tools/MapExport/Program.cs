@@ -60,6 +60,8 @@ namespace Server.Custom.MapExport
             bool serve = false;
             string prerender = null;
             string terrainReport = null;
+            string columns = null;
+            string itemsPath = null;
             int floorGround = FloorRules.DefaultGround;
             int floorFirst = FloorRules.DefaultFirst;
 
@@ -75,6 +77,12 @@ namespace Server.Custom.MapExport
                         break;
                     case "--terrain-report":
                         terrainReport = Require(args, ++i, "--terrain-report");
+                        break;
+                    case "--columns":
+                        columns = Require(args, ++i, "--columns");
+                        break;
+                    case "--items":
+                        itemsPath = Require(args, ++i, "--items");
                         break;
                     case "--floor-ground":
                         floorGround = Int32.Parse(Require(args, ++i, "--floor-ground"));
@@ -144,7 +152,7 @@ namespace Server.Custom.MapExport
             // and nothing else in the process can accidentally depend on it.
             var map = new Map(mapId, index, fileIndex, width, height, 0, name, MapRules.FeluccaRules);
 
-            if (serve || prerender != null || terrainReport != null)
+            if (serve || prerender != null || terrainReport != null || columns != null)
             {
                 // stdout is the protocol channel in --serve, so every human-readable line goes to
                 // stderr. Doing the same for --prerender keeps one habit rather than two.
@@ -169,6 +177,32 @@ namespace Server.Custom.MapExport
                     IsoTransform.CanvasHeight(width, height),
                     renderer.MaxLevel));
                 log("");
+
+                if (columns != null)
+                {
+                    WorldItems loaded = null;
+
+                    if (itemsPath != null)
+                    {
+                        string itemsError;
+                        loaded = WorldItems.Load(itemsPath, name, height, out itemsError);
+
+                        if (itemsError != null)
+                        {
+                            log("  items: " + itemsError);
+                            loaded = null;
+                        }
+                        else
+                        {
+                            log(String.Format("  items: {0} loaded", loaded.Count));
+                            log("");
+                        }
+                    }
+
+                    TileServer.ColumnReport(
+                        map.Tiles, loaded, width, height, ParseBounds(columns), log);
+                    return 0;
+                }
 
                 if (terrainReport != null)
                 {
@@ -378,6 +412,8 @@ namespace Server.Custom.MapExport
             Console.WriteLine("  --serve              Read tile requests on stdin; the bridge's child.");
             Console.WriteLine("  --prerender x,y,w,h  Warm the cache over a world rectangle.");
             Console.WriteLine("  --terrain-report x,y,w,h  How much of a box stretched, and what did not.");
+            Console.WriteLine("  --columns x,y,w,h    Dump the land and statics on each column.");
+            Console.WriteLine("  --items <path>       A world-item snapshot, for --columns and --serve.");
             Console.WriteLine("  --floor-ground <n>   Ground cutoff above the land (default 20).");
             Console.WriteLine("  --floor-first <n>    First-floor cutoff above the land (default 40).");
             Console.WriteLine();

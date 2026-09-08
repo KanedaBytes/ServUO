@@ -40,6 +40,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const zlib = require('zlib');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const EXE = path.join(ROOT, 'tools', 'MapExport', 'bin', 'Release', 'MapExport.exe');
@@ -59,11 +60,78 @@ const SNAPSHOT = path.join(ROOT, 'Data', 'Live', 'world-items.json');
  * Most item tiles are empty and the renderer says so without rasterising, but the browser still
  * asked for an image and has to get one - an error would trip the retry path, and a 204 would trip
  * it too. Stretching one transparent pixel over the tile is visually identical to a transparent
- * tile and costs 68 bytes instead of a file per empty tile on disk.
+ * tile and costs 70 bytes instead of a file per empty tile on disk.
+ *
+ * BUILT RATHER THAN PASTED, because the pasted one was wrong. It was a "well-known 1x1 transparent
+ * PNG" copied from memory, and decoding it showed a pixel of R=0 G=0 B=255 A=127 - a HALF
+ * TRANSPARENT BLUE dot, stretched by drawImage over every empty tile in the art view. Every
+ * item-less tile in Britain drew as a blue square and the map looked broken. Eleven lines of zlib
+ * and a CRC cannot be wrong in that way, and empty-png.test.js decodes the result to be sure.
  */
-const EMPTY_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-    'base64');
+function buildTransparentPng() {
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(1, 0);   // width
+    ihdr.writeUInt32BE(1, 4);   // height
+    ihdr[8] = 8;                // bit depth
+    ihdr[9] = 6;                // colour type 6 = truecolour with alpha
+    ihdr[10] = 0;               // deflate
+    ihdr[11] = 0;               // adaptive filtering
+    ihdr[12] = 0;               // no interlace
+
+    // One scanline: filter type 0 (None), then RGBA all zero. Zero alpha is the whole point.
+    const idat = zlib.deflateSync(Buffer.from([0, 0, 0, 0, 0]));
+
+    return Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        pngChunk('IHDR', ihdr),
+        pngChunk('IDAT', idat),
+        pngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+
+function pngChunk(type, body) {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(body.length, 0);
+
+    const payload = Buffer.concat([Buffer.from(type, 'ascii'), body]);
+
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(payload), 0);
+
+    return Buffer.concat([length, payload, crc]);
+}
+
+// Hand-rolled for the same reason tools/MapExport/PngWriter.cs hand-rolls it: zlib.crc32 is new
+// enough that pinning a Node version for one checksum is a worse trade than twelve lines.
+const CRC_TABLE = (() => {
+    const table = new Uint32Array(256);
+
+    for (let i = 0; i < 256; i++) {
+        let c = i;
+
+        for (let k = 0; k < 8; k++) {
+            c = (c & 1) !== 0 ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        }
+
+        table[i] = c >>> 0;
+    }
+
+    return table;
+})();
+
+function crc32(buffer) {
+    let c = 0xFFFFFFFF;
+
+    for (let i = 0; i < buffer.length; i++) {
+        c = CRC_TABLE[(c ^ buffer[i]) & 0xFF] ^ (c >>> 8);
+    }
+
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+// Built after CRC_TABLE, not before it: a `const` does not hoist, and building the PNG at the top
+// of the file threw a temporal-dead-zone error the moment the module was required.
+const EMPTY_PNG = buildTransparentPng();
 
 class ArtRenderer {
     constructor(options = {}) {

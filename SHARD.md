@@ -444,6 +444,13 @@ the graveyard, the castle, the north outcrop and the cave entrance, 99.4-100% of
 stretch; the handful that do not are animated water. `MapExport --terrain-report x,y,w,h` reports
 that for any box.
 
+**A storey is measured from the land AROUND a column, not under it.** The smithy's back wall stands
+on the cliff edge above the river, so the land in its own column is 45 below the building's floor -
+and the first rule read a ground-floor wall as a first-floor one and deleted it at the Ground stop.
+The ground is now the highest land in the 3x3 neighbourhood that is not above the static itself.
+Land only, never a surface static: every item stands on some floor, so measuring from the nearest
+floor below would make every item storey zero and the slider would stop doing anything.
+
 **A cave passage still does not read as a trench.** The floor slider filters statics, and a mountain
 is land, so `1263,1251` is byte-identical at every stop. Seeing into a cave needs the cutoff to
 apply to land too - a section through the world rather than a storey of a building - which is its

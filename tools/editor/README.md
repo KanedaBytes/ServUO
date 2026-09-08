@@ -433,19 +433,49 @@ than disappearing; a control that vanishes when you zoom out reads as a bug.
 
 ### The floor slider
 
-Cut by **height above the land surface**, never absolute Z: Britain's upper and lower town differ
-by about thirty Z and one absolute threshold cannot suit both.
+Cut by **height above the ground**, never absolute Z: Britain's upper and lower town differ by
+about thirty Z and one absolute threshold cannot suit both.
 
 | stop | keeps | also |
 | --- | --- | --- |
-| Ground | statics below `landZ + 20` | drops `TileFlag.Roof` |
-| First floor | statics below `landZ + 40` | drops `TileFlag.Roof` |
+| Ground | statics below `groundZ + 20` | drops `TileFlag.Roof` |
+| First floor | statics below `groundZ + 40` | drops `TileFlag.Roof` |
 | All | everything | — |
+
+#### What "the ground" is took two goes
+
+The first version used the land tile in the static's **own column**, and it deleted the smithy's
+back wall. That wall stands at `1415,1553`–`1415,1559` where the land is the river bank at **z −15**,
+while the building's floor — which is *land* here, `0x040A wooden floor` — is at **z 30** one column
+east. So the rule measured a ground-floor wall as forty-five above its ground and dropped it, at the
+First stop as well as at Ground.
+
+The ground is now **the highest land in the column's 3×3 neighbourhood that is not above the static
+itself**. A wall sits on the *boundary* of the floor it belongs to, and at a cliff edge the column
+under it is the drop; one tile is the smallest widening that lets a wall belong to its building, and
+one tile is all it needs, because a wall is never further than that from its own floor. The cap at
+"not above the static" stops a cliff *top* behind a building becoming the reference for something
+standing at its foot.
+
+**Land only, never a surface static**, and that is the part worth being careful about. The obvious
+refinement — "the highest surface at or below this static" — collapses the whole idea: every item
+stands on some floor, so every item would measure as storey zero and the slider would stop doing
+anything at all. Land is the terrain and statics are the building; keeping that line is what makes a
+storey countable.
+
+**The client does not settle this.** Its own roof-hiding works off the *player's* Z rather than any
+per-tile classification, so there is no client rule to copy — only the shard's habit of treating
+land as the surface a mobile stands on (`Server/Map.cs` `GetAverageZ`). Said plainly rather than
+dressed up as fidelity.
+
+Measured with `--columns`, comparing both rules over every static in four boxes: **7 verdicts change
+and all seven are the smithy's back wall.** The north outcrop (277 statics), the cemetery (328) and
+the cave (395) are untouched.
 
 UO's storey height is 20, which is where the numbers come from. Both are `--floor-ground` and
 `--floor-first` on the renderer and are reported by `/api/artinfo`, because this is the rule most
 likely to want an eyeball tune and a rebuild is a poor way to try a number. Roofs are dropped
-outright below the top stop: the height cutoff alone would keep a one-storey roof at `landZ + 20`
+outright below the top stop: the height cutoff alone would keep a one-storey roof at `groundZ + 20`
 on the First floor stop, which is exactly the thing the slider is being moved to get rid of.
 
 ### Stretched terrain
@@ -609,9 +639,10 @@ tools/editor/tiles/iso/<Facet>/v<N>/<floor>/<level>/<x>/<y>.png
 ```
 
 `v<N>` is `TileServer.Version`, handed to the bridge in the handshake and to the editor by
-`/api/artinfo`. Bumping it — a draw-order fix, a hue fix — orphans the whole old tree in one
-directory instead of leaving a cache that is half old and half new. **Stretched terrain took it to
-v2**, so a `v1` tree left on disk is dead and can be deleted. `/tools/editor/tiles`
+`/api/artinfo`. Bumping it — a draw-order fix, a hue fix, a change to what a floor stop keeps —
+orphans the whole old tree in one directory instead of leaving a cache that is half old and half
+new. **v2 was stretched terrain and v3 is the ground rule above**, so `v1` and `v2` trees left on
+disk are dead and can be deleted. `/tools/editor/tiles`
 is already gitignored, which matters more here than for radar: **rendered client art is licensed
 and must never be committed.**
 

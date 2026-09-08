@@ -27,12 +27,19 @@ namespace Server.Custom.MapExport
     }
 
     /// <summary>
-    /// How high above the land surface each floor stop cuts.
+    /// How high above the ground each floor stop cuts.
     ///
-    /// Height ABOVE THE LAND, never absolute Z: Britain's upper and lower town differ by about
+    /// Height ABOVE THE GROUND, never absolute Z: Britain's upper and lower town differ by about
     /// thirty Z, so one absolute threshold cannot suit both. UO's storey height is 20, which is
     /// where the defaults come from; both are overridable because this is the rule most likely to
     /// want an eyeball tune, and a rebuild is a poor way to try a number.
+    ///
+    /// WHAT "THE GROUND" IS took two goes. The first version used the land tile in the static's own
+    /// column, and it deleted the smithy's back wall at the Ground stop. That wall stands at
+    /// 1415,1553 where the land is the river bank at z -15, while the building's floor - which is
+    /// LAND here, `0x040A wooden floor` - is at z 30 one tile east. So the rule measured a
+    /// ground-floor wall as forty-five above its ground and threw it away, at both the Ground and
+    /// the First stop. See IsoTileRenderer.GroundLevels.
     /// </summary>
     internal sealed class FloorRules
     {
@@ -157,6 +164,8 @@ namespace Server.Custom.MapExport
         private const byte OwnerItem = 2;
 
         private WorldItems _items = null;
+
+        private readonly int[] _ground = new int[9];
 
         private int[] _staticKeys = new int[64];
         private int[] _itemOrder = new int[8];
@@ -386,6 +395,10 @@ namespace Server.Custom.MapExport
             StaticTile[] column = _tiles.GetStaticTiles(x, y);
             List<WorldItem> items = layer == Layer.Items ? _items.At(x, y) : null;
 
+            // Gathered once per column rather than per static: nine lookups either way, but the
+            // statics in a column share them.
+            GroundLevels(x, y, _ground);
+
             int statics = Sort(column, landZ, floor);
             int shardItems = SortItems(items, landZ, floor);
 
@@ -463,7 +476,9 @@ namespace Server.Custom.MapExport
             {
                 ItemData data = TileData.ItemTable[items[i].ID & TileData.MaxItemValue];
 
-                if (!_rules.Keeps(floor, items[i].Z, landZ, (data.Flags & TileFlag.Roof) != 0))
+                int groundZ = GroundFor(_ground, landZ, items[i].Z);
+
+                if (!_rules.Keeps(floor, items[i].Z, groundZ, (data.Flags & TileFlag.Roof) != 0))
                 {
                     continue;
                 }
@@ -556,6 +571,63 @@ namespace Server.Custom.MapExport
         }
 
         /// <summary>
+        /// The land heights around a column, which is what a storey is measured from.
+        ///
+        /// WHY A NEIGHBOURHOOD AND NOT THE COLUMN. A wall sits on the BOUNDARY of the floor it
+        /// belongs to, and at a cliff edge the column under it is the drop rather than the
+        /// building. The smithy's back wall is exactly that: the wall is at 1415,1553 over the
+        /// river bank at z -15, and the building's floor is the wooden-floor LAND at z 30 in the
+        /// very next column. Widening the reference by one tile is the smallest change that lets a
+        /// wall belong to the building it is part of, and one tile is all the case needs - a wall
+        /// is never more than a tile from its own floor.
+        ///
+        /// LAND ONLY, NEVER A SURFACE STATIC, and that is the part worth being careful about. The
+        /// obvious refinement - "the highest surface at or below this static" - collapses the whole
+        /// idea: every item stands on some floor, so every item would measure as storey zero and
+        /// the slider would stop doing anything at all. Land is the terrain and statics are the
+        /// building; keeping that line is what makes a storey countable. A deck of surface statics
+        /// over water is the miss, and it errs towards showing too much, which is the safe way to
+        /// be wrong about a wall.
+        ///
+        /// THE CLIENT DOES NOT SETTLE THIS. Its own roof-hiding works off the PLAYER's Z, not a
+        /// per-tile classification, so there is no client rule to copy here - only the shard's own
+        /// habit of treating land as the surface a mobile stands on (Server/Map.cs GetAverageZ).
+        /// Said plainly rather than dressed up as fidelity.
+        /// </summary>
+        private void GroundLevels(int x, int y, int[] into)
+        {
+            int at = 0;
+
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    into[at++] = LandZ(x + dx, y + dy);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The ground a static at this Z is standing above: the highest land nearby that is not
+        /// above it. Capped that way so a cliff TOP behind a building does not become the reference
+        /// for something standing at its foot. With nothing at or below, the column's own land.
+        /// </summary>
+        private static int GroundFor(int[] levels, int ownLandZ, int staticZ)
+        {
+            int best = Int32.MinValue;
+
+            for (int i = 0; i < levels.Length; i++)
+            {
+                if (levels[i] <= staticZ && levels[i] > best)
+                {
+                    best = levels[i];
+                }
+            }
+
+            return best == Int32.MinValue ? ownLandZ : best;
+        }
+
+        /// <summary>
         /// A corner's land Z. Off the facet TileMatrix hands back a zeroed block
         /// (Server/TileMatrix.cs:335-340), so the east and south edges would read a corner at Z 0
         /// and shear the last row into the sea. Clamping to the edge tile makes those tiles level
@@ -563,15 +635,12 @@ namespace Server.Custom.MapExport
         /// </summary>
         private int LandZ(int x, int y)
         {
-            if (x >= _facetWidth)
-            {
-                x = _facetWidth - 1;
-            }
-
-            if (y >= _facetHeight)
-            {
-                y = _facetHeight - 1;
-            }
+            // Clamped at both ends since GroundLevels samples x-1 and y-1: TileMatrix returns a
+            // zeroed block off the facet, and a phantom Z 0 next to a mountain would read as ground.
+            if (x < 0) { x = 0; }
+            if (y < 0) { y = 0; }
+            if (x >= _facetWidth) { x = _facetWidth - 1; }
+            if (y >= _facetHeight) { y = _facetHeight - 1; }
 
             return _tiles.GetLandTile(x, y).Z;
         }
@@ -715,7 +784,9 @@ namespace Server.Custom.MapExport
             {
                 ItemData data = TileData.ItemTable[column[i].ID & TileData.MaxItemValue];
 
-                if (!_rules.Keeps(floor, column[i].Z, landZ, (data.Flags & TileFlag.Roof) != 0))
+                int groundZ = GroundFor(_ground, landZ, column[i].Z);
+
+                if (!_rules.Keeps(floor, column[i].Z, groundZ, (data.Flags & TileFlag.Roof) != 0))
                 {
                     continue;
                 }
