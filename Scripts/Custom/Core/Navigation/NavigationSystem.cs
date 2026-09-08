@@ -67,6 +67,18 @@ namespace Server.Custom
             get { return Config.Get("Custom.NavHopMaxTiles", 12); }
         }
 
+        /// <summary>
+        /// The waypoint that decides which side of a split graph is "the main graph".
+        ///
+        /// Britain's bank plaza, because it is the one place this shard is certainly built around.
+        /// The island check used to call the LARGEST component the mainland, which held only while
+        /// we were the biggest thing in the file - a single adopt inverted it.
+        /// </summary>
+        public static string HomeWaypoint
+        {
+            get { return Config.Get("Custom.NavHomeWaypoint", "brit-bank-2"); }
+        }
+
         public static int RecordIntervalTiles
         {
             get { return Config.Get("Custom.NavRecordIntervalTiles", 8); }
@@ -604,10 +616,16 @@ namespace Server.Custom
         /// hanging off the graph, and the first symptom anybody saw was a Miner choosing the
         /// wrong site. An island has to be a warning at load, not a bot that cannot route.
         ///
-        /// The largest component is taken as the mainland by definition rather than by name: a
-        /// shard is free to grow a second continent, and what makes an island wrong is that
-        /// somewhere with a reason to be walked to is on it. A component holding nothing but
-        /// waypoints is left alone - that is scaffolding, not a fault.
+        /// The mainland is the component holding `Custom.NavHomeWaypoint`, not the largest one.
+        ///
+        /// Largest was wrong, and adopting proved it: one adopt brought in 481 waypoints against
+        /// Britain's 231, so the adopted region became "the mainland" and the warning pointed at
+        /// BRITAIN as the island. The warning has to name the side cut off from the shard's own
+        /// home, and that home does not move because somebody imported a continent. Size is kept
+        /// only as a fallback, for a graph that has not named an anchor.
+        ///
+        /// A component holding nothing but waypoints is still left alone - scaffolding, not a
+        /// fault.
         /// </summary>
         private static void CheckComponents()
         {
@@ -648,6 +666,19 @@ namespace Server.Custom
                 {
                     biggest = pair.Value.Count;
                     mainland = pair.Key;
+                }
+            }
+
+            // The anchor wins over size wherever it exists.
+            NavWaypoint home = _graph.Node(HomeWaypoint);
+
+            if (home != null)
+            {
+                int anchored = _graph.ComponentOf(home.Id);
+
+                if (anchored >= 0)
+                {
+                    mainland = anchored;
                 }
             }
 
