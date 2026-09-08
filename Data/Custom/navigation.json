@@ -611,7 +611,8 @@
     {"id":"uo-wp-182-s2","map":"Trammel","x":1930,"y":2791,"z":0,"arrivalRange":0,"tags":"road","source":"uo-offline"},
     {"id":"uo-wp-198-s1-s1","map":"Trammel","x":1989,"y":2888,"z":5,"arrivalRange":0,"tags":"road","source":"uo-offline"},
     {"id":"uo-wp-194-s1-s1","map":"Trammel","x":2037,"y":2842,"z":0,"arrivalRange":0,"tags":"road","source":"uo-offline"},
-    {"id":"uo-wp-194-s1-s2","map":"Trammel","x":2025,"y":2842,"z":0,"arrivalRange":0,"tags":"road","source":"uo-offline"}
+    {"id":"uo-wp-194-s1-s2","map":"Trammel","x":2025,"y":2842,"z":0,"arrivalRange":0,"tags":"road","source":"uo-offline"},
+    {"id":"brit-bank-w","map":"Trammel","x":1426,"y":1695,"z":0,"arrivalRange":0,"tags":"town road","note":"Links the bank block to the town road. Without it the only way out of the bank was north through the market and the west gate, then back south past its own door."}
   ],
   "edges": [
     {"from":"brit-plaza-1","to":"brit-plaza-2","kind":"walk","tags":"road"},
@@ -1261,7 +1262,10 @@
     {"from":"uo-wp-198-s1-s1","to":"uo-trinsic-shop-provisioner-5-s1","kind":"walk","tags":"road","source":"uo-offline"},
     {"from":"uo-wp-194-s1","to":"uo-wp-194-s1-s1","kind":"walk","tags":"road","source":"uo-offline"},
     {"from":"uo-wp-194-s1-s1","to":"uo-wp-194-s1-s2","kind":"walk","tags":"road","source":"uo-offline"},
-    {"from":"uo-wp-194-s1-s2","to":"uo-trinsic-shop-provisioner-7-s1","kind":"walk","tags":"road","source":"uo-offline"}
+    {"from":"uo-wp-194-s1-s2","to":"uo-trinsic-shop-provisioner-7-s1","kind":"walk","tags":"road","source":"uo-offline"},
+    {"from":"brit-bank-2","to":"brit-bank-w","kind":"walk","tags":"road"},
+    {"from":"brit-bank-0","to":"brit-bank-w","kind":"walk","tags":"road"},
+    {"from":"brit-bank-w","to":"town-10a","kind":"walk","tags":"road"}
   ],
   "destinations": [
     {"id":"brit-bank","name":"First Bank Of Britain","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded","waypoints":"brit-bank-2 brit-bank-0"},

@@ -386,10 +386,18 @@ namespace Server.Custom
 
             // How fast it is actually moving, and on what. Both are otherwise unobservable from
             // outside the process: "is that bot running?" could only be answered by timing it
-            // across two snapshots, which a town jam or a bend in the road makes a lie. The step
-            // delay is the number BaseAI.DoMoveImpl derives the run flag from, so this is the
-            // same value the engine is acting on rather than an inference about it.
-            builder.Append(",\"stepMs\":").Append((int)Math.Round(bot.CurrentSpeed * 1000.0));
+            // across two snapshots, which a town jam or a bend in the road makes a lie.
+            //
+            // THE DELAY THE ENGINE STEPS ON, not CurrentSpeed. BaseAI.DoMoveImpl advances NextMove
+            // by TransformMoveDelay(CurrentSpeed) and derives the run flag from that, and the two
+            // were not the same number: this line printed "running, 200ms/step" for a bot the AI
+            // was stepping every 500ms, because BotAI's commute override sat between them. Asking
+            // the AI is what makes this the value the engine is acting on rather than a claim.
+            double stepSeconds = bot.AIObject != null
+                ? bot.AIObject.TransformMoveDelay(bot.CurrentSpeed)
+                : bot.CurrentSpeed;
+
+            builder.Append(",\"stepMs\":").Append((int)Math.Round(stepSeconds * 1000.0));
             builder.Append(",\"mounted\":").Append(bot.Mounted ? "true" : "false");
 
             if (behaviour != null)

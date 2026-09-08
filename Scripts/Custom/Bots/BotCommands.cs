@@ -21,6 +21,87 @@ namespace Server.Custom
             CommandSystem.Register("ReloadBots", AccessLevel.GameMaster, BotsReload_OnCommand);
             CommandSystem.Register("BotSmoke", AccessLevel.Administrator, BotSmoke_OnCommand);
             CommandSystem.Register("BotTrace", AccessLevel.GameMaster, BotTrace_OnCommand);
+            CommandSystem.Register("BotPace", AccessLevel.GameMaster, BotPace_OnCommand);
+        }
+
+        [Usage("BotPace [seconds]")]
+        [Description("Target a walking bot; samples its steps for N seconds (default 30) and reports the pace the engine actually used against the pace it was given.")]
+        private static void BotPace_OnCommand(CommandEventArgs e)
+        {
+            int seconds = 30;
+
+            if (e.Length > 0)
+            {
+                seconds = Math.Max(5, Math.Min(120, e.GetInt32(0)));
+            }
+
+            e.Mobile.SendMessage(String.Format("Target the bot to sample for {0}s.", seconds));
+            e.Mobile.BeginTarget(12, false, TargetFlags.None,
+                (m, targeted) => BotPace_OnTarget(m, targeted, seconds));
+        }
+
+        /// <summary>
+        /// The measurement behind the stepping fix. A bot that reads "running, 200ms/step" in
+        /// the editor and visibly walks and pauses is two numbers disagreeing - the pace written
+        /// to CurrentSpeed and the delay DoMoveImpl derives from it - and this is the only thing
+        /// in the tree that reads both off a live walker and says which one the bot stepped at.
+        /// </summary>
+        private static void BotPace_OnTarget(Mobile from, object targeted, int seconds)
+        {
+            var bot = targeted as PlayerBot;
+
+            if (bot == null)
+            {
+                from.SendMessage(0x35, "That is not a bot.");
+                return;
+            }
+
+            var traveler = bot.Behavior as TravelerBehavior;
+            NavWalker walker = traveler == null ? null : traveler.Walker;
+
+            if (walker == null || !walker.Active)
+            {
+                from.SendMessage(0x35, String.Format(
+                    "{0} is not walking a route ({1}). [BotSendTo it somewhere first.",
+                    bot.Name, bot.Behavior == null ? "no behaviour" : bot.Behavior.GetType().Name));
+                return;
+            }
+
+            if (walker.Sampler != null)
+            {
+                from.SendMessage(0x35, String.Format("{0} is already being sampled.", bot.Name));
+                return;
+            }
+
+            var sampler = new NavPaceSampler();
+            walker.Sampler = sampler;
+
+            from.SendMessage(String.Format("Sampling {0}'s steps for {1}s...", bot.Name, seconds));
+
+            Timer.DelayCall(TimeSpan.FromSeconds(seconds), () =>
+            {
+                if (walker.Sampler == sampler)
+                {
+                    walker.Sampler = null;
+                }
+
+                List<string> lines = sampler.Report(NavWalker.TickInterval);
+
+                foreach (string line in lines)
+                {
+                    Log.Info("[BotPace] {0}: {1}", bot.Name, line);
+                }
+
+                if (!bot.Deleted)
+                {
+                    BotLog.Note(bot, BotLogKind.Pace, String.Join(" | ", lines.ToArray()));
+                }
+
+                if (from != null && !from.Deleted)
+                {
+                    CommandReport.Send(from, String.Format("[BotPace {0}", bot.Name), lines);
+                }
+            });
         }
 
         [Usage("BotTrace on | off | off all | list")]

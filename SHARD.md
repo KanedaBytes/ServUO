@@ -151,6 +151,7 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[BotBehavior [name]` | GameMaster | Target a bot; report its brain, or switch it (`Idle`, `Traveler`) |
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
+| `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
 
 ## Custom spawns
 

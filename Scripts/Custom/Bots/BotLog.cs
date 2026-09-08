@@ -68,7 +68,10 @@ namespace Server.Custom
         Work,
 
         /// <summary>The bot said something.</summary>
-        Speech
+        Speech,
+
+        /// <summary>[BotPace measured its stepping.</summary>
+        Pace
     }
 
     /// <summary>One entry. A struct so a fifty-deep ring is one allocation, not fifty.</summary>
@@ -264,6 +267,7 @@ namespace Server.Custom
                 case BotLogKind.Clock: return "clock";
                 case BotLogKind.Work: return "work";
                 case BotLogKind.Speech: return "speech";
+                case BotLogKind.Pace: return "pace";
             }
 
             return "other";

@@ -30,9 +30,6 @@ namespace Server.Custom
     /// </summary>
     public class BotAI : VendorAI
     {
-        /// <summary>Seconds per step while being steered. A brisk walk, not a run.</summary>
-        public const double CommuteMoveDelay = 0.5;
-
         public BotAI(BaseCreature m)
             : base(m)
         {
@@ -60,11 +57,29 @@ namespace Server.Custom
             return base.DoActionWander();
         }
 
+        /// <summary>
+        /// While being steered, the pace the bot was given IS the delay - untouched.
+        ///
+        /// This used to return a constant 0.5, copied from DailyLifeAI along with its comment ("a
+        /// brisk walk, not a run"). There it is deliberate: townsfolk are never given a pace and
+        /// the constant exists to escape VendorAI's 30-120 SECOND delay. Here it silently overrode
+        /// the pace system built after it. BotMovement.SetPace wrote 200ms on foot or 100ms mounted
+        /// into CurrentSpeed, the editor's panel printed that and said "running", and DoMoveImpl -
+        /// which steps on TransformMoveDelay(CurrentSpeed), not on CurrentSpeed - advanced NextMove
+        /// by 500ms and derived the run flag from 500 too. Measured by [BotPace before this change:
+        /// a mounted bot given 100ms stepped every 543ms with the running bit set on none of them,
+        /// which is exactly the step-pause-step-pause Sean saw on the road to Trinsic.
+        ///
+        /// Not base.TransformMoveDelay either: SpeedInfo's version clamps toward MaxDelayWild (0.8)
+        /// for any uncontrolled creature whose Stam is below StamMax, which would re-inflate a run
+        /// the moment a bot took damage. The four values SetPace writes are the engine's own
+        /// constants, and the engine's own DoMoveImpl decides the run flag from them.
+        /// </summary>
         public override double TransformMoveDelay(double delay)
         {
             if (IsCommuting)
             {
-                return CommuteMoveDelay;
+                return delay;
             }
 
             return base.TransformMoveDelay(delay);

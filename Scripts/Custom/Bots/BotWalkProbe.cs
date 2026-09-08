@@ -115,6 +115,12 @@ namespace Server.Custom
 
                 List<PlayerBot> captured = bots;
 
+                // Measure one of them. The cadence question - does the bot step at the pace it was
+                // given - has no probe of its own, and this is the one place five bots are known
+                // to be walking with nobody watching. The lines go to the console as information;
+                // they never change the verdict.
+                AttachPace(bots);
+
                 // The CONVERGE stage can end early - the contention it exists to manufacture has
                 // happened once every bot has arrived. The DISPERSE stage that follows cannot, and
                 // deliberately does not: "nobody got stuck" is an absence, and absence needs the
@@ -333,6 +339,8 @@ namespace Server.Custom
                         rungs));
                 }
 
+                ReportPace();
+
                 Finish(bots, result);
                     }
             catch (Exception ex)
@@ -347,6 +355,58 @@ namespace Server.Custom
                 BotLifecycle.Override = null;
                 BotLifecycle.IntervalOverride = null;
             }
+        }
+
+        /// <summary>The sampler on the first bot that set off, and whose it is.</summary>
+        private static NavPaceSampler _pace;
+        private static NavWalker _paceWalker;
+        private static string _paceName;
+
+        private static void AttachPace(List<PlayerBot> bots)
+        {
+            _pace = null;
+            _paceWalker = null;
+            _paceName = null;
+
+            for (int i = 0; i < bots.Count; i++)
+            {
+                var traveler = bots[i].Behavior as TravelerBehavior;
+                NavWalker walker = traveler == null ? null : traveler.Walker;
+
+                if (walker == null || !walker.Active || walker.Sampler != null)
+                {
+                    continue;
+                }
+
+                _pace = new NavPaceSampler();
+                _paceWalker = walker;
+                _paceName = bots[i].Name;
+                walker.Sampler = _pace;
+                return;
+            }
+        }
+
+        private static void ReportPace()
+        {
+            if (_pace == null)
+            {
+                return;
+            }
+
+            if (_paceWalker != null && _paceWalker.Sampler == _pace)
+            {
+                _paceWalker.Sampler = null;
+            }
+
+            List<string> lines = _pace.Report(NavWalker.TickInterval);
+
+            for (int i = 0; i < lines.Count; i++)
+            {
+                Log.Info("Walk probe pace ({0}): {1}", _paceName, lines[i]);
+            }
+
+            _pace = null;
+            _paceWalker = null;
         }
 
         private static NavDestination PickBusiest(List<NavDestination> destinations)

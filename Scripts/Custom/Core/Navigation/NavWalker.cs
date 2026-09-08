@@ -70,10 +70,22 @@ namespace Server.Custom
         /// It WAS the movement rate, though, and quietly. At 250ms nothing could step faster than
         /// four times a second, so a bot set to a player's run - 200ms on foot, 100ms mounted -
         /// was held to 250ms and ran at less than half the speed it had been told to. A ceiling
-        /// only costs nothing while it is above everything underneath it. 100ms is the fastest
-        /// step the engine defines (Mobile.RunMount), so nothing is capped by this again.
+        /// only costs nothing while it is above everything underneath it.
+        ///
+        /// And 100ms was not above everything either. The engine's fastest step is 100ms
+        /// (Mobile.RunMount), and a 100ms timer measured 109ms between ticks - the timer thread
+        /// re-anchors on the time it observed, so a repeating timer only ever runs late - which
+        /// held a mounted run to 109ms a step ([BotPace, walk probe, after the commute fix). Half
+        /// the step is the smallest interval that cannot be the limiter; the ticks in between are
+        /// turned away at the NextMove gate for the cost of one subtraction.
         /// </summary>
-        private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(0.10);
+        public static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(0.05);
+
+        /// <summary>
+        /// A pace sampler, while [BotPace has one attached. Read from Tick only; null otherwise.
+        /// Kept across Stop on purpose: a route that ends mid-sample leaves a report worth reading.
+        /// </summary>
+        public NavPaceSampler Sampler { get; set; }
 
         /// <summary>How long one hop may take before it counts as failed.</summary>
         private static readonly TimeSpan HopTimeout = TimeSpan.FromSeconds(20.0);
@@ -180,7 +192,13 @@ namespace Server.Custom
         /// </summary>
         public Action<NavWalker, StuckRung, string> RungFired;
 
-        /// <summary>Whether the mobile runs rather than walks.</summary>
+        /// <summary>
+        /// Whether MoveTo is asked to OR the running bit into every direction. Nothing sets it,
+        /// and nothing should: BaseAI.DoMoveImpl sets Direction.Running itself whenever the step
+        /// delay is under WalkFoot or WalkMount, so the pace decides the animation and the two
+        /// cannot disagree. Passing true with a 400ms delay would send a running direction on
+        /// walk timing, which is the wrong way round.
+        /// </summary>
         public bool Run { get; set; }
 
         /// <summary>
@@ -320,6 +338,13 @@ namespace Server.Custom
                 return;
             }
 
+            NavPaceSampler sampler = Sampler;
+
+            if (sampler != null)
+            {
+                sampler.TickSeen();
+            }
+
             if (_index >= _route.Count)
             {
                 Finish();
@@ -337,10 +362,30 @@ namespace Server.Custom
 
             int range = ArrivalRangeFor(step);
 
-            if (_mobile.InRange(step.Point, range))
+            // Every step already satisfied is passed in THIS tick, and the move that follows is
+            // asked for in this tick too. Returning after one Advance cost a whole tick with no
+            // step at every hop boundary - a hitch every few tiles on a road cut into short hops,
+            // for no reason the engine imposed. Bounded by the route: Advance always moves the
+            // index on, and Finish clears the route.
+            while (_mobile.InRange(step.Point, range))
             {
                 Advance();
-                return;
+
+                if (_route == null || _index >= _route.Count)
+                {
+                    return;
+                }
+
+                step = _route.Steps[_index];
+
+                if (step.Kind == NavStepKind.Transition)
+                {
+                    OnTransition(step);
+                    Advance();
+                    return;
+                }
+
+                range = ArrivalRangeFor(step);
             }
 
             // Real progress resets the ladder, and "closer than ever" is the test rather than
@@ -390,10 +435,33 @@ namespace Server.Custom
             // Wraparound-safe: compare by subtraction, never a < b.
             if (Core.TickCount - ai.NextMove < 0)
             {
+                if (sampler != null)
+                {
+                    sampler.Gated();
+                }
+
                 return;
             }
 
+            if (sampler == null)
+            {
+                ai.MoveTo(_goal, Run, range);
+                return;
+            }
+
+            // Measured, not inferred: did the mobile move, does its direction carry the running
+            // bit afterwards, and which delay did the engine step on - CurrentSpeed (the pace it
+            // was given) or TransformMoveDelay(CurrentSpeed) (what DoMoveImpl advances NextMove by).
+            Point3D before = _mobile.Location;
+
             ai.MoveTo(_goal, Run, range);
+
+            sampler.Attempted(
+                _mobile.Location != before,
+                (_mobile.Direction & Direction.Running) != 0,
+                ai.NextMove - Core.TickCount,
+                (int)Math.Round(ai.TransformMoveDelay(_mobile.CurrentSpeed) * 1000.0),
+                (int)Math.Round(_mobile.CurrentSpeed * 1000.0));
         }
 
         private void Advance()

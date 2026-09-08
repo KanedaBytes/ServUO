@@ -520,6 +520,26 @@ running = CanRun && (mounted ? delay < Mobile.WalkMount : delay < Mobile.WalkFoo
 
 so 200ms on foot is a run and 400ms is a walk, exactly as for a player.
 
+**And then it was overridden, and the panel said it was not.** The pace was written into
+`CurrentSpeed` and the editor's Bots panel printed it - "running, on foot (200ms/step)" - while the
+bot visibly walked and paused all the way to Trinsic. `DoMoveImpl` does not step on `CurrentSpeed`;
+it steps on `TransformMoveDelay(CurrentSpeed)`, and `BotAI.TransformMoveDelay` returned a constant
+0.5 whenever the bot was commuting, which is exactly whenever the walker steers. The constant and its
+comment ("a brisk walk, not a run") were copied from `DailyLifeAI`, where they exist to escape
+VendorAI's 30-120 *second* delay and where townsfolk are never given a pace. So `NextMove` advanced
+500ms a step, `running = 500 < 400` was false, the client played a 400ms walk animation and then
+nothing for 100ms. `[BotPace` measured it before the fix: a mounted bot given 100ms stepped every
+543ms (median) with the running bit on none of 70 steps, while the walker's own timer ticked every
+109ms and was turned away at the NextMove gate 649 times in 92 seconds. The walker was never the
+limiter; the hypothesis that it ticked slower than the step was wrong by a factor of five in the
+other direction.
+
+The fix is one line: while commuting, the delay is the pace, untouched. Not `base`, either -
+`SpeedInfo.TransformMoveDelay` clamps toward `MaxDelayWild` (0.8) for any uncontrolled creature
+whose stamina is below its maximum, which would re-inflate a run the moment a bot took damage. The
+panel now prints the delay the AI answers with, so it cannot make that claim again; and the walker
+passes every already-satisfied step in one tick rather than spending a tick per hop boundary.
+
 **The four delays are the engine's, not ours.** uo-offline aliases them
 (`using MoveDelays = Server.Movement.Movement`, `CustomBots/Behaviors/TravelerBehavior.cs:23` and
 `AdventurerBehavior.cs:28`) - not a local shadow, it resolves to ModernUO's
@@ -1257,6 +1277,7 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[BotsReload` | GameMaster | Re-read `bots.json`, the player caps it defaults from, **and the chat corpus** (alias `[ReloadBots`). The corpus reloads either way — a bad edit to one has nothing to do with the other. Also **re-validates the work sites**, so after editing the graph the order is `[NavReload` then `[BotsReload` |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 | `[BotTrace on\|off` | GameMaster | Target a bot; echo everything it does to the console. `[BotTrace off all` quiets every traced bot, `[BotTrace list` names them |
+| `[BotPace [seconds]` | GameMaster | Target a walking bot; sample its steps for N seconds (default 30) and report the walker tick, the pace it was given, the delay the engine used, the interval between steps and how many carried the running bit |
 
 ## The event log
 
