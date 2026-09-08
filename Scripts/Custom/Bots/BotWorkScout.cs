@@ -497,7 +497,9 @@ namespace Server.Custom
                             continue;
                         }
 
-                        int z = NavWalker.ResolveZ(map, new Point3D(x, y, current.Z));
+                        // The step form: a flood expanding tile to tile must not take the seed
+                        // scan, or it climbs onto the middle of a ramp. See NavWalker.ResolveStepZ.
+                        int z = NavWalker.ResolveStepZ(map, new Point3D(x, y, current.Z));
 
                         if (!map.CanFit(x, y, z, 16, false, false, true))
                         {

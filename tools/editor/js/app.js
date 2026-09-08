@@ -36,6 +36,7 @@ import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId, insertedId, insertedName } from './ids.js';
 import { buildShape } from './build.js';
 import { liveStatusText } from './live.js';
+import * as adopt from './adopt.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -2240,86 +2241,11 @@ async function pollAdopt() {
 /**
  * Turn a finished proposal into unsaved records, and say what it refused.
  *
- * Stranded waypoints are DROPPED here rather than written: a waypoint whose every edge failed to
- * walk is a point in space with no road, and writing one "to fix later" is the shape of the fault
- * the west road shipped with.
+ * The rule for which records survive - the reachable component is written, the stranded and the
+ * unreachable are dropped - lives in adopt.js, where it is tested. This is the wiring.
  */
 function showAdoptProposal(proposal) {
-    const stranded = new Set(proposal.stranded || []);
-    const created = [];
-
-    for (const waypoint of proposal.waypoints || []) {
-        if (stranded.has(waypoint.id)) {
-            continue;
-        }
-
-        created.push({
-            layer: 'nav', id: `wp:${waypoint.id}`, kind: 'point', map: waypoint.map,
-            label: waypoint.name || waypoint.id,
-            points: [[waypoint.x, waypoint.y, waypoint.z]],
-            props: {
-                id: waypoint.id,
-                ...(waypoint.name ? { name: waypoint.name } : {}),
-                arrivalRange: waypoint.arrivalRange || 0,
-                tags: waypoint.tags || '',
-                source: waypoint.source
-            },
-            fields: []
-        });
-    }
-
-    const alive = new Set(created.map((shape) => shape.props.id));
-
-    for (const edge of proposal.edges || []) {
-        // An edge onto a dropped waypoint goes with it. The join edges are the exception worth
-        // noticing: their far end is one of OURS and is not in `alive` at all.
-        const fromOk = alive.has(edge.from) || !stranded.has(edge.from);
-        const toOk = alive.has(edge.to) || !stranded.has(edge.to);
-
-        if (!fromOk || !toOk) {
-            continue;
-        }
-
-        created.push({
-            layer: 'nav-edges', id: `edge:${edge.from}>${edge.to}`, kind: 'polyline',
-            map: proposal.map, label: '',
-            points: [[0, 0, 0], [0, 0, 0]],
-            props: {
-                from: edge.from, to: edge.to, kind: 'walk',
-                tags: edge.tags || '', source: edge.source
-            },
-            fields: []
-        });
-    }
-
-    for (const destination of proposal.destinations || []) {
-        created.push({
-            layer: 'nav-destinations', id: `dest:${destination.id}`, kind: 'point',
-            map: destination.map, label: destination.name || destination.id,
-            points: [[destination.x, destination.y, destination.z]],
-            props: {
-                id: destination.id, name: destination.name, type: destination.type,
-                tags: destination.tags || '', waypoints: destination.waypoints || '',
-                source: destination.source
-            },
-            fields: []
-        });
-    }
-
-    let index = 0;
-
-    for (const arrival of proposal.arrivals || []) {
-        created.push({
-            layer: 'nav-arrivals', id: `arr:${arrival.destination}#${index++}`, kind: 'point',
-            map: proposal.map, label: `${arrival.destination} arrival`,
-            points: [[arrival.x, arrival.y, arrival.z]],
-            props: {
-                destination: arrival.destination, exclusive: false,
-                waypoints: arrival.waypoints || '', source: arrival.source
-            },
-            fields: []
-        });
-    }
+    const created = adopt.survivors(proposal);
 
     for (const shape of created) {
         createShape(shape);
@@ -2328,43 +2254,18 @@ function showAdoptProposal(proposal) {
     state.proposal = new Set(created.map((shape) => shape.id));
     state.adoptFailures = proposal.failures || [];
 
-    // Save is BLOCKED while any proposed waypoint cannot reach the graph we already have. Not a
-    // warning: an island is the one fault that looks perfect from inside the editor - every edge
-    // pathed, every record valid - and only shows up as a bot that stands still for ever. The way
-    // out is Discard and a region that overlaps ground already saved, so there is no override.
-    state.adoptBlocked = (proposal.islands || []).length > 0 ? proposal.islands : null;
+    // Save is BLOCKED only when NOTHING proposed reaches the graph we already have. A proposal that
+    // reaches us in part is written in part: the unreachable records are dropped above, listed in
+    // the banner, and stay in the reference layer for a later box. The shard decides `blocked`
+    // from what its flood reached; the editor takes that flag and nothing else, because every
+    // record in an island is individually valid and nothing here could tell.
+    state.adoptBlocked = adopt.blocked(proposal) ? (proposal.islands || []) : null;
 
     syncDerived(state.shapes);
     updateCounts();
     requestRender();
 
-    const lines = [
-        `${created.length} record(s) proposed from uo-offline.`,
-        `${(proposal.edges || []).length} edge(s) walked and subdivided under the hop cap.`,
-        `${proposal.links || 0} join(s) onto existing waypoints.`
-    ];
-
-    if (proposal.skipped) {
-        lines.push(`${proposal.skipped.authored} skipped as already authored,`
-            + ` ${proposal.skipped.noArrival} destination(s) skipped for having no arrival.`);
-    }
-
-    if (state.adoptFailures.length > 0) {
-        lines.push('', `${state.adoptFailures.length} edge(s) could not be walked and are NOT`
-            + ' proposed - they are drawn red; hover one for the reason.');
-    }
-
-    if (stranded.size > 0) {
-        lines.push(`${stranded.size} waypoint(s) had no surviving edge and were dropped.`);
-    }
-
-    for (const island of proposal.islands || []) {
-        lines.push('', island);
-    }
-
-    lines.push('', 'Nothing is written yet. Save to accept, or Discard.');
-
-    showBanner(lines.join('\n'), 'warn');
+    showBanner(adopt.summary(proposal, created.length).join('\n'), 'warn');
     setStatus(`Adopted ${created.length} record(s). Save to accept.`, 'ok');
 }
 

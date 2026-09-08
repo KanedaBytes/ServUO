@@ -278,22 +278,34 @@ them are longer than the hop cap and have to be subdivided.
    so a large box is minutes rather than seconds. That count is the only thing distinguishing
    working from hung.
 4. **Read what came back.** The banner reports how many records were proposed, how many joins were
-   made onto existing waypoints, and what was skipped and why. Two things need your eye:
-   - **Red dashed edges** are roads the shard could not walk. They are **not** proposed and will
-     not be written. Hover one for the walker's own reason.
+   made onto existing waypoints, and what was skipped and why. Three things need your eye:
+   - **The two counts.** How many waypoints reach the graph you already have and will be written,
+     and how many cannot and are **dropped**. A dropped record is not lost: it stays in the
+     reference layer, dashed, and the next box that overlaps what you saved joins onto it.
+   - **Red dashed edges** are roads the shard could not walk, or walked and the engine then refused
+     (`flood ok, engine refused`). They are **not** proposed and will not be written. Hover one for
+     the reason.
    - **Stranded waypoints** — any whose every edge failed — are listed and **dropped by Accept**.
      A waypoint with no road is the fault the west road shipped with.
+   The banner also lists any pair of reference records that shared a tile and were folded into one,
+   any record whose Z was moved to where the walker stood (the reference's Z is kept as `refZ`), and
+   every **corridor** walked to a destination whose arrivals were all beyond the hop cap - with its
+   length and the waypoint it starts from, and `REVIEW` past two hops so a far one gets a look
+   before Save.
 5. **Accept by saving.** The proposal is ordinary unsaved records, so `Save` writes them and
-   `Discard` throws them away. Nothing reaches `navigation.json` before that.
+   `Discard` throws them away. Nothing reaches `navigation.json` before that. **Save writes the part
+   that reaches the graph and drops the rest**; the one proposal it refuses outright is a box that
+   reaches nothing at all (`NO JOIN WAS MADE`), because every record in that island is individually
+   valid and the editor could not otherwise tell you it was one.
 6. **Run `[NavAudit`.** It paths every walk edge, so it is the check that the adopted road is real
    rather than merely present.
 
 **Adopt outward from Britain, one box at a time.** A box that touches nothing already saved is an
-island: the load warning will say so, and a bot cannot walk to it. Each box should overlap ground
-you have already accepted, so its edges can **join** onto records that exist — a join is an edge
-onto one of our waypoints, which is additive and never changes the waypoint itself. Working
-outward from the town in short hops means every box lands connected; adopting a distant town first
-and hoping to bridge it later means carrying an island until you do.
+island: Save refuses it, and a bot could not walk to it. Each box should overlap ground you have
+already accepted, so its edges can **join** onto records that exist — a join is an edge onto one of
+our waypoints, which is additive and never changes the waypoint itself. Working outward from the
+town in short hops means every box lands connected; a large box is saved only as far as it reaches,
+and the rest waits, dashed, for the next box.
 
 To send a bot along a newly adopted road and watch it arrive:
 

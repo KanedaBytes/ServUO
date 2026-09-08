@@ -432,3 +432,42 @@ test('an adopted record carries its source, and a hand-authored one carries noth
     assert.match(plain, /"id":"hand-made"/);
     assert.ok(!/"id":"hand-made"[^}]*"source"/.test(plain), 'source was written on an authored record');
 });
+
+test('a corrected Z keeps the reference Z as refZ, and zero is a real refZ', () => {
+    // uo-offline stores the water's Z for every generated dock waypoint (uo-wp-990 at -15 under a
+    // deck at -2). Adopt writes the Z the walker stood on and keeps theirs as refZ, so a diff
+    // against the reference file explains the change. A refZ of 0 is a value, not an absence.
+    const base = JSON.parse(fs.readFileSync(FILES.navigation, 'utf8'));
+
+    // Ids that are not in the shipped file - the real pier records are, since the adopt landed.
+    const pier = {
+        layer: 'nav', id: 'wp:uo-test-pier', kind: 'point', map: 'Trammel',
+        points: [[2069, 2856, -2]],
+        props: { id: 'uo-test-pier', tags: 'road', arrivalRange: 0, source: 'uo-offline', refZ: -15 },
+        fields: []
+    };
+
+    const zero = {
+        layer: 'nav-arrivals', id: 'arr:uo-test-dock#0', kind: 'point', map: 'Trammel',
+        points: [[2072, 2848, -2]],
+        props: { destination: 'uo-test-dock', exclusive: false, waypoints: 'uo-test-pier', source: 'uo-offline', refZ: 0 },
+        fields: []
+    };
+
+    const written = unproject('navigation', JSON.stringify(base, null, 2), { creates: [pier, zero] });
+
+    assert.match(written, /"id":"uo-test-pier"[^}]*"z":-2[^}]*"refZ":-15/);
+    assert.match(written, /"destination":"uo-test-dock"[^}]*"z":-2[^}]*"refZ":0/);
+
+    // And absent on anything that was not corrected.
+    const plain = {
+        layer: 'nav', id: 'wp:uo-test-shore', kind: 'point', map: 'Trammel',
+        points: [[2054, 2855, 0]],
+        props: { id: 'uo-test-shore', tags: 'road', arrivalRange: 0, source: 'uo-offline' },
+        fields: []
+    };
+
+    const untouched = unproject('navigation', JSON.stringify(base, null, 2), { creates: [plain] });
+
+    assert.ok(!/"id":"uo-test-shore"[^}]*"refZ"/.test(untouched), 'refZ was written on an uncorrected record');
+});

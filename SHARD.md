@@ -228,6 +228,16 @@ because bots had been resolving onto the wrong surface and shouldering around it
 this: `[NavAudit` only paths edges already authored, and there was no authored edge over a bridge
 nobody could cross.
 
+**The window was still one riser short, and the pier needed a different fix.** Trinsic's canal
+bridges stand on wooden ramps that rise 5 Z per tile (a `Bridge` tile is stood on at half its
+height but stepped from at its full height, so the engine allows it); the window climbed 4 and
+stopped at the foot of all four. It now climbs 5 - a named deviation from uo-offline's 4, derived in
+`Scripts/Custom/Bots/README.md`. The south pier's waypoint is stored at the **water's** Z, -15,
+thirteen below the planks, so no window found it; `ResolveZ` now scans outward from the land as far
+as 60 for a seed, as uo-offline's `TryFindSeedZ` does, while the floods keep to the window
+(`ResolveStepZ`) so they cannot step from the ground onto the middle of a ramp. `CoreSmoke` walks
+the four canal bridges and the pier as well.
+
 ### Config keys
 
 | key | default | what it does |
@@ -248,16 +258,20 @@ destination and leg progress; the editor's Bots panel shows the same live.
 
 ### The Britain-Trinsic adopt, as it stands
 
-Adopting `1283,1711 871x1372` currently gives: 484 waypoints, 513 edges, **1 join**, 0 edges over
-the cap, 5 failures, 1 stranded, 8 destinations skipped for having no arrival inside the hop cap,
-and **134 waypoints that cannot reach the existing graph**.
+Adopting `1291,1729 929x1274` gave, before the canal-bridge fix: 472 waypoints, 501 edges, 1 join,
+5 failures, 1 stranded, 8 destinations skipped for having no arrival inside the hop cap, and **122
+waypoints that cannot reach the existing graph**. All five failures were Trinsic's water: three
+canal bridges (a ramp riser one Z taller than the window climbed), the south pier (a waypoint stored
+at the water's Z), and two records on one tile. After the fix the same box walks with **0 failures,
+0 stranded and 0 unreachable**, one pair folded, and every hop pathed by the engine both ways.
 
-Save is refused while any waypoint cannot reach the graph, with no override — an island is the one
-fault that looks perfect from inside the editor.
+**Save writes the part of a proposal that reaches the graph and drops the rest**, with both counts
+in the headline; dropped records stay in the reference layer for a later box. The one proposal
+still refused outright is a box that reaches nothing at all.
 
-The 5 remaining failures are all **inside Trinsic** (x 1824-2069), a walled city whose roads run
-through gates; one of them, `1824,2843 -> 1824,2843`, is two reference records on the same tile,
-which `TryPath` cannot route between. Those are the next thing to look at.
+**A destination whose arrivals are all beyond the hop cap gets a walked corridor** from the nearest
+reachable waypoint to a waypoint minted on the arrival tile, listed with its length and flagged for
+review past two hops. The eight skipped destinations were their data measured against our cap.
 
 ### What the acceptance test still needs
 

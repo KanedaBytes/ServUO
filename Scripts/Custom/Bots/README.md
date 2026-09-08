@@ -247,6 +247,29 @@ Door recoveries in the walk probe.
 
 Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
 
+### The Z window climbs 5, not 4
+
+`NavWalker.MaxClimb` is 5; uo-offline's `Walkable.MaxClimb` (`Nav/Walkable.cs:27`) is 4. The
+difference is a wooden ramp, and it is derived from the engine rather than tuned:
+
+- A bridge foot is a `Bridge`-flagged ramp of height 5. A mobile stands on it at **half** its height
+  (`ItemData.CalcHeight`, `Server/TileData.cs`): ramp at Z 10, stand at 12.
+- The engine's step budget is measured from its **full** height. `MovementImpl.GetStartZ` takes
+  `tile.Z + Height` as the top of what you stand on (15), and `Check` allows a step onto anything
+  whose bottom is at most `startTop + StepHeight`, 15 + 2 (`Scripts/Services/Pathing/Movement.cs`).
+  The next ramp at Z 15 (stand 17) qualifies.
+- Stand-to-stand, that is a climb of **5**. Every one of Trinsic's canal bridges rises 2 → 7 → 10 or
+  12 → 17 → 22 that way, and at 4 the flood stopped at the foot of all four; the adopt of the road
+  south reported them as "no walkable road" with both ends standable.
+
+uo-offline lives with the 4. Their `Nav/DistanceField.cs:100-106` says the approximation "rejects
+legs the game allows (Vesper canal bridges, dock ramps, low arches), which made the audit cry
+BLOCKED on edges bots walk every day", and their `[auditedges` floods with the real movement engine
+instead. We take the other exit: the window is a candidate generator, `MovementPath` is the verdict,
+and NavAdopt paths every hop it proposes (see *Z resolution* below). One Z looser than theirs is the
+safe direction for a generator, because a hop the engine refuses is caught and named rather than
+saved.
+
 ## Severed seams
 
 Places where this layer deliberately stops short. Each is marked with a one-line comment at the
@@ -438,6 +461,46 @@ the ground is still the right answer when it is - it was only ever wrong as the 
 well when handed Z 6 to Z 3; we had never handed it the deck. `CoreSmoke` now walks four known
 bridges as a regression test, because nothing cheaper catches this: the audit only paths edges we
 have already authored, and there is no authored edge over a bridge nobody could cross.
+
+**Two forms, and the split is the second half of the translation.** Their `TryFindSeedZ` and
+`TryFindStandZ` are different functions for a reason the first port missed:
+
+- `NavWalker.ResolveZ` is the **seed** form: the window around the hint, the window around the land,
+  and then - new - a scan outward from the land as far as `SeedScanRange`, 60, nearest first
+  (`Walkable.cs:33,38-62`). It answers "where would a mobile stand on *this* tile" for a waypoint,
+  an arrival, an audit endpoint or a snap. It is what resolves Trinsic's south pier: uo-offline
+  stores the **water's** Z, -15, for every generated dock, and the deck is at -2, thirteen above -
+  outside both windows, so `TryPath` reported "nothing standable within 8 tiles" of a pier you can
+  stand on.
+- `NavWalker.ResolveStepZ` is the **step** form: the two windows and nothing wider. The floods in
+  `NavCorridor.TryPath` and `BotWorkScout` use it when expanding tile to tile. Tried the other way:
+  with the seed scan in the step, the flood went from flat ground at Z 10 straight onto a ramp tile
+  whose stand Z is 17, a step of 7 the engine refuses, and proposed a road nobody could walk.
+- `NavCorridor.TrySnap` resolves each ring with the seed form, so a record's own tile wins when
+  anything on it stands. It was briefly two passes (step form over every ring, then seed form) to
+  keep a wall-tile waypoint off the roof above it; that cost the Britain-Trinsic bridge its own
+  waypoint, which snapped to the bank eight tiles away and kept the river bed as its Z.
+- **Over ground, the scan climbs less than one storey.** Uncapped, it found roofs: three Trinsic
+  shop arrivals sit on counter and display-case tiles where nothing stands on the floor, and the
+  nearest surface above was the stone roof at 30 to 35. Roof tiles carry no `Roof` flag in this
+  tiledata, so the guard is geometric - `SeedClimb`, 20, FastAStar's `PlaneHeight`: a goal a full
+  plane above the start is not pathable from it anyway. It applies only where the land is ground.
+  A deck over water has no ground storey: the Britain-Trinsic bridge stands 21 above the river bed
+  its waypoint stores, and a ceiling measured from the bed put the deck out of reach and the
+  engine refused both of that waypoint's edges. Downward stays unlimited, as theirs is.
+- **A doorway answers before the scan.** A closed door is an Impassable *item*, so at a door tile
+  nothing in either window stands - and the first version of the scan then found the floor above
+  the door, twenty Z up, and aimed every walker at the tavern's upper storey. The walk probe went
+  from zero recoveries to five bots mid-recovery in one run, and the life probe lost its bank crowd
+  behind the bank's doors. `ResolveZ` now checks `DoorAt` at the hint and at the land Z before it
+  scans, the same rule `NavCorridor.CanStand` applies; the next run walked clean (one repath, no
+  sidesteps). uo-offline's seed has the same hole, but they only seed a destination tile, never a
+  hop goal.
+
+The window itself climbs 5 where theirs climbs 4 - see *The Z window climbs 5, not 4* under
+Deviations. `CoreSmoke` now walks Trinsic's four canal bridges and the pier (with its stale Z) as
+well as the four Britain bridges, and checks that a same-tile pair is a one-point path rather than
+a failure.
 
 ### Bots move at a player's pace, and ride
 

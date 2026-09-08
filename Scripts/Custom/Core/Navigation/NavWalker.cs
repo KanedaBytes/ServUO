@@ -823,15 +823,58 @@ namespace Server.Custom
         /// <summary>
         /// How far a step may climb while looking for the surface to stand on.
         ///
-        /// Translated from uo-offline's `CustomBots/Nav/Walkable.cs:27-28`, numbers included:
-        /// UO lets a mobile climb a little and drop a lot, so the window is asymmetric. Theirs
-        /// is the only implementation of this idea either tree has, and it is the piece we were
-        /// missing - see `Scripts/Custom/Bots/README.md`.
+        /// Translated from uo-offline's `CustomBots/Nav/Walkable.cs:27-28`: UO lets a mobile climb
+        /// a little and drop a lot, so the window is asymmetric. Theirs is 4. OURS IS 5, and the
+        /// difference is a wooden ramp.
+        ///
+        /// A bridge foot is a `Bridge`-flagged ramp of height 5. A mobile stands on it at half its
+        /// height (`ItemData.CalcHeight`, Server/TileData.cs) but the engine's step budget is
+        /// measured from its FULL height: `MovementImpl.GetStartZ` takes `tile.Z + Height` as the
+        /// top of what you stand on, and `Check` allows a step up to `startTop + StepHeight(2)`
+        /// (Scripts/Services/Pathing/Movement.cs). So from a ramp at Z 10 you stand at 12, your
+        /// top is 15, and the next ramp at Z 15 (stand 17) is reachable: a climb of 5 measured
+        /// stand-to-stand. Every one of Trinsic's canal bridges rises 2 -> 7 -> 10 or 12 -> 17 ->
+        /// 22 that way, and at 4 the flood stopped at the foot of all of them. uo-offline's own
+        /// `Nav/DistanceField.cs:100-106` admits the same: their window "rejects legs the game
+        /// allows (Vesper canal bridges, dock ramps, low arches)", which is why their audit floods
+        /// with the real movement engine instead.
+        ///
+        /// This window is a candidate generator, not a verdict - `MovementPath` is the verdict,
+        /// and NavAdopt paths every hop it proposes. Being one Z looser than theirs is the safe
+        /// direction for a generator. See `Scripts/Custom/Bots/README.md`, "Z resolution".
         /// </summary>
-        private const int MaxClimb = 4;
+        private const int MaxClimb = 5;
 
         /// <summary>And how far it may drop. See MaxClimb.</summary>
         private const int MaxDrop = 20;
+
+        /// <summary>
+        /// How far from the land surface a SEED may be found when the window fails.
+        ///
+        /// uo-offline's `Walkable.SeedScanRange` (`Nav/Walkable.cs:33`), number included. A pier
+        /// deck stands 13 above the water it is built over, and the reference stores the water Z
+        /// for every generated dock, so a window of 5 around either the hint or the land finds
+        /// nothing. The scan is for seeds only - a waypoint, an arrival, a snap - never for a
+        /// flood step, because a step that may find any surface at all will step from the ground
+        /// straight onto the middle of a ramp, which the engine refuses.
+        /// </summary>
+        private const int SeedScanRange = 60;
+
+        /// <summary>
+        /// How far ABOVE the higher of the hint and the land the seed scan may climb: one storey.
+        ///
+        /// The scan's job is a floor or a deck the stored Z missed - a shop floor at 10 stored as
+        /// 0, a pier at -2 stored as -15. Left uncapped it also found roofs: three Trinsic shop
+        /// arrivals sit on counter and display-case tiles, nothing stands on the floor there, and
+        /// the nearest surface above was the stone roof at 30 to 35. A roof is never where anything
+        /// is authored to go, but roof tiles carry no Roof flag in this tiledata, so the guard is
+        /// geometric. Twenty is FastAStarAlgorithm's PlaneHeight: a goal a full plane above the
+        /// start is not pathable from it in one search, so nothing at or above that is an answer
+        /// a walker could use. Applied only where the land is ground - a deck over water has no
+        /// ground storey to measure from. Downward is unlimited, as theirs is; a stale hint above
+        /// the ground wants the ground.
+        /// </summary>
+        private const int SeedClimb = 20;
 
         /// <summary>
         /// The Z a mobile would actually stand at on this tile, given a Z to start looking from.
@@ -849,35 +892,160 @@ namespace Server.Custom
         /// reason alone - and `MovementPath` crosses it perfectly well when handed Z 6 to Z 3,
         /// which is how we know the pathfinder was never the problem.
         ///
-        /// So: search a window around the hint, nearest first, climb 4 and drop 20. If nothing in
+        /// So: search a window around the hint, nearest first, climb 5 and drop 20. If nothing in
         /// the window stands, start again from the tile's own land surface before giving up -
         /// a hint can be stale or simply wrong, and the ground is still the right fallback when
         /// it is. Falling back to the ground FIRST was the bug.
+        ///
+        /// THIS IS THE SEED FORM. When both windows fail it scans outward from the land surface
+        /// as far as `SeedScanRange`, which is what resolves a pier stored at the water's Z onto
+        /// its deck. It answers "where would a mobile stand on THIS tile" for a waypoint, an
+        /// arrival, an audit endpoint or a snap. A flood expanding from one tile to the next must
+        /// use `ResolveStepZ` instead, or it will climb anything.
         /// </summary>
         public static int ResolveZ(Map map, Point3D point)
         {
+            int z;
+
+            // On a false answer TryResolveZ has already left the land Z (or the hint, with no
+            // facet) in z, which is the same fallback the old implementation ended on.
+            TryResolveZ(map, point, out z);
+
+            return z;
+        }
+
+        /// <summary>
+        /// `ResolveZ`, saying whether anything was standable at all rather than answering with
+        /// the land Z when nothing was. NavAdopt writes a corrected Z only on a true answer.
+        /// </summary>
+        public static bool TryResolveZ(Map map, Point3D point, out int z)
+        {
+            z = point.Z;
+
+            if (map == null)
+            {
+                return false;
+            }
+
+            if (TryStepZ(map, point, out z))
+            {
+                return true;
+            }
+
+            int landZ = map.GetAverageZ(point.X, point.Y);
+
+            // A DOORWAY, before the scan. A closed door is an Impassable item, so at a door tile
+            // nothing in either window stands - and the first version of the scan then found the
+            // floor above the door, twenty Z up, and aimed every walker at a tavern's upper storey.
+            // The walk probe went from zero recoveries to five bots mid-recovery in one run. A door
+            // is something a walker opens (TryOpenBlockingDoor), and NavCorridor.CanStand already
+            // counts a door tile as standable at the Z beside it; so does this. The hint first,
+            // because an upper-floor doorway authored at its own Z is right as authored.
+            if (DoorAt(map, point.X, point.Y, point.Z))
+            {
+                z = point.Z;
+                return true;
+            }
+
+            if (DoorAt(map, point.X, point.Y, landZ))
+            {
+                z = landZ;
+                return true;
+            }
+
+            // uo-offline's `Walkable.TryFindSeedZ` (`Nav/Walkable.cs:38-62`): expand outward from
+            // the land surface in both directions, nearest first. The window from the land has
+            // already covered +5/-20; this reaches the deck a stale hint put under water.
+            //
+            // Upward it stops short of one storey above the hint or the land, whichever is higher
+            // (SeedClimb) - BUT ONLY WHERE THE LAND IS GROUND. The ceiling exists to stop a blocked
+            // shop floor answering with its roof, and a roof is a storey above a ground floor. A
+            // deck over water has no ground storey: the Britain-Trinsic bridge stands 21 above the
+            // river bed and uo-wp-79 stores the river bed, and a ceiling measured from that bed
+            // put the deck out of reach and the engine refused both of the waypoint's edges.
+            var landTile = map.Tiles.GetLandTile(point.X, point.Y);
+            bool ground = (TileData.LandTable[landTile.ID & TileData.MaxLandValue].Flags & TileFlag.Impassable) == 0;
+            int ceiling = ground ? Math.Max(point.Z, landZ) + SeedClimb : Int32.MaxValue;
+
+            for (int d = 1; d <= SeedScanRange; d++)
+            {
+                if (landZ + d < ceiling && map.CanFit(point.X, point.Y, landZ + d, 16, false, false, true))
+                {
+                    z = landZ + d;
+                    return true;
+                }
+
+                if (map.CanFit(point.X, point.Y, landZ - d, 16, false, false, true))
+                {
+                    z = landZ - d;
+                    return true;
+                }
+            }
+
+            z = landZ;
+            return false;
+        }
+
+        /// <summary>
+        /// THE STEP FORM of ResolveZ: the window around the hint, then the window around the land,
+        /// and nothing wider. Used by the floods when expanding from one tile to its neighbour,
+        /// where the hint is the Z the flood is standing at and the window is the climb rule.
+        ///
+        /// The seed scan must not run here. Tried: with it, the flood stepped from flat ground at
+        /// Z 10 straight onto a ramp tile whose stand Z is 17 - a step of 7 that `MovementImpl`
+        /// refuses (its budget from land is 2) - and proposed a road the engine would not walk.
+        /// </summary>
+        public static int ResolveStepZ(Map map, Point3D point)
+        {
+            int z;
+
             if (map == null)
             {
                 return point.Z;
             }
 
-            int z;
+            return TryStepZ(map, point, out z) ? z : map.GetAverageZ(point.X, point.Y);
+        }
 
+        /// <summary>
+        /// Whether a door stands on this tile within a mobile's height of the given Z. The same
+        /// test NavCorridor.HasDoor applies when a flood asks whether a tile can be stood on.
+        /// </summary>
+        public static bool DoorAt(Map map, int x, int y, int z)
+        {
+            IPooledEnumerable items = map.GetItemsInRange(new Point3D(x, y, z), 0);
+
+            try
+            {
+                foreach (Item item in items)
+                {
+                    if (item is BaseDoor && Math.Abs(item.Z - z) < 20)
+                    {
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                // The non-generic pooled enumerable must be freed or its pool entry leaks.
+                items.Free();
+            }
+
+            return false;
+        }
+
+        private static bool TryStepZ(Map map, Point3D point, out int z)
+        {
             if (TryStandZ(map, point.X, point.Y, point.Z, out z))
             {
-                return z;
+                return true;
             }
 
             // The hint was no use here. Try again from the ground this tile actually has, which is
             // what the old implementation did immediately - correct as a fallback, wrong as a rule.
             int landZ = map.GetAverageZ(point.X, point.Y);
 
-            if (TryStandZ(map, point.X, point.Y, landZ, out z))
-            {
-                return z;
-            }
-
-            return landZ;
+            return TryStandZ(map, point.X, point.Y, landZ, out z);
         }
 
         /// <summary>

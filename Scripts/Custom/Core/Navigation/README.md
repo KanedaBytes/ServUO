@@ -312,6 +312,13 @@ them are longer than `Custom.NavHopMaxTiles`, so each is flood-filled with `NavC
 subdivided under the cap. That is a real pathfind per edge, which is why the work runs in
 `LoopQueue` passes and writes progress rather than finishing inside one tick.
 
+**And every hop is then pathed by the engine, both ways** - `NavCorridor.TryVerifyHopsBothWays`, the
+test `[NavAudit` applies after a save, run before the proposal is written. The flood and
+`MovementPath` answer different questions and can disagree about a step; a hop the flood accepted
+and the engine refused fails its whole edge with the reason `flood ok, engine refused: a -> b`, so
+the disagreement shows in the proposal rather than at the next audit. Hops of one tile are skipped,
+as the audit skips them, because `MovementPath` returns no path for an adjacent goal.
+
 **Ground we have already authored is skipped** - the union of our nav-zone rects and a hop cap's
 radius around every existing waypoint, derived rather than a Britain rectangle, so it keeps holding
 for the next town authored by hand. 158 of their waypoints sit inside Britain where we have 121.
@@ -326,6 +333,46 @@ is not touched, it gains a neighbour.
 **A failed edge is reported, never written.** Its waypoints still land; the edge goes to `failures`
 with the walker's reason. A waypoint left with no surviving edge at all is listed in `stranded`, and
 Accept drops it - writing a point with no road is the shape of the fault the west road shipped with.
+
+**A destination none of whose arrivals is inside the hop cap gets a corridor.** Nav.Data's rule -
+an arrival further than the cap from every waypoint is one a bot can be sent to and cannot leave -
+applied before the write. uo-offline authored against a 38-tile leg, so a forge 20 tiles from its
+road is fine in their data and was skipped in ours: eight destinations in the Britain-Trinsic box,
+all for our cap and none for theirs. After the component joins have walked, `PlanArrivalCorridors`
+takes, for each such destination, the arrival nearest any reachable waypoint (the proposal's or
+ours), mints a waypoint on that arrival's tile, and queues a corridor from the one to the other -
+walked, engine-pathed and subdivided like any edge. Once it walks, the minted id goes **first** in
+the destination's `waypoints` (a route ends at the first declared waypoint that exists, then appends
+the arrival) and on the arrival itself. Every corridor is listed in `corridors` with its length and
+the waypoint it starts from, flagged `review` past two hops so a far one is looked at before Save
+rather than refused; one that fails to walk is in `failures` with the walker's reason and its
+waypoint is withdrawn rather than reported as stranded.
+
+**Save writes the component that reaches the graph and drops the rest.** After the walk, every
+proposed waypoint is sorted into reached (a flood from our own waypoints along the proposed edges
+gets there), stranded (no surviving edge at all) or unreachable (connected to each other, not to
+us). The proposal carries `reachable`, `unreachable` and `blocked`; the editor writes the reached
+set, drops the other two with both counts in its headline, and prunes arrivals against what will
+actually be written. Dropped records stay in the reference layer, dashed, and the next box that
+overlaps the saved ground joins onto them. The one refusal left is `blocked`: nothing proposed
+reaches us, decided from that flood rather than from joins queued (a join whose walk failed used to
+count). `status` says `done` only once joins, islands and pruning have all run; it used to say so
+as soon as the last edge was walked, and the editor latched that snapshot.
+
+**Two reference records on one tile fold into the first.** uo-offline's WP 140 and Honor Trail 1
+both sit at 1824,2843 with an edge between them, a road of no length that `MovementPath` cannot
+path and the flood reported as "no walkable road" from a tile to itself - which severed the 48
+Honor Trail records from Trinsic. The first in reference order is kept; every edge, destination and
+arrival naming the other is re-pointed to it, and the pair is listed in `folded` as `folded>kept`.
+Their own dungeon cleanup merged 519 co-located nodes the same way.
+
+**A record is written at the Z the walker stood on, with the reference's kept as `refZ`.** uo-offline
+stores the water's Z for every generated dock: `uo-wp-990` at -15 under a deck at -2, and the
+Trinsic dock arrivals the same. Where the walk's snap kept the record's tile and changed only its Z,
+or an arrival resolves onto a surface at another Z, Adopt writes the standable Z and keeps theirs as
+`refZ`, so a diff against the reference file explains the change; every correction is listed in
+`corrected`. Destinations are left as authored - an anvil tile is never standable, and "the land
+under it" would be a second wrong answer. Their `[fixdest` repairs their data the same way.
 
 Every adopted record carries `source: "uo-offline"`, and every id is namespaced `uo-` including the
 waypoints minted to subdivide a hop. Both exist so an adopted record stays tellable from one

@@ -256,18 +256,31 @@ namespace Server.Custom
         ///
         /// Coordinates rather than waypoint ids on purpose: these crossings are not in the graph,
         /// and the point is to know the ground can be walked BEFORE anybody authors a road over it.
+        ///
+        /// The second bug it guards is the one the first fix left: Trinsic's canal bridges stand
+        /// on wooden ramps that rise five Z per tile, one more than the window climbed, so the
+        /// flood stopped at the foot of all four. And the pier: the reference stores the water's
+        /// Z for the deck waypoint, thirteen below the planks, and nothing near it was standable
+        /// until the seed scan. THE PIER ROW CARRIES ITS STALE Z ON PURPOSE - from Z 0 the drop
+        /// window finds the deck and the row would pass without exercising anything.
         /// </summary>
         private static bool RunCrossingCheck(List<string> report)
         {
             report.Add("-- nav crossings --");
 
-            // from-x, from-y, to-x, to-y, what it is.
+            // from-x, from-y, from-z, to-x, to-y, to-z, what it is. The Z is the hint a waypoint
+            // record would carry, which for the pier is the wrong one.
             int[][] crossings =
             {
-                new[] { 1473, 2159, 1484, 2158 },
-                new[] { 1396, 1748, 1410, 1734 },
-                new[] { 1504, 1707, 1487, 1714 },
-                new[] { 1537, 1630, 1527, 1629 },
+                new[] { 1473, 2159, 0, 1484, 2158, 0 },
+                new[] { 1396, 1748, 0, 1410, 1734, 0 },
+                new[] { 1504, 1707, 0, 1487, 1714, 0 },
+                new[] { 1537, 1630, 0, 1527, 1629, 0 },
+                new[] { 1966, 2818, 0, 1980, 2818, 0 },
+                new[] { 1954, 2781, 10, 1981, 2780, 11 },
+                new[] { 1943, 2827, 10, 1945, 2844, 15 },
+                new[] { 1867, 2779, 0, 1886, 2780, 0 },
+                new[] { 2054, 2855, 0, 2069, 2856, -15 },
             };
 
             string[] names =
@@ -276,6 +289,11 @@ namespace Server.Custom
                 "Britain west bridge",
                 "Britain road bridge",
                 "Britain east bridge",
+                "Trinsic canal bridge east (wp-176 -> wp-173)",
+                "Trinsic canal bridge centre (wp-181 -> wp-192)",
+                "Trinsic canal bridge south (wp-166 -> wp-167)",
+                "Trinsic canal bridge west (trin2 -> wp-179)",
+                "Trinsic south pier (wp-197 -> wp-990, stored at the water Z)",
             };
 
             bool ok = true;
@@ -283,8 +301,8 @@ namespace Server.Custom
             for (int i = 0; i < crossings.Length; i++)
             {
                 int[] pair = crossings[i];
-                var from = new Point3D(pair[0], pair[1], 0);
-                var to = new Point3D(pair[2], pair[3], 0);
+                var from = new Point3D(pair[0], pair[1], pair[2]);
+                var to = new Point3D(pair[3], pair[4], pair[5]);
 
                 List<Point3D> path;
                 string error;
@@ -298,6 +316,75 @@ namespace Server.Custom
 
                 ok = false;
                 report.Add(String.Format("  FAIL: {0} - {1}", names[i], error ?? "no route"));
+            }
+
+            // The pier deck by itself: a waypoint stored at the water's Z must resolve onto the
+            // planks, not stay in the water. -2 is the plank top (0x07CB at -3, height 1).
+            var pier = new Point3D(2069, 2856, -15);
+            int deck = NavWalker.ResolveZ(Map.Trammel, pier);
+
+            if (deck == -2)
+            {
+                report.Add("  ok: pier deck resolves from the water Z -15 to -2");
+            }
+            else
+            {
+                ok = false;
+                report.Add(String.Format(
+                    "  FAIL: pier deck resolved from the water Z -15 to {0}, expected -2", deck));
+            }
+
+            // And the same question over WATER: the Britain-Trinsic bridge deck at 1473,2159 stands
+            // 21 above the river bed its reference waypoint stores. A deck over water has no ground
+            // storey, so the roof ceiling below must not apply here.
+            var span = new Point3D(1473, 2159, -15);
+            int spanDeck = NavWalker.ResolveZ(Map.Trammel, span);
+
+            if (spanDeck == 6)
+            {
+                report.Add("  ok: bridge deck resolves from the river bed Z -15 to 6");
+            }
+            else
+            {
+                ok = false;
+                report.Add(String.Format(
+                    "  FAIL: bridge deck resolved from the river bed Z -15 to {0}, expected 6", spanDeck));
+            }
+
+            // A shop floor blocked by its counter (1882,2805: boards at 10 under a counter, stone
+            // roof at 34) must NOT resolve onto the roof. Nothing stands there, so the seed form
+            // answers false and ResolveZ falls back to the land, 0, as it always did.
+            var counter = new Point3D(1882, 2805, 0);
+            int roofless;
+            bool stood = NavWalker.TryResolveZ(Map.Trammel, counter, out roofless);
+
+            if (!stood && NavWalker.ResolveZ(Map.Trammel, counter) == 0)
+            {
+                report.Add("  ok: a blocked shop floor does not resolve onto its roof");
+            }
+            else
+            {
+                ok = false;
+                report.Add(String.Format(
+                    "  FAIL: blocked shop floor resolved to {0} (standable={1}), expected the land at 0",
+                    roofless, stood));
+            }
+
+            // Two records on one tile (uo-wp-140 and uo-honor-trail-1): a road of no length is
+            // one point, not a failure.
+            var same = new Point3D(1824, 2843, 0);
+            List<Point3D> single;
+            string sameError;
+
+            if (NavCorridor.TryPath(Map.Trammel, same, same, out single, out sameError) && single.Count == 1)
+            {
+                report.Add("  ok: a same-tile pair walks as a one-point path");
+            }
+            else
+            {
+                ok = false;
+                report.Add(String.Format(
+                    "  FAIL: same-tile pair - {0}", sameError ?? String.Format("{0} point(s)", single.Count)));
             }
 
             return ok;

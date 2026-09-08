@@ -172,10 +172,22 @@ namespace Server.Custom
                     return;
                 }
 
+                // Then the destinations nothing can leave: a corridor from the nearest reachable
+                // waypoint to an arrival that sits beyond the hop cap of every waypoint. Their
+                // data, our cap - all eight in the Britain-Trinsic box were inside uo-offline's
+                // 38-tile leg and outside our 12.
+                if (job.PlanArrivalCorridors())
+                {
+                    LoopQueue.Post(() => Step(job));
+                    return;
+                }
+
+                job.SettleCorridors();
                 job.FindIslands();
                 job.PruneUnreachable();
 
                 _running = false;
+                job.Finished = true;
 
                 Write(job);
 
@@ -226,8 +238,48 @@ namespace Server.Custom
             public readonly List<string> SkippedNoReach = new List<string>();
             public readonly List<string> Islands = new List<string>();
 
+            /// <summary>Reference waypoints folded into another on the same tile, as "folded&gt;kept".</summary>
+            public readonly List<string> Folded = new List<string>();
+
+            /// <summary>Records whose Z was moved to where the walker stood, as "id x,y: ref -&gt; z".</summary>
+            public readonly List<string> Corrected = new List<string>();
+
+            /// <summary>
+            /// Proposed waypoints connected to each other but not to the graph we have. Accept
+            /// drops these and writes the rest; they stay in the reference layer for a later box.
+            /// </summary>
+            public readonly List<string> Unreachable = new List<string>();
+
+            /// <summary>How many proposed waypoints reach the graph we have.</summary>
+            public int ReachedCount;
+
+            /// <summary>
+            /// True when NOTHING proposed reaches the graph we have. Decided from reachability,
+            /// not from joins queued: a join whose walk failed still counted as a link, which let
+            /// a proposal that reached nothing pass as joined.
+            /// </summary>
+            public bool Blocked;
+
+            /// <summary>
+            /// True once joins, corridors, islands and pruning have all run. The proposal says
+            /// "done" only then: it used to say it as soon as the last edge was walked, and the
+            /// editor latched that snapshot - no joins, no islands, arrivals unpruned.
+            /// </summary>
+            public bool Finished;
+
+            /// <summary>The kept id for every folded one; anything naming the folded id is re-pointed.</summary>
+            private readonly Dictionary<string, string> _alias =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// Corridors walked from a reachable waypoint to a destination none of whose arrivals
+            /// was inside the hop cap. See PlanArrivalCorridors.
+            /// </summary>
+            public readonly List<Corridor> Corridors = new List<Corridor>();
+
             public int Next;
             private bool _joinsPlanned;
+            private bool _corridorsPlanned;
             public int SkippedAuthored;
             public int SkippedRegion;
             public int SkippedNoArrival;
@@ -292,6 +344,37 @@ namespace Server.Custom
                     Waypoints[waypoint.Id] = waypoint;
                 }
 
+                // TWO RECORDS ON ONE TILE FOLD INTO THE FIRST. uo-offline's WP 140 and Honor Trail
+                // 1 both sit at 1824,2843 with an edge between them - a road of no length, which
+                // `MovementPath` cannot path (it returns no path for a goal within one tile,
+                // MovementPath.cs:34) and NavAudit would have to special-case for ever. Their own
+                // dungeon cleanup "merged 519 co-located/tight nodes" (waypoints.json:2), so this
+                // is their rule applied to the overworld. The first in reference order is kept;
+                // every edge, destination and arrival that names the other is re-pointed to it,
+                // and the pair is listed so the proposal explains the missing id.
+                var byTile = new Dictionary<long, string>();
+
+                foreach (NavWaypoint waypoint in reference.Waypoints ?? new List<NavWaypoint>())
+                {
+                    if (!Waypoints.ContainsKey(waypoint.Id))
+                    {
+                        continue;
+                    }
+
+                    long tile = ((long)waypoint.X << 32) | (uint)waypoint.Y;
+                    string kept;
+
+                    if (!byTile.TryGetValue(tile, out kept))
+                    {
+                        byTile[tile] = waypoint.Id;
+                        continue;
+                    }
+
+                    _alias[waypoint.Id] = kept;
+                    Folded.Add(String.Format("{0}>{1}", waypoint.Id, kept));
+                    Waypoints.Remove(waypoint.Id);
+                }
+
                 var byId = new Dictionary<string, NavWaypoint>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (NavWaypoint waypoint in reference.Waypoints ?? new List<NavWaypoint>())
@@ -301,15 +384,24 @@ namespace Server.Custom
 
                 foreach (NavEdge edge in reference.Edges ?? new List<NavEdge>())
                 {
-                    bool from = Waypoints.ContainsKey(edge.From);
-                    bool to = Waypoints.ContainsKey(edge.To);
+                    string fromId = Alias(edge.From);
+                    string toId = Alias(edge.To);
+
+                    // The edge between the two halves of a folded pair: nothing to walk.
+                    if (Insensitive.Equals(fromId, toId))
+                    {
+                        continue;
+                    }
+
+                    bool from = Waypoints.ContainsKey(fromId);
+                    bool to = Waypoints.ContainsKey(toId);
 
                     if (!from && !to)
                     {
                         continue;
                     }
 
-                    var pending = new PendingEdge { Edge = edge, FromId = edge.From, ToId = edge.To };
+                    var pending = new PendingEdge { Edge = edge, FromId = fromId, ToId = toId };
 
                     // AN EDGE WITH ONE END IN GROUND WE HAVE AUTHORED BECOMES A JOIN.
                     //
@@ -321,7 +413,7 @@ namespace Server.Custom
                     // is walked like any other.
                     if (from != to)
                     {
-                        string outsideId = from ? edge.To : edge.From;
+                        string outsideId = from ? toId : fromId;
                         NavWaypoint outside = byId.ContainsKey(outsideId) ? byId[outsideId] : null;
 
                         if (outside == null || !authored.Contains(outside.X, outside.Y))
@@ -383,6 +475,15 @@ namespace Server.Custom
                         continue;
                     }
 
+                    // The reference is loaded fresh for every run, so re-pointing its records
+                    // through the fold aliases touches nothing that outlives this job.
+                    destination.WaypointIds = Alias(destination.WaypointIds);
+
+                    foreach (NavArrival arrival in mine)
+                    {
+                        arrival.WaypointIds = Alias(arrival.WaypointIds);
+                    }
+
                     Destinations.Add(destination);
                     Arrivals.AddRange(mine);
                 }
@@ -401,6 +502,34 @@ namespace Server.Custom
                 }
 
                 return found;
+            }
+
+            /// <summary>
+            /// A waypoint id, or a space-separated list of them, with every folded id replaced
+            /// by the one it was folded into. Anything else passes through untouched.
+            /// </summary>
+            private string Alias(string ids)
+            {
+                if (String.IsNullOrEmpty(ids) || _alias.Count == 0)
+                {
+                    return ids;
+                }
+
+                string[] parts = ids.Split(' ');
+                bool changed = false;
+
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string kept;
+
+                    if (_alias.TryGetValue(parts[i], out kept))
+                    {
+                        parts[i] = kept;
+                        changed = true;
+                    }
+                }
+
+                return changed ? String.Join(" ", parts) : ids;
             }
 
             private static bool Refused(string tags)
@@ -457,7 +586,9 @@ namespace Server.Custom
                 List<Point3D> path;
                 string error;
 
-                if (!NavCorridor.TryPath(Map, start, goal, out path, out error) || path.Count < 2)
+                // A one-point path is two ends that snapped onto one tile, which Subdivide writes
+                // as a single hop with nothing between; it is not a failure.
+                if (!NavCorridor.TryPath(Map, start, goal, out path, out error) || path.Count < 1)
                 {
                     Failures.Add(new FailedEdge
                     {
@@ -472,7 +603,40 @@ namespace Server.Custom
                     return;
                 }
 
+                // THE Z A MOBILE STANDS AT ON THE RECORD'S TILE, NOT THE ONE THE REFERENCE STORED.
+                // Asked of the tile itself with NavWalker.TryResolveZ - the same question the
+                // walker asks when it aims a hop there - rather than read off the snapped path,
+                // because the snap may have started from a neighbouring tile while the record's
+                // own tile stands at a Z the reference simply had wrong: uo-wp-990 at -15, the
+                // water under a deck at -2. Written as stood, with theirs kept as refZ so the diff
+                // explains itself; uo-offline's own [fixdest repairs their data the same way. Only
+                // OUR proposal's records: the far end of a join is one of ours and is never touched.
+                CorrectZ(from);
+                CorrectZ(to);
+
                 Subdivide(pending, from, to, path);
+            }
+
+            private void CorrectZ(NavWaypoint waypoint)
+            {
+                if (!Waypoints.ContainsKey(waypoint.Id) || waypoint.RefZ.HasValue)
+                {
+                    return;
+                }
+
+                int stood;
+
+                if (!NavWalker.TryResolveZ(Map, new Point3D(waypoint.X, waypoint.Y, waypoint.Z), out stood)
+                    || stood == waypoint.Z)
+                {
+                    return;
+                }
+
+                Corrected.Add(String.Format(
+                    "{0} {1},{2}: {3} -> {4}", waypoint.Id, waypoint.X, waypoint.Y, waypoint.Z, stood));
+
+                waypoint.RefZ = waypoint.Z;
+                waypoint.Z = stood;
             }
 
             /// <summary>
@@ -509,6 +673,15 @@ namespace Server.Custom
                 string previous = from.Id;
                 Point3D anchor = points[0];
                 int minted = 0;
+
+                // What this call adds, so a hop the engine refuses can take the whole edge back
+                // out again: the edge is proposed whole or not at all.
+                int edgesBefore = Edges.Count;
+                int subdivisionsBefore = Subdivisions.Count;
+                var joinsAdded = new List<string>();
+                var hops = new List<Point3D>();
+
+                hops.Add(points[0]);
 
                 for (int i = 1; i < points.Count; i++)
                 {
@@ -568,12 +741,50 @@ namespace Server.Custom
                         && (Insensitive.Equals(previous, pending.OurId)
                             || Insensitive.Equals(next, pending.OurId)))
                     {
-                        Joins.Add(String.Format("{0}>{1}", previous, next));
+                        string join = String.Format("{0}>{1}", previous, next);
+
+                        if (Joins.Add(join))
+                        {
+                            joinsAdded.Add(join);
+                        }
                     }
 
+                    hops.Add(at);
                     previous = next;
                     anchor = at;
                 }
+
+                // THE ENGINE HAS THE LAST WORD. The flood said a road exists; this asks whether
+                // the pathfinder a bot will actually use walks each hop of it, both ways, which is
+                // the question [NavAudit asks after the save. A refused hop fails the edge with its
+                // own reason, drawn red like any other failure, rather than being saved for the
+                // audit to find - and the reason says the two disagreed, which is the thing worth
+                // knowing when the climb window is one Z looser than uo-offline's.
+                string refused;
+
+                if (NavCorridor.TryVerifyHopsBothWays(Map, hops, out refused))
+                {
+                    return;
+                }
+
+                Edges.RemoveRange(edgesBefore, Edges.Count - edgesBefore);
+                Subdivisions.RemoveRange(subdivisionsBefore, Subdivisions.Count - subdivisionsBefore);
+
+                foreach (string join in joinsAdded)
+                {
+                    Joins.Remove(join);
+                }
+
+                Failures.Add(new FailedEdge
+                {
+                    From = pending.FromId,
+                    To = pending.ToId,
+                    Reason = refused ?? "flood ok, engine refused",
+                    FromX = from.X,
+                    FromY = from.Y,
+                    ToX = to.X,
+                    ToY = to.Y
+                });
             }
 
             /**
@@ -683,10 +894,28 @@ namespace Server.Custom
                     }
                 }
 
+                // Sort every proposed record into reached, stranded or cut off. Reachable and
+                // Unreachable are what the editor writes and drops respectively; Blocked is the
+                // one refusal left, and it is decided from what the flood reached rather than
+                // from Links (see the field).
+                var stranded = new HashSet<string>(Stranded, StringComparer.OrdinalIgnoreCase);
+
+                foreach (string id in Waypoints.Keys)
+                {
+                    Sort(id, reached, stranded);
+                }
+
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    Sort(Subdivisions[i].Id, reached, stranded);
+                }
+
+                Blocked = ReachedCount == 0;
+
                 // The one line that matters most when it applies, so it goes first: a region that
-                // joins nothing can only ever be an island, and the author should be told that
+                // reaches nothing can only ever be an island, and the author should be told that
                 // before reading anything else about it.
-                if (Links == 0)
+                if (Blocked)
                 {
                     Islands.Insert(0, String.Format(
                         "NO JOIN WAS MADE. Nothing in this region reaches a waypoint we already "
@@ -705,39 +934,39 @@ namespace Server.Custom
                 }
 
                 // And the softer case: connected to each other, but not to anything we already
-                // have. Legitimate for a far town adopted before the road to it, so it is
-                // reported rather than refused.
-                var cutOff = new List<string>();
-
-                foreach (string id in Waypoints.Keys)
-                {
-                    if (!reached.Contains(id) && !Stranded.Contains(id))
-                    {
-                        cutOff.Add(id);
-                    }
-                }
-
-                for (int i = 0; i < Subdivisions.Count; i++)
-                {
-                    string id = Subdivisions[i].Id;
-
-                    if (!reached.Contains(id) && !Stranded.Contains(id))
-                    {
-                        cutOff.Add(id);
-                    }
-                }
-
-                if (cutOff.Count == 0)
+                // have. Save writes the part that reaches us and drops this part; the dropped
+                // records are still in the reference layer, so the next box that overlaps what
+                // was saved joins onto it and picks them up.
+                if (Unreachable.Count == 0)
                 {
                     return;
                 }
 
                 Islands.Add(String.Format(
-                    "{0} of {1} proposed waypoint(s) cannot reach the existing graph{2}: {3}",
-                    cutOff.Count,
+                    "{0} of {1} proposed waypoint(s) cannot reach the existing graph and will "
+                    + "not be written{2}. They stay in the uo-offline reference layer, dashed, "
+                    + "to adopt from a box that overlaps this one once it is saved: {3}",
+                    Unreachable.Count,
                     Waypoints.Count + Subdivisions.Count,
-                    Links == 0 ? " (this region touches nothing already authored)" : "",
-                    Name(cutOff)));
+                    Blocked ? " (this region touches nothing already authored)" : "",
+                    Name(Unreachable)));
+            }
+
+            private void Sort(string id, HashSet<string> reached, HashSet<string> stranded)
+            {
+                if (stranded.Contains(id))
+                {
+                    return;
+                }
+
+                if (reached.Contains(id))
+                {
+                    ReachedCount++;
+                }
+                else
+                {
+                    Unreachable.Add(id);
+                }
             }
 
             /// <summary>
@@ -760,12 +989,18 @@ namespace Server.Custom
             public void PruneUnreachable()
             {
                 int cap = NavigationSystem.HopMaxTiles;
-                var stranded = new HashSet<string>(Stranded, StringComparer.OrdinalIgnoreCase);
+
+                // Surviving means WRITTEN: not stranded, and not cut off from the graph either.
+                // An arrival measured against a waypoint Save is about to drop would be written
+                // pointing at nothing, which is the fault this method exists to stop.
+                var dropped = new HashSet<string>(Stranded, StringComparer.OrdinalIgnoreCase);
+                dropped.UnionWith(Unreachable);
+
                 var surviving = new List<Point2D>();
 
                 foreach (KeyValuePair<string, NavWaypoint> pair in Waypoints)
                 {
-                    if (!stranded.Contains(pair.Key))
+                    if (!dropped.Contains(pair.Key))
                     {
                         surviving.Add(new Point2D(pair.Value.X, pair.Value.Y));
                     }
@@ -773,7 +1008,7 @@ namespace Server.Custom
 
                 for (int i = 0; i < Subdivisions.Count; i++)
                 {
-                    if (!stranded.Contains(Subdivisions[i].Id))
+                    if (!dropped.Contains(Subdivisions[i].Id))
                     {
                         surviving.Add(new Point2D(Subdivisions[i].X, Subdivisions[i].Y));
                     }
@@ -787,6 +1022,23 @@ namespace Server.Custom
                     if (!InReach(arrival.X, arrival.Y, surviving, cap))
                     {
                         continue;
+                    }
+
+                    // An arrival is where a bot stands, so its Z is corrected like a waypoint's -
+                    // but only when something IS standable there. A tile with nothing to stand on
+                    // keeps its authored Z rather than gaining the land's, which would be a second
+                    // wrong answer dressed as a correction.
+                    int stood;
+
+                    if (NavWalker.TryResolveZ(Map, new Point3D(arrival.X, arrival.Y, arrival.Z), out stood)
+                        && stood != arrival.Z)
+                    {
+                        Corrected.Add(String.Format(
+                            "{0} arrival {1},{2}: {3} -> {4}",
+                            arrival.DestinationId, arrival.X, arrival.Y, arrival.Z, stood));
+
+                        arrival.RefZ = arrival.Z;
+                        arrival.Z = stood;
                     }
 
                     kept.Add(arrival);
@@ -913,6 +1165,228 @@ namespace Server.Custom
                 return queued > 0;
             }
 
+            /// <summary>
+            /// Walk a corridor to every destination none of whose arrivals a bot could leave.
+            ///
+            /// Nav.Data's rule, applied before the write rather than warned about at the next
+            /// boot: an arrival further than the hop cap from every waypoint is one a bot can be
+            /// sent to and cannot route away from. uo-offline authored against a 38-tile leg, so
+            /// a forge 20 tiles from its road is fine in their data and skipped in ours - eight
+            /// destinations in the Britain-Trinsic box, all for our cap and none for theirs.
+            ///
+            /// So, for each: the arrival nearest to any REACHABLE waypoint (the proposal's, once
+            /// the joins have walked, or ours), a waypoint minted on that arrival's tile, and a
+            /// corridor queued from the one to the other - walked, engine-pathed and subdivided
+            /// like any edge, so it is never longer than a hop and never asserted. Listed in the
+            /// proposal with its length and the waypoint it starts from, and flagged for review
+            /// past two hops, so a far one is visible before Save rather than refused.
+            ///
+            /// Runs once, after the component joins, so the reachable set it measures against is
+            /// the final one. Returns true when it queued work, like PlanComponentJoins.
+            /// </summary>
+            public bool PlanArrivalCorridors()
+            {
+                if (_corridorsPlanned)
+                {
+                    return false;
+                }
+
+                _corridorsPlanned = true;
+
+                int cap = NavigationSystem.HopMaxTiles;
+                HashSet<string> reached = Reachable();
+                var reachable = new List<NavWaypoint>();
+
+                foreach (KeyValuePair<string, NavWaypoint> pair in Waypoints)
+                {
+                    if (reached.Contains(pair.Key))
+                    {
+                        reachable.Add(pair.Value);
+                    }
+                }
+
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    if (reached.Contains(Subdivisions[i].Id))
+                    {
+                        reachable.Add(Subdivisions[i]);
+                    }
+                }
+
+                var points = new List<Point2D>(reachable.Count);
+
+                for (int i = 0; i < reachable.Count; i++)
+                {
+                    points.Add(new Point2D(reachable[i].X, reachable[i].Y));
+                }
+
+                int queued = 0;
+
+                foreach (NavDestination destination in Destinations)
+                {
+                    NavArrival chosen = null;
+                    NavWaypoint from = null;
+                    int best = Int32.MaxValue;
+                    bool covered = false;
+
+                    foreach (NavArrival arrival in Arrivals)
+                    {
+                        if (!Insensitive.Equals(arrival.DestinationId, destination.Id))
+                        {
+                            continue;
+                        }
+
+                        if (InReach(arrival.X, arrival.Y, points, cap))
+                        {
+                            covered = true;
+                            break;
+                        }
+
+                        // The nearest reachable waypoint to this arrival: the proposal's, then ours.
+                        for (int i = 0; i < reachable.Count; i++)
+                        {
+                            int span = Math.Max(
+                                Math.Abs(reachable[i].X - arrival.X), Math.Abs(reachable[i].Y - arrival.Y));
+
+                            if (span < best)
+                            {
+                                best = span;
+                                from = reachable[i];
+                                chosen = arrival;
+                            }
+                        }
+
+                        NavWaypoint ours = NavigationSystem.Graph.Nearest(
+                            new Point3D(arrival.X, arrival.Y, arrival.Z), Map, JoinReach);
+
+                        if (ours != null)
+                        {
+                            int span = Math.Max(Math.Abs(ours.X - arrival.X), Math.Abs(ours.Y - arrival.Y));
+
+                            if (span < best)
+                            {
+                                best = span;
+                                from = ours;
+                                chosen = arrival;
+                            }
+                        }
+                    }
+
+                    if (covered || chosen == null || from == null || best > JoinReach)
+                    {
+                        continue;
+                    }
+
+                    // A waypoint on the arrival's own tile, at the Z a mobile stands at there, so
+                    // the arrival is inside the cap of it by zero tiles.
+                    int z;
+
+                    if (!NavWalker.TryResolveZ(Map, new Point3D(chosen.X, chosen.Y, chosen.Z), out z))
+                    {
+                        z = chosen.Z;
+                    }
+
+                    var minted = new NavWaypoint
+                    {
+                        Id = MintId(destination.Id),
+                        MapName = Map.Name,
+                        X = chosen.X,
+                        Y = chosen.Y,
+                        Z = z,
+                        ArrivalRange = 0,
+                        Tags = "road",
+                        Source = SourceTag
+                    };
+
+                    Subdivisions.Add(minted);
+
+                    bool fromOurs = NavigationSystem.Graph.Node(from.Id) != null && !Waypoints.ContainsKey(from.Id);
+
+                    Pending.Add(new PendingEdge
+                    {
+                        Edge = new NavEdge { From = from.Id, To = minted.Id, KindName = "walk", Tags = "road" },
+                        FromId = from.Id,
+                        ToId = minted.Id,
+                        IsJoin = fromOurs,
+                        OurId = fromOurs ? from.Id : null
+                    });
+
+                    if (fromOurs)
+                    {
+                        Links++;
+                    }
+
+                    Corridors.Add(new Corridor
+                    {
+                        DestinationId = destination.Id,
+                        FromId = from.Id,
+                        ToId = minted.Id,
+                        X = chosen.X,
+                        Y = chosen.Y,
+                        Tiles = best,
+                        Review = best > cap * 2,
+                        Arrival = chosen
+                    });
+
+                    queued++;
+                }
+
+                return queued > 0;
+            }
+
+            /// <summary>
+            /// After the corridors have walked: point the destination and its arrival at the
+            /// minted waypoint where the corridor arrived, and take the waypoint back out where it
+            /// did not - a corridor that failed is already in Failures with the walker's reason,
+            /// and its waypoint must not surface as a stranded record the author never asked for.
+            /// </summary>
+            public void SettleCorridors()
+            {
+                for (int i = 0; i < Corridors.Count; i++)
+                {
+                    Corridor corridor = Corridors[i];
+                    bool walked = false;
+
+                    for (int j = 0; j < Edges.Count && !walked; j++)
+                    {
+                        walked = Insensitive.Equals(Edges[j].From, corridor.ToId)
+                            || Insensitive.Equals(Edges[j].To, corridor.ToId);
+                    }
+
+                    corridor.Walked = walked;
+
+                    if (!walked)
+                    {
+                        for (int j = Subdivisions.Count - 1; j >= 0; j--)
+                        {
+                            if (Insensitive.Equals(Subdivisions[j].Id, corridor.ToId))
+                            {
+                                Subdivisions.RemoveAt(j);
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    // A route to the destination ends at the first of its declared waypoints that
+                    // exists (Nav.cs, TryResolveWaypoint), and the arrival is appended after it -
+                    // so the corridor's end goes FIRST, or the route would still end at the
+                    // reference's waypoint twenty tiles away and the final leg would be the very
+                    // hop this corridor exists to remove.
+                    foreach (NavDestination destination in Destinations)
+                    {
+                        if (Insensitive.Equals(destination.Id, corridor.DestinationId))
+                        {
+                            destination.WaypointIds = String.IsNullOrEmpty(destination.WaypointIds)
+                                ? corridor.ToId
+                                : corridor.ToId + " " + destination.WaypointIds;
+                        }
+                    }
+
+                    corridor.Arrival.WaypointIds = corridor.ToId;
+                }
+            }
+
             /// <summary>Every waypoint in one cut-off piece, marking them all seen.</summary>
             private List<NavWaypoint> Piece(
                 string start, Dictionary<string, List<string>> links,
@@ -1005,7 +1479,7 @@ namespace Server.Custom
             }
 
             /// <summary>Whether any surviving waypoint is within the cap of this tile.</summary>
-            private static bool InReach(int x, int y, List<Point2D> waypoints, int cap)
+            private bool InReach(int x, int y, List<Point2D> waypoints, int cap)
             {
                 for (int i = 0; i < waypoints.Count; i++)
                 {
@@ -1015,8 +1489,10 @@ namespace Server.Custom
                     }
                 }
 
-                // And ours, which an adopted arrival at the edge of a join legitimately uses.
-                return NavigationSystem.Graph.Nearest(new Point3D(x, y, 0), null, cap) != null;
+                // And ours, which an adopted arrival at the edge of a join legitimately uses. With
+                // the job's Map: NavGraph.Nearest answers null for a null map, which made this
+                // line dead for as long as it passed one.
+                return NavigationSystem.Graph.Nearest(new Point3D(x, y, 0), Map, cap) != null;
             }
 
             private static void Add(Dictionary<string, List<string>> links, string from, string to)
@@ -1058,6 +1534,16 @@ namespace Server.Custom
                     return found;
                 }
 
+                // A waypoint this job minted: the end of an arrival corridor stands on the
+                // arrival's tile and exists nowhere else.
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    if (Insensitive.Equals(Subdivisions[i].Id, id))
+                    {
+                        return Subdivisions[i];
+                    }
+                }
+
                 // The far end of a link: one of ours, already on the graph.
                 NavWaypoint existing = NavigationSystem.Graph.Node(id);
 
@@ -1088,6 +1574,24 @@ namespace Server.Custom
             public int FromY;
             public int ToX;
             public int ToY;
+        }
+
+        /// <summary>
+        /// A corridor walked to a destination whose arrivals were all beyond the hop cap. Carries
+        /// what the proposal lists: where it starts, how far it reaches, and whether that is far
+        /// enough to want a look before Save.
+        /// </summary>
+        private sealed class Corridor
+        {
+            public string DestinationId;
+            public string FromId;
+            public string ToId;
+            public int X;
+            public int Y;
+            public int Tiles;
+            public bool Review;
+            public bool Walked;
+            public NavArrival Arrival;
         }
 
         private sealed class PendingEdge
@@ -1168,7 +1672,9 @@ namespace Server.Custom
         {
             var builder = new StringBuilder(4096);
 
-            bool done = job.Next >= job.Pending.Count;
+            // Done when the JOB is done, not when the last edge has been walked: joins, islands
+            // and pruning run after that, and the editor accepts the first "done" it polls.
+            bool done = job.Finished;
 
             builder.Append("{\n");
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
@@ -1184,6 +1690,8 @@ namespace Server.Custom
                 .Append(",\"region\":").Append(job.SkippedRegion)
                 .Append(",\"noArrival\":").Append(job.SkippedNoArrival).Append("},\n");
             builder.Append("  \"links\": ").Append(job.Links).Append(",\n");
+            builder.Append("  \"blocked\": ").Append(job.Blocked ? "true" : "false").Append(",\n");
+            builder.Append("  \"reachable\": ").Append(job.ReachedCount).Append(",\n");
 
             WriteWaypoints(builder, job);
             WriteEdges(builder, job);
@@ -1191,6 +1699,10 @@ namespace Server.Custom
             WriteArrivals(builder, job);
             WriteFailures(builder, job);
             WriteStrings(builder, "stranded", job.Stranded, true);
+            WriteStrings(builder, "unreachable", job.Unreachable, true);
+            WriteStrings(builder, "folded", job.Folded, true);
+            WriteStrings(builder, "corrected", job.Corrected, true);
+            WriteCorridors(builder, job);
             WriteStrings(builder, "skippedNoReach", job.SkippedNoReach, true);
             WriteStrings(builder, "islands", job.Islands, false);
 
@@ -1202,6 +1714,34 @@ namespace Server.Custom
             {
                 Log.Error("Adopt proposal not written: {0}", error);
             }
+        }
+
+        /// <summary>
+        /// Every arrival corridor, walked or not: the destination, the waypoint it starts from,
+        /// the minted waypoint it ends on, its straight-line length, and whether that length wants
+        /// a look (over two hops). A corridor that did not walk is in `failures` as well.
+        /// </summary>
+        private static void WriteCorridors(StringBuilder builder, Job job)
+        {
+            builder.Append("  \"corridors\": [\n");
+
+            for (int i = 0; i < job.Corridors.Count; i++)
+            {
+                Corridor corridor = job.Corridors[i];
+
+                builder.Append(i > 0 ? ",\n" : "");
+                builder.Append("    {\"destination\":").Append(Json.Quote(corridor.DestinationId))
+                    .Append(",\"from\":").Append(Json.Quote(corridor.FromId))
+                    .Append(",\"to\":").Append(Json.Quote(corridor.ToId))
+                    .Append(",\"x\":").Append(corridor.X)
+                    .Append(",\"y\":").Append(corridor.Y)
+                    .Append(",\"tiles\":").Append(corridor.Tiles)
+                    .Append(",\"review\":").Append(corridor.Review ? "true" : "false")
+                    .Append(",\"walked\":").Append(corridor.Walked ? "true" : "false")
+                    .Append("}");
+            }
+
+            builder.Append(job.Corridors.Count > 0 ? "\n" : "").Append("  ],\n");
         }
 
         private static void WriteWaypoints(StringBuilder builder, Job job)
@@ -1242,8 +1782,14 @@ namespace Server.Custom
             builder.Append(",\"map\":").Append(Json.Quote(waypoint.MapName))
                 .Append(",\"x\":").Append(waypoint.X)
                 .Append(",\"y\":").Append(waypoint.Y)
-                .Append(",\"z\":").Append(waypoint.Z)
-                .Append(",\"arrivalRange\":").Append(waypoint.ArrivalRange)
+                .Append(",\"z\":").Append(waypoint.Z);
+
+            if (waypoint.RefZ.HasValue)
+            {
+                builder.Append(",\"refZ\":").Append(waypoint.RefZ.Value);
+            }
+
+            builder.Append(",\"arrivalRange\":").Append(waypoint.ArrivalRange)
                 .Append(",\"tags\":").Append(Json.Quote(waypoint.Tags ?? ""))
                 .Append(",\"source\":").Append(Json.Quote(SourceTag))
                 .Append("}");
@@ -1313,8 +1859,14 @@ namespace Server.Custom
                 builder.Append("    {\"destination\":").Append(Json.Quote(arrival.DestinationId))
                     .Append(",\"x\":").Append(arrival.X)
                     .Append(",\"y\":").Append(arrival.Y)
-                    .Append(",\"z\":").Append(arrival.Z)
-                    .Append(",\"exclusive\":false,\"waypoints\":")
+                    .Append(",\"z\":").Append(arrival.Z);
+
+                if (arrival.RefZ.HasValue)
+                {
+                    builder.Append(",\"refZ\":").Append(arrival.RefZ.Value);
+                }
+
+                builder.Append(",\"exclusive\":false,\"waypoints\":")
                     .Append(Json.Quote(arrival.WaypointIds ?? ""))
                     .Append(",\"source\":").Append(Json.Quote(SourceTag))
                     .Append("}");

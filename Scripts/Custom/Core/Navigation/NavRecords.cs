@@ -607,6 +607,18 @@ namespace Server.Custom
         public int Z { get; set; }
 
         /// <summary>
+        /// The Z the reference stored, when Adopt wrote a different one. Absent means Z is as
+        /// authored or as the reference had it.
+        ///
+        /// uo-offline stores the water's Z for every generated dock waypoint - `uo-wp-990` at -15
+        /// under a deck at -2 - and a record like that is one every audit line annotates for ever.
+        /// Adopt writes the Z the walker actually stood on and keeps theirs here, so a diff against
+        /// the reference file explains the change rather than looking like a typo.
+        /// </summary>
+        [JsonProperty("refZ", NullValueHandling = NullValueHandling.Ignore)]
+        public int? RefZ { get; set; }
+
+        /// <summary>
         /// Per-waypoint arrival tolerance in tiles; 0 means "use the walker's default".
         ///
         /// Adopted from uo-offline-server, name and semantics unchanged, because their reason
@@ -912,6 +924,13 @@ namespace Server.Custom
 
         [JsonProperty("z")]
         public int Z { get; set; }
+
+        /// <summary>
+        /// The Z the reference stored, when Adopt wrote a different one. See NavWaypoint.RefZ.
+        /// Declared right after Z because the golden fixture is the serializer's order.
+        /// </summary>
+        [JsonProperty("refZ", NullValueHandling = NullValueHandling.Ignore)]
+        public int? RefZ { get; set; }
 
         /// <summary>
         /// An exclusive spot is an exact tile - no scatter - and is skipped by the picker if

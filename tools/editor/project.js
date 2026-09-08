@@ -404,10 +404,13 @@ function project(files) {
 
 const TEMPLATES = {
     waypoint: {
-        keys: ['id', 'name', 'map', 'x', 'y', 'z', 'arrivalRange', 'tags', 'note', 'source'],
+        // `refZ` is the reference's Z, present only on an adopted record whose Z Adopt moved to
+        // where the walker stood. Blank means absent; 0 is a real Z and is kept. Right after `z`,
+        // because that is where the C# record declares it and the golden is byte-for-byte.
+        keys: ['id', 'name', 'map', 'x', 'y', 'z', 'refZ', 'arrivalRange', 'tags', 'note', 'source'],
         geometry: ['map', 'x', 'y', 'z'],
         defaults: { arrivalRange: 0, tags: '' },
-        omitWhenBlank: ['name', 'note', 'source']
+        omitWhenBlank: ['name', 'note', 'source', 'refZ']
     },
     edge: {
         keys: ['from', 'to', 'kind', 'tags', 'note', 'source'],
@@ -423,11 +426,11 @@ const TEMPLATES = {
     },
     arrival: {
         // No 'map': an arrival belongs to its destination, which has one.
-        keys: ['destination', 'x', 'y', 'z', 'exclusive', 'exact', 'waypoints', 'note', 'source'],
+        keys: ['destination', 'x', 'y', 'z', 'refZ', 'exclusive', 'exact', 'waypoints', 'note', 'source'],
         geometry: ['x', 'y', 'z'],
         defaults: { exclusive: false, waypoints: '' },
         omitWhenFalse: ['exact'],
-        omitWhenBlank: ['note', 'source']
+        omitWhenBlank: ['note', 'source', 'refZ']
     },
     zone: {
         keys: ['id', 'map', 'x', 'y', 'width', 'height', 'shape', 'points', 'tags', 'note'],

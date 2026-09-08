@@ -350,6 +350,17 @@ namespace Server.Custom
                 return false;
             }
 
+            // Both ends on one tile. The flood below never tests the tile it starts on - the
+            // neighbour loop skips dx == dy == 0 - so without this a zero-length road reads as
+            // "no walkable road from 1824,2843 to 1824,2843", which is what uo-offline's WP 140
+            // and Honor Trail 1 (one tile, two records) produced. A path of one point is the
+            // honest answer: there is nothing to walk.
+            if (start.X == goal.X && start.Y == goal.Y)
+            {
+                path.Add(start);
+                return true;
+            }
+
             // Dijkstra, not breadth-first, because the tiles are no longer all worth the same.
             // A plain queue finds the fewest STEPS; weighting the ground and still popping in
             // insertion order would compute a cost and then not use it.
@@ -402,7 +413,10 @@ namespace Server.Custom
                             continue;
                         }
 
-                        int z = NavWalker.ResolveZ(map, new Point3D(x, y, current.Z));
+                        // The STEP form: a window around where the flood stands, never the seed
+                        // scan. The seed scan would let this step from the ground onto the middle
+                        // of a ramp, which the engine refuses - see NavWalker.ResolveStepZ.
+                        int z = NavWalker.ResolveStepZ(map, new Point3D(x, y, current.Z));
 
                         int key = (x << 16) | (y & 0xFFFF);
 
@@ -542,7 +556,18 @@ namespace Server.Custom
             return false;
         }
 
-        /// <summary>The nearest tile to a point that a mobile can stand on, searched outward.</summary>
+        /// <summary>
+        /// The nearest tile to a point that a mobile can stand on, searched outward.
+        ///
+        /// Resolved with the SEED form of ResolveZ, ring by ring, so the record's own tile wins
+        /// when anything on it stands: a pier waypoint stored at the water's Z (uo-wp-990,
+        /// 2069,2856 at -15, deck at -2) snaps onto its deck at radius 0 rather than onto the
+        /// shore eight tiles off. It was briefly two passes - step form over every ring, then
+        /// seed form - to keep a waypoint on a wall tile from resolving onto the roof above it;
+        /// the seed form now refuses a roof itself (NavWalker.SeedClimb), and the two-pass order
+        /// cost the Britain-Trinsic bridge its own waypoint, which walked from the bank instead
+        /// and kept the river bed as its Z.
+        /// </summary>
         private static bool TrySnap(Map map, Point3D near, out Point3D snapped)
         {
             snapped = Point3D.Zero;
@@ -631,6 +656,74 @@ namespace Server.Custom
             {
                 failure = ex.Message;
                 Log.Error(ex, "Corridor hop verification threw.");
+                return false;
+            }
+            finally
+            {
+                if (probe != null)
+                {
+                    probe.Delete();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Prove a chain of hops the way NavAudit will once they are saved: each hop pathed by the
+        /// engine in BOTH directions, and a hop of one tile or less skipped, because MovementPath
+        /// returns no path at all for an adjacent goal (MovementPath.cs:34, NavAudit.cs:230).
+        ///
+        /// This is what NavAdopt runs over every edge it is about to propose. The flood and the
+        /// pathfinder answer different questions - the flood compares two resolved Z values,
+        /// MoveImpl does a real tile-geometry calculation - and after the climb window was widened
+        /// to take a ramp, the safe assumption is that they will occasionally disagree. A hop the
+        /// flood accepted and the engine refused is named as exactly that, so the disagreement is
+        /// visible in the proposal rather than at the next audit.
+        ///
+        /// Each hop's Z is resolved here rather than trusted: an authored Z can be the water under
+        /// a pier, and a probe placed at it would be asked to path out of the sea.
+        /// </summary>
+        public static bool TryVerifyHopsBothWays(Map map, IList<Point3D> hops, out string failure)
+        {
+            failure = null;
+
+            if (map == null || map == Map.Internal || hops == null || hops.Count < 2)
+            {
+                return true;
+            }
+
+            CorridorProbe probe = null;
+
+            try
+            {
+                probe = new CorridorProbe();
+
+                for (int i = 1; i < hops.Count; i++)
+                {
+                    Point3D a = Resolve(map, hops[i - 1]);
+                    Point3D b = Resolve(map, hops[i]);
+
+                    if (Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y)) <= 1)
+                    {
+                        continue;
+                    }
+
+                    if (Pathable(map, probe, a, b) && Pathable(map, probe, b, a))
+                    {
+                        continue;
+                    }
+
+                    failure = String.Format(
+                        "flood ok, engine refused: {0},{1},{2} -> {3},{4},{5} is not walkable",
+                        a.X, a.Y, a.Z, b.X, b.Y, b.Z);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+                Log.Error(ex, "Hop verification threw.");
                 return false;
             }
             finally
