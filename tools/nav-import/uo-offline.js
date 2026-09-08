@@ -145,6 +145,40 @@ function uniqueId(base, taken, renamed) {
     }
 }
 
+/**
+ * A destination's id: `<town>-<kind>`, descriptive rather than serial.
+ *
+ * `uo-bank-41` says nothing. Our own convention is `brit-bank`, `brit-shop-mage` - the place and
+ * what it is - and an adopted record should read the same way, because the id is what appears in
+ * a route, a bot's status line and every log about it.
+ *
+ * The town comes from their `City`, which every one of the 184 overworld destinations carries.
+ * Their six zones cannot supply it: they are a bank area, a dock and four portals.
+ *
+ * A vendor keeps its trade (`trinsic-shop-smith`), because `trinsic-shop` five times over is the
+ * serial naming this replaces. Dungeon records have no city and fall back to the slugified name,
+ * still namespaced - they are refused by Adopt anyway.
+ *
+ * NOT prefixed `uo-`. Provenance moves to the `source` field, which is where Adopt reads it from;
+ * uniqueness against our own ids is asserted by the tests instead. `Britain` slugifies to
+ * `britain-`, which does not collide with our `brit-`.
+ */
+function destinationId(source, mapped) {
+    // Tested BEFORE slugifying: slugify('') returns its 'wp' fallback, so a blank city read
+    // as a town called 'wp' and collapsed every dungeon record onto 'wp-room'.
+    const town = source.City ? slugify(source.City) : '';
+
+    if (!town) {
+        return PREFIX + slugify(source.Name);
+    }
+
+    // The trade, for a vendor: their tags carry it after `craft`.
+    const trade = mapped.tags.split(' ').filter((tag) => tag && tag !== 'craft')[0];
+    const kind = mapped.type === 'shop' && trade ? `shop-${trade}` : mapped.type;
+
+    return `${town}-${kind}`;
+}
+
 /** Which half of the world a coordinate is in. '' for the overworld. */
 function regionTag(x, y) {
     if (x < DUNGEON_X) {
@@ -249,7 +283,12 @@ function convert(sources, { map = 'Trammel' } = {}) {
     const arrivals = [];
     const zones = [];
 
-    for (const source of sources.destinations) {
+    // Sorted by position before ids are minted, so the -2/-3 suffixes fall the same way on every
+    // re-import. Source order is not guaranteed and a proposal whose ids move cannot be diffed.
+    const ordered = sources.destinations.slice().sort((a, b) =>
+        (a.X - b.X) || (a.Y - b.Y) || String(a.Name).localeCompare(String(b.Name)));
+
+    for (const source of ordered) {
         if (DROPPED_TYPES.has(source.Type)) {
             report.unmapped.push(`destination '${source.Name}': ${source.Type} dropped (gather spot)`);
             continue;
@@ -262,7 +301,7 @@ function convert(sources, { map = 'Trammel' } = {}) {
             continue;
         }
 
-        const id = uniqueId(PREFIX + slugify(source.Name), taken, report.renamed);
+        const id = uniqueId(destinationId(source, mapped), taken, report.renamed);
 
         // A Dungeon field wins over the coordinate: ten of their dungeon records sit at x < 5120
         // because a dungeon ENTRANCE is on the overworld, and the strip rule alone misses all ten.
@@ -472,7 +511,7 @@ ${report.renamed.length} id(s) renamed to avoid a collision:`);
 }
 
 module.exports = {
-    convert, serialize, slugify, uniqueId, regionTag, polyZone, PREFIX,
+    convert, serialize, slugify, uniqueId, regionTag, polyZone, destinationId, PREFIX,
     TYPES, DROPPED_TYPES, DUNGEON_X, LOSTLANDS_Y
 };
 

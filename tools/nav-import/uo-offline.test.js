@@ -143,7 +143,7 @@ test('a gather spot is dropped and says so; a dungeon entrance is kept and tagge
 
 test('arrivals flatten out of the destination and keep their approach waypoints', () => {
     const { doc } = uo.convert(fixture());
-    const arrival = doc.arrivals.find((a) => a.destination === 'uo-a-bank');
+    const arrival = doc.arrivals.find((a) => a.destination === 'britain-bank');
 
     assert.ok(arrival, 'the arrival did not survive the flattening');
     assert.strictEqual(arrival.exclusive, false);
@@ -167,18 +167,39 @@ test('the facet is stamped, because their records carry none', () => {
     assert.ok(doc.destinations.every((d) => d.map === 'Felucca'));
 });
 
-test('every reference id is namespaced, so it cannot collide with an authored one', () => {
+test('waypoints and zones are namespaced, so they cannot collide with an authored one', () => {
     // The reason this exists: their waypoints are named `WP 157`, which slugifies to `wp-157`,
     // and `wp-<n>` is exactly what our corridor tool mints. Before the prefix, 23 reference ids
     // collided with ids already in navigation.json - including `wp-1`, ours on the west road at
     // 1381,1750 and theirs a different tile at 1564,1687.
     const { doc } = uo.convert(fixture());
 
-    for (const key of ['waypoints', 'destinations', 'zones']) {
+    for (const key of ['waypoints', 'zones']) {
         for (const record of doc[key]) {
             assert.ok(record.id.startsWith(uo.PREFIX), `${record.id} is not namespaced`);
         }
     }
+});
+
+test('a destination is named for its town and what it is, not serially', () => {
+    // `uo-bank-41` says nothing. The id is what appears in a route, a bot's status line and every
+    // log about it, so it reads like our own: the place, then what it is.
+    assert.strictEqual(
+        uo.destinationId({ City: 'Trinsic' }, { type: 'bank', tags: 'service' }), 'trinsic-bank');
+    assert.strictEqual(
+        uo.destinationId({ City: "Nujel'm" }, { type: 'dock', tags: 'craft water' }), 'nujel-m-dock');
+
+    // A vendor keeps its trade, or a town's five provisioners are five numbered shops.
+    assert.strictEqual(
+        uo.destinationId({ City: 'Trinsic' }, { type: 'shop', tags: 'craft smith' }),
+        'trinsic-shop-smith');
+
+    // No city - the dungeon records - falls back to the namespaced name. Tested because
+    // slugify('') returns its 'wp' fallback, which once read as a town called 'wp' and collapsed
+    // every dungeon room onto one id.
+    assert.strictEqual(
+        uo.destinationId({ City: '', Name: 'Deceit lvl1 Room 2' }, { type: 'room', tags: '' }),
+        'uo-deceit-lvl1-room-2');
 });
 
 // --- the committed reference file ------------------------------------------------------------

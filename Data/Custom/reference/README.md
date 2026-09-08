@@ -46,10 +46,18 @@ before this converter and unchanged by it. The decisions that are not a straight
   carry no facet field at all. Felucca and Trammel share terrain, so every coordinate is valid on
   both — and our world is on Trammel, where a walk edge has to be for anything to reach it. A
   Felucca conversion later sits beside this file rather than over it.
-- **Ids are minted from their names and namespaced `uo-`.** `Britain Bank` becomes
-  `uo-britain-bank`, uniquified with a numeric suffix on collision — including across kinds,
-  because `Nav.TryRoute` accepts an id naming a waypoint *or* a destination. Their name is kept
-  verbatim as the display `name`. The prefix is not cosmetic; see **What Adopt has to know**.
+- **A waypoint's id is minted from its name and namespaced `uo-`.** `WP 157` becomes
+  `uo-wp-157`, uniquified with a numeric suffix on collision — including across kinds, because
+  `Nav.TryRoute` accepts an id naming a waypoint *or* a destination. Their name is kept verbatim
+  as the display `name`. The prefix is not cosmetic; see **What Adopt has to know**.
+- **A destination's id is `<town>-<kind>`**, descriptive rather than serial: `trinsic-bank`,
+  `trinsic-dock-2`, `trinsic-shop-smith`. `uo-bank-41` said nothing, and the id is what appears in
+  a route, a bot's status line and every log about it. The town comes from their `City`, which
+  every one of the 184 overworld destinations carries — their six zones cannot supply it, being a
+  bank area, a dock and four portals. A vendor keeps its trade, or a town's seven provisioners are
+  seven numbered shops. Destinations are **not** `uo-` prefixed; provenance is the `source` field,
+  and uniqueness against our own ids is asserted by the tests. `Britain` slugifies to `britain-`,
+  which does not collide with our `brit-`.
 - **Edges carry no tags.** Their `Connects` is a bare adjacency; we cannot know which of their
   roads is a road, and a guessed `road` tag would silently reweight every search through
   `costTags`.
@@ -93,22 +101,17 @@ theirs a different tile at 1564,1687. Adopting one would have overwritten author
 The prefix makes that impossible by construction rather than by a check somebody has to remember,
 and `uo-offline.test.js` asserts the two id sets stay disjoint.
 
-### Five ids are not the slug of the name beside them
+### An id is not derivable from the record beside it
 
-Their names are unique per *kind*; ours must be unique across kinds, because `Nav.TryRoute` accepts
-an id naming a waypoint or a destination. Where the two collided the converter appended a suffix:
+A destination's id is its town and its kind, so a town with several of one kind gets `-2`, `-3`:
+Trinsic has seven provisioners and two banks. **The suffix order is stable** — destinations are
+sorted by position before ids are minted — because a proposal whose ids move between imports
+cannot be reviewed by diffing.
 
-```
-uo-britain-bank    -> uo-britain-bank-2       (the waypoint took the plain slug)
-uo-britdock-1      -> uo-britdock-1-2
-uo-britain-bank-2  -> uo-britain-bank-2-2
-uo-britain-forge-2 -> uo-britain-forge-2-2
-uo-britain-forge-3 -> uo-britain-forge-3-2
-```
+Waypoint ids are uniquified the same way where two of their names slugify alike.
 
-All five are in Britain, which is where the two datasets overlap most. **Adopt must copy the `id`
-field, never re-derive it from `name`** — a re-import that ordered two colliding records the other
-way round would otherwise repoint an adopted edge at the wrong record.
+**Adopt must copy the `id` field, never re-derive it from `name` or `City`** — a re-import that
+ordered two records differently would otherwise repoint an adopted edge at the wrong one.
 
 ### 177 destinations have no arrival point
 
@@ -120,7 +123,7 @@ arrival is one a bot can be sent to and cannot stand at — `Nav.Data` warns abo
 | --- | --- |
 | with at least one arrival | 308 |
 | **no arrival, tagged `dungeon`** | **173** — refused by Adopt anyway |
-| **no arrival, overworld** | **4** — `uo-britain-bank-3`, `uo-britain-smith-4`, `uo-nujel-m-forge`, `uo-nujel-m-forge-2` |
+| **no arrival, overworld** | **4** — all duplicates of a better-covered record nearby |
 
 So only four adoptable destinations lack one, and all four are duplicates of a better-covered
 record a few tiles away. **Adopt should offer to skip a destination with no arrival**, rather than
