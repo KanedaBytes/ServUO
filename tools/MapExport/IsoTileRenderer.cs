@@ -136,6 +136,7 @@ namespace Server.Custom.MapExport
     {
         private const int BytesPerPixel = 4;
 
+        private readonly Map _map;
         private readonly TileMatrix _tiles;
         private readonly ArtCache _art;
         private readonly FloorRules _rules;
@@ -163,6 +164,16 @@ namespace Server.Custom.MapExport
         private const byte OwnerWorld = 1;
         private const byte OwnerItem = 2;
 
+        /// <summary>
+        /// Which world tile each pixel belongs to, while a pick map is being rendered.
+        ///
+        /// The same shape as _owner and for the same reason: the answer is only knowable while the
+        /// pass that produces the picture is running, so it is recorded there rather than
+        /// reconstructed afterwards. Null on a normal render, which is what keeps the cost of it at
+        /// one null check per pixel. See PickMap.
+        /// </summary>
+        private PickMap _pick;
+
         private WorldItems _items = null;
 
         private readonly int[] _ground = new int[9];
@@ -170,6 +181,13 @@ namespace Server.Custom.MapExport
         private int[] _staticKeys = new int[64];
         private int[] _itemOrder = new int[8];
         private int[] _itemKeys = new int[8];
+
+        // The Z a mobile would stand at on each sorted static and item - the top of a surface, the
+        // foot of anything else. Carried alongside the sort key because the merged draw pass keeps
+        // only an index, and looking tiledata up a second time inside it would cost more than an
+        // array write. Filled unconditionally: two stores per static is less than a branch.
+        private int[] _staticSurfaceZ = new int[64];
+        private int[] _itemSurfaceZ = new int[8];
 
         // What --terrain-report counts. Cheap enough to keep always, so the report is a mode rather
         // than a build.
@@ -186,15 +204,23 @@ namespace Server.Custom.MapExport
             _terraced = 0;
         }
 
+        /// <summary>
+        /// The facet is taken as a Map rather than a TileMatrix so the renderer can ask
+        /// map.GetAverageZ - the shard's own answer to "what Z does a mobile stand at here", which
+        /// is the number a pick map has to report. Replicating it would be six lines and a second
+        /// place to drift; calling it is this tool's founding rule, that the tiles can never
+        /// disagree with what the shard thinks the map is.
+        /// </summary>
         public IsoTileRenderer(
-            TileMatrix tiles,
+            Map map,
             ArtCache art,
             FloorRules rules,
             int facetWidth,
             int facetHeight,
             int tileSize)
         {
-            _tiles = tiles;
+            _map = map;
+            _tiles = map.Tiles;
             _art = art;
             _rules = rules;
             _facetWidth = facetWidth;
@@ -271,6 +297,52 @@ namespace Server.Custom.MapExport
             }
 
             return scratch;
+        }
+
+        /// <summary>
+        /// The pick map for one tile at the DEEPEST level - or null for an Items layer with nothing
+        /// in it, which the caller answers by serving the map layer's pick instead.
+        ///
+        /// It takes no level, because there is only ever one. A pick map is read by turning a screen
+        /// point into a facet-global canvas pixel, which is the same number at every zoom, so the
+        /// 1:1 map answers 1:2 and 1:8 exactly as well - and it sidesteps the fact that world
+        /// coordinates cannot be box-averaged the way Halve averages colour. See PickMap.
+        ///
+        /// The colour scratch is still painted and then thrown away, and that is the point rather
+        /// than waste: Blit decides per pixel from the sprite's own alpha, so the only way to record
+        /// exactly the pixels the picture shows is to draw the picture.
+        ///
+        /// AN ITEMS PICK IS NOT MASKED, unlike an items PNG. KeepItemsOnly exists so an item layer
+        /// can be drawn over a map layer without painting a forge on top of the wall in front of it;
+        /// a pick map has no layer under it to show through, and has to answer for every pixel.
+        /// </summary>
+        public PickMap RenderPick(Layer layer, int tileX, int tileY, Floor floor)
+        {
+            int span = _tileSize;
+
+            int canvasX = tileX * span;
+            int canvasY = tileY * span;
+
+            if (layer == Layer.Items && !HasItems(canvasX, canvasY, span))
+            {
+                return null;
+            }
+
+            var scratch = new byte[span * span * BytesPerPixel];
+            var pick = new PickMap(span);
+
+            _pick = pick;
+
+            try
+            {
+                Paint(scratch, span, canvasX, canvasY, floor, layer);
+            }
+            finally
+            {
+                _pick = null;
+            }
+
+            return pick;
         }
 
         /// <summary>
@@ -429,25 +501,29 @@ namespace Server.Custom.MapExport
 
                 if (takeItem)
                 {
-                    WorldItem item = items[_itemOrder[ii++]];
+                    int at = ii++;
+                    WorldItem item = items[_itemOrder[at]];
                     Sprite sprite = _art.Static(item.ID, item.Hue);
 
                     if (sprite != null)
                     {
                         Blit(target, span, sprite,
-                            anchorX, IsoTransform.IsoY(x, y, item.Z) - isoY0, OwnerItem);
+                            anchorX, IsoTransform.IsoY(x, y, item.Z) - isoY0, OwnerItem,
+                            Cell(x, y, _itemSurfaceZ[at], PickMap.KindItem));
                     }
 
                     continue;
                 }
 
-                StaticTile tile = column[_order[si++]];
+                int atStatic = si++;
+                StaticTile tile = column[_order[atStatic]];
                 Sprite staticSprite = _art.Static(tile.ID, tile.Hue);
 
                 if (staticSprite != null)
                 {
                     Blit(target, span, staticSprite,
-                        anchorX, IsoTransform.IsoY(x, y, tile.Z) - isoY0, OwnerWorld);
+                        anchorX, IsoTransform.IsoY(x, y, tile.Z) - isoY0, OwnerWorld,
+                        Cell(x, y, _staticSurfaceZ[atStatic], PickMap.KindStatic));
                 }
             }
         }
@@ -468,6 +544,7 @@ namespace Server.Custom.MapExport
             {
                 _itemOrder = new int[items.Count];
                 _itemKeys = new int[items.Count];
+                _itemSurfaceZ = new int[items.Count];
             }
 
             int count = 0;
@@ -484,17 +561,20 @@ namespace Server.Custom.MapExport
                 }
 
                 int key = Key(items[i].Z, data);
+                int surfaceZ = SurfaceZ(items[i].Z, data);
                 int at = count++;
 
                 while (at > 0 && _itemKeys[at - 1] > key)
                 {
                     _itemOrder[at] = _itemOrder[at - 1];
                     _itemKeys[at] = _itemKeys[at - 1];
+                    _itemSurfaceZ[at] = _itemSurfaceZ[at - 1];
                     at--;
                 }
 
                 _itemOrder[at] = i;
                 _itemKeys[at] = key;
+                _itemSurfaceZ[at] = surfaceZ;
             }
 
             return count;
@@ -537,6 +617,15 @@ namespace Server.Custom.MapExport
 
             bool level = zTop == zRight && zTop == zLeft && zTop == zBottom;
 
+            // THE WHOLE TILE GETS ONE Z, deliberately, and not the corner Z interpolated across the
+            // quad that the stretched path could hand over for nothing. The picture is stretched;
+            // the record is not. A waypoint names a tile, so both ends of the same square have to
+            // give the same number, or dropping one twice in one square writes two different
+            // records. map.GetAverageZ is the shard's own answer and the one the client shows.
+            PickCell cell = _pick == null
+                ? default(PickCell)
+                : new PickCell(x, y, _map.GetAverageZ(x, y), PickMap.KindLand);
+
             if (!level)
             {
                 // Ultima.TileData, not Server.TileData - the ServUO copy throws the texture id away
@@ -547,7 +636,7 @@ namespace Server.Custom.MapExport
 
                 if (texture != null)
                 {
-                    BlitQuad(target, span, texture,
+                    BlitQuad(target, span, texture, cell,
                         IsoTransform.IsoCornerX(x, y) - isoX0,
                         IsoTransform.IsoCornerY(x, y, zTop) - isoY0,
                         IsoTransform.IsoCornerX(x + 1, y) - isoX0,
@@ -566,8 +655,35 @@ namespace Server.Custom.MapExport
 
             if (flat != null)
             {
-                Blit(target, span, flat, anchorX, IsoTransform.IsoY(x, y, zTop) - isoY0);
+                Blit(target, span, flat, anchorX, IsoTransform.IsoY(x, y, zTop) - isoY0,
+                    OwnerWorld, cell);
             }
+        }
+
+        /// <summary>
+        /// A pick cell, or nothing at all when no pick map is being recorded.
+        ///
+        /// The guard is here rather than at each call site because the Z it carries can cost a
+        /// tiledata lookup or four GetLandTile calls, and a normal render must not pay for an
+        /// answer nobody is going to read.
+        /// </summary>
+        private PickCell Cell(int x, int y, int z, byte kind)
+        {
+            return _pick == null ? default(PickCell) : new PickCell(x, y, z, kind);
+        }
+
+        /// <summary>
+        /// The Z a mobile would stand at on a static: the top of a surface or a bridge, the foot of
+        /// anything else.
+        ///
+        /// ItemData.CalcHeight already halves a bridge's height, which is the same number
+        /// Server/Movement uses. A wall answers its own Z - not because that is where anything
+        /// stands, but because it is the only honest answer for something nothing stands on, and
+        /// inventing one would put a waypoint inside the masonry.
+        /// </summary>
+        private static int SurfaceZ(int z, ItemData data)
+        {
+            return (data.Flags & (TileFlag.Surface | TileFlag.Bridge)) != 0 ? z + data.CalcHeight : z;
         }
 
         /// <summary>
@@ -669,24 +785,24 @@ namespace Server.Custom.MapExport
         /// way, this assignment is the thing to transpose.
         /// </summary>
         private void BlitQuad(
-            byte[] target, int span, Sprite texture,
+            byte[] target, int span, Sprite texture, PickCell pick,
             int nx, int ny, int ex, int ey, int sx, int sy, int wx, int wy)
         {
             int size = texture.Width;
 
-            Triangle(target, span, texture, _owner,
+            Triangle(target, span, texture, _owner, _pick, pick,
                 nx, ny, 0, 0,
                 ex, ey, size, 0,
                 sx, sy, size, size);
 
-            Triangle(target, span, texture, _owner,
+            Triangle(target, span, texture, _owner, _pick, pick,
                 nx, ny, 0, 0,
                 sx, sy, size, size,
                 wx, wy, 0, size);
         }
 
         private static void Triangle(
-            byte[] target, int span, Sprite texture, byte[] owner,
+            byte[] target, int span, Sprite texture, byte[] owner, PickMap map, PickCell pick,
             int ax, int ay, int au, int av,
             int bx, int by, int bu, int bv,
             int cx, int cy, int cu, int cv)
@@ -753,6 +869,11 @@ namespace Server.Custom.MapExport
                     {
                         owner[(py * span) + px] = OwnerWorld;
                     }
+
+                    if (map != null)
+                    {
+                        map.Set((py * span) + px, pick);
+                    }
                 }
             }
         }
@@ -776,6 +897,7 @@ namespace Server.Custom.MapExport
             {
                 _order = new int[column.Length];
                 _staticKeys = new int[column.Length];
+                _staticSurfaceZ = new int[column.Length];
             }
 
             int count = 0;
@@ -792,20 +914,24 @@ namespace Server.Custom.MapExport
                 }
 
                 int key = Key(column[i].Z, data);
+                int surfaceZ = SurfaceZ(column[i].Z, data);
                 int at = count++;
 
                 // The key is carried alongside the index rather than recomputed per comparison -
                 // the merge below needs it anyway, and the old form looked up tiledata twice per
-                // step of the insertion.
+                // step of the insertion. The surface Z rides along for the same reason: the draw
+                // pass keeps only an index, and the pick map needs a number tiledata has.
                 while (at > 0 && _staticKeys[at - 1] > key)
                 {
                     _order[at] = _order[at - 1];
                     _staticKeys[at] = _staticKeys[at - 1];
+                    _staticSurfaceZ[at] = _staticSurfaceZ[at - 1];
                     at--;
                 }
 
                 _order[at] = i;
                 _staticKeys[at] = key;
+                _staticSurfaceZ[at] = surfaceZ;
             }
 
             return count;
@@ -835,12 +961,8 @@ namespace Server.Custom.MapExport
         /// A sprite's bottom centre goes on the anchor - the rule from Ultima/Multis.cs:505-507.
         /// Source-over with a 1-bit alpha, because that is all ARGB1555 art carries.
         /// </summary>
-        private void Blit(byte[] target, int span, Sprite sprite, int anchorX, int anchorY)
-        {
-            Blit(target, span, sprite, anchorX, anchorY, OwnerWorld);
-        }
-
-        private void Blit(byte[] target, int span, Sprite sprite, int anchorX, int anchorY, byte owner)
+        private void Blit(
+            byte[] target, int span, Sprite sprite, int anchorX, int anchorY, byte owner, PickCell pick)
         {
             int left = anchorX - (sprite.Width / 2);
             int top = anchorY - sprite.Height;
@@ -880,6 +1002,11 @@ namespace Server.Custom.MapExport
                         if (_owner != null)
                         {
                             _owner[destination / BytesPerPixel] = owner;
+                        }
+
+                        if (_pick != null)
+                        {
+                            _pick.Set(destination / BytesPerPixel, pick);
                         }
                     }
 

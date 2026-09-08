@@ -61,6 +61,7 @@ namespace Server.Custom.MapExport
             string prerender = null;
             string terrainReport = null;
             string columns = null;
+            string pickAt = null;
             string itemsPath = null;
             int floorGround = FloorRules.DefaultGround;
             int floorFirst = FloorRules.DefaultFirst;
@@ -80,6 +81,9 @@ namespace Server.Custom.MapExport
                         break;
                     case "--columns":
                         columns = Require(args, ++i, "--columns");
+                        break;
+                    case "--pick":
+                        pickAt = Require(args, ++i, "--pick");
                         break;
                     case "--items":
                         itemsPath = Require(args, ++i, "--items");
@@ -152,7 +156,7 @@ namespace Server.Custom.MapExport
             // and nothing else in the process can accidentally depend on it.
             var map = new Map(mapId, index, fileIndex, width, height, 0, name, MapRules.FeluccaRules);
 
-            if (serve || prerender != null || terrainReport != null || columns != null)
+            if (serve || prerender != null || terrainReport != null || columns != null || pickAt != null)
             {
                 // stdout is the protocol channel in --serve, so every human-readable line goes to
                 // stderr. Doing the same for --prerender keeps one habit rather than two.
@@ -209,6 +213,32 @@ namespace Server.Custom.MapExport
                     TileServer.TerrainReport(
                         map.Tiles, width, height, ParseBounds(terrainReport), log);
                     return 0;
+                }
+
+                if (pickAt != null)
+                {
+                    if (itemsPath != null)
+                    {
+                        string itemsError;
+                        WorldItems loaded = WorldItems.Load(itemsPath, name, height, out itemsError);
+
+                        if (itemsError != null)
+                        {
+                            log("  items: " + itemsError);
+                        }
+                        else
+                        {
+                            renderer.Items = loaded;
+                            log(String.Format("  items: {0} loaded", loaded.Count));
+                            log("");
+                        }
+                    }
+
+                    int pickX, pickY;
+                    ParsePoint(pickAt, out pickX, out pickY);
+
+                    return TileServer.PickReport(
+                        renderer, map, output, name, height, pickX, pickY, log);
                 }
 
                 TileServer.Prerender(renderer, output, name, width, height, ParseBounds(prerender), log);
@@ -279,7 +309,7 @@ namespace Server.Custom.MapExport
             log("Art:     " + art);
             log("Hues:    " + (Ultima.Files.GetFilePath("hues.mul") ?? "MISSING"));
 
-            return new IsoTileRenderer(map.Tiles, new ArtCache(), rules, width, height, tileSize);
+            return new IsoTileRenderer(map, new ArtCache(), rules, width, height, tileSize);
         }
 
         /// <summary>Parses --prerender's "x,y,width,height".</summary>
@@ -303,6 +333,20 @@ namespace Server.Custom.MapExport
             }
 
             return new Rectangle2D(x, y, w, h);
+        }
+
+        /// <summary>Parses --pick's "x,y".</summary>
+        private static void ParsePoint(string text, out int x, out int y)
+        {
+            string[] parts = text.Split(',');
+
+            if (parts.Length != 2)
+            {
+                throw new ArgumentException("--pick takes x,y (got '" + text + "').");
+            }
+
+            x = Int32.Parse(parts[0].Trim());
+            y = Int32.Parse(parts[1].Trim());
         }
 
         private static int FindFacet(string name)
@@ -413,7 +457,9 @@ namespace Server.Custom.MapExport
             Console.WriteLine("  --prerender x,y,w,h  Warm the cache over a world rectangle.");
             Console.WriteLine("  --terrain-report x,y,w,h  How much of a box stretched, and what did not.");
             Console.WriteLine("  --columns x,y,w,h    Dump the land and statics on each column.");
-            Console.WriteLine("  --items <path>       A world-item snapshot, for --columns and --serve.");
+            Console.WriteLine("  --pick x,y           What the pick map says is at a world tile's centre,");
+            Console.WriteLine("                       at each floor stop. How the pick map is verified.");
+            Console.WriteLine("  --items <path>       A world-item snapshot, for --columns, --pick and --serve.");
             Console.WriteLine("  --floor-ground <n>   Ground cutoff above the land (default 20).");
             Console.WriteLine("  --floor-first <n>    First-floor cutoff above the land (default 40).");
             Console.WriteLine();

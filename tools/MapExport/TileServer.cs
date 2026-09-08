@@ -79,6 +79,26 @@ namespace Server.Custom.MapExport
         }
 
         /// <summary>
+        /// The pick map's sidecar, beside the 1:1 tile it answers for.
+        ///
+        /// Same cache root, same version segment, same layer and floor directories - so a Version
+        /// bump orphans a .pick along with the .png it belongs to, which is what that segment is
+        /// for. The level is always MaxLevel; it stays in the path so the tree has one shape and
+        /// parseTilePath on the other side stays one function.
+        /// </summary>
+        public static string PickPath(
+            string tilesRoot, string facet, string layer, Floor floor, int level, int x, int y)
+        {
+            return Path.Combine(
+                CacheRoot(tilesRoot, facet),
+                layer,
+                FloorRules.Name(floor),
+                level.ToString(CultureInfo.InvariantCulture),
+                x.ToString(CultureInfo.InvariantCulture),
+                y.ToString(CultureInfo.InvariantCulture) + ".pick");
+        }
+
+        /// <summary>
         /// Deletes item layers that are not the current snapshot's.
         ///
         /// A snapshot is thrown away wholesale rather than invalidated, so without this every
@@ -275,6 +295,108 @@ namespace Server.Custom.MapExport
             text.Append('}');
 
             return text.ToString();
+        }
+
+        /// <summary>
+        /// What the pick map says is at a world tile, at each floor stop. How the pick map is
+        /// verified.
+        ///
+        /// There is no test project for this tool and this does not add one - so the check that a
+        /// pick map answers with the right tile is a mode, in the shape of --columns and
+        /// --terrain-report beside it. Point it at a tile you can stand on in the client and the
+        /// three numbers have to be the three the client shows.
+        ///
+        /// It samples the CENTRE of the tile's diamond. The anchor is the diamond's south vertex
+        /// and land art is 44 tall, so the centre is 22 pixels above it - and the diamond is at the
+        /// tile's own standing Z, which is the same number the pick map should be reporting back.
+        ///
+        /// It writes the sidecar rather than only building it, on purpose: the write is where the
+        /// dx/dy bound is enforced and where the compressed size comes from, and both are things
+        /// worth seeing. The file lands in the real cache, so this warms a tile rather than
+        /// littering.
+        /// </summary>
+        public static int PickReport(
+            IsoTileRenderer renderer,
+            Map map,
+            string tilesRoot,
+            string facet,
+            int facetHeight,
+            int x,
+            int y,
+            Action<string> log)
+        {
+            int level = renderer.MaxLevel;
+            int size = renderer.TileSize;
+            int standZ = map.GetAverageZ(x, y);
+
+            int canvasX = IsoTransform.IsoX(x, y) - IsoTransform.OriginX(facetHeight);
+            int canvasY = IsoTransform.IsoY(x, y, standZ) - IsoTransform.OriginY()
+                - (IsoTransform.LandArtSize / 2);
+
+            int tileX = canvasX / size;
+            int tileY = canvasY / size;
+            int pixelX = canvasX % size;
+            int pixelY = canvasY % size;
+
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "Pick at {0},{1} - the land there stands at z {2}", x, y, standZ));
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "  canvas {0},{1} -> level {2} tile {3},{4} pixel {5},{6}",
+                canvasX, canvasY, level, tileX, tileY, pixelX, pixelY));
+            log("");
+            log("  layer  floor   picked                       size");
+
+            var layers = new List<Layer> { Layer.Map };
+
+            if (renderer.Items.Any)
+            {
+                layers.Add(Layer.Items);
+            }
+
+            foreach (Layer layer in layers)
+            {
+                foreach (Floor floor in new[] { Floor.Ground, Floor.First, Floor.All })
+                {
+                    PickMap pick = renderer.RenderPick(layer, tileX, tileY, floor);
+
+                    if (pick == null)
+                    {
+                        log(String.Format(
+                            CultureInfo.InvariantCulture,
+                            "  {0,-6} {1,-7} empty - no item reaches this tile",
+                            layer == Layer.Map ? "map" : "items",
+                            FloorRules.Name(floor)));
+                        continue;
+                    }
+
+                    string path = PickPath(
+                        tilesRoot, facet, LayerName(layer, renderer.Items), floor, level, tileX, tileY);
+
+                    long bytes = pick.Write(path);
+                    PickCell cell = pick.At(pixelX, pixelY);
+
+                    log(String.Format(
+                        CultureInfo.InvariantCulture,
+                        "  {0,-6} {1,-7} {2},{3} z{4} {5,-6} {6,20}",
+                        layer == Layer.Map ? "map" : "items",
+                        FloorRules.Name(floor),
+                        cell.X,
+                        cell.Y,
+                        cell.Z,
+                        PickMap.KindName(cell.Kind),
+                        String.Format(CultureInfo.InvariantCulture, "{0:N0} bytes", bytes)));
+                }
+            }
+
+            log("");
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "  expected {0},{1} z{2} at every stop where the tile itself is what is on top.",
+                x, y, standZ));
+
+            return 0;
         }
 
         /// <summary>
