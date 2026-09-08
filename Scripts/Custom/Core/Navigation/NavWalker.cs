@@ -518,8 +518,17 @@ namespace Server.Custom
         /// steps around a corner. While watched the recoverable rungs are cycled up to
         /// WatchedCycles times, and only then does it move in view.
         /// </summary>
-        /// <summary>uo-offline's FrozenLimit and FrozenMoveTiles (TravelerBehavior.cs:2943-2944).</summary>
-        private static readonly TimeSpan FrozenLimit = TimeSpan.FromSeconds(60.0);
+        /// <summary>
+        /// How long a mobile may stay within FrozenMoveTiles of one spot before the watchdog
+        /// acts. uo-offline's is 60 s (TravelerBehavior.cs:2943), and 60 s is longer than their
+        /// whole ladder, whose rungs are seconds apart. Ours are HopTimeout apart, so one pass
+        /// through Repath, Sidestep, Door and Skip is four hop timeouts, and a window shorter than
+        /// that pre-empts a Skip that would have worked - it did, three times in one life probe.
+        /// Six hop timeouts: one full pass, the Skip's own hop, and one more, so the watchdog only
+        /// ever fires on a bot the ladder has already had its whole turn with.
+        /// </summary>
+        private static readonly TimeSpan FrozenLimit =
+            TimeSpan.FromMilliseconds(HopTimeout.TotalMilliseconds * 6.0);
 
         private const int FrozenMoveTiles = 2;
 
@@ -727,8 +736,12 @@ namespace Server.Custom
 
         /// <summary>
         /// ", blocked by Perrin (DailyLifeTownsfolk) at 1450,1683" when a live mobile other than
-        /// this one stands on the step's tile; empty otherwise. A player is named as such rather
-        /// than by class, because that is the one blocker a bot is meant to yield to.
+        /// this one stands on the step's tile, and ", near: Bindi (Tinker) at 1421,1652" for every
+        /// live mobile within two tiles of the walker otherwise; empty when it stands alone. A
+        /// player is named as such rather than by class, because that is the one blocker a bot is
+        /// meant to yield to. The near list exists because a bot wedged two tiles from a shop
+        /// counter has nothing on the counter tile: what it cannot pass is the vendor in the
+        /// doorway, and that is exactly the case the yield-to-stock-NPCs decision wants evidence of.
         /// </summary>
         private string DescribeBlocker(NavStep step)
         {
@@ -739,7 +752,21 @@ namespace Server.Custom
                 return String.Empty;
             }
 
-            IPooledEnumerable eable = map.GetMobilesInRange(step.Point, 0);
+            string onGoal = DescribeMobiles(map, step.Point, 0, ", blocked by ");
+
+            if (onGoal.Length > 0)
+            {
+                return onGoal;
+            }
+
+            return DescribeMobiles(map, _mobile.Location, 2, ", near: ");
+        }
+
+        private string DescribeMobiles(Map map, Point3D at, int range, string prefix)
+        {
+            var parts = new List<string>();
+
+            IPooledEnumerable eable = map.GetMobilesInRange(at, range);
 
             try
             {
@@ -754,12 +781,12 @@ namespace Server.Custom
                         ? "player"
                         : other.GetType().Name;
 
-                    return String.Format(
-                        ", blocked by {0} ({1}) at {2},{3}",
+                    parts.Add(String.Format(
+                        "{0} ({1}) at {2},{3}",
                         other.Name ?? kind,
                         kind,
-                        step.Point.X,
-                        step.Point.Y);
+                        other.X,
+                        other.Y));
                 }
             }
             finally
@@ -767,7 +794,7 @@ namespace Server.Custom
                 eable.Free();
             }
 
-            return String.Empty;
+            return parts.Count == 0 ? String.Empty : prefix + String.Join("; ", parts.ToArray());
         }
 
         /// <summary>

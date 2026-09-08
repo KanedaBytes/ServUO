@@ -305,9 +305,13 @@ that for the length of a work probe, at a tile the engine could path out of when
 
 uo-offline's answer is `CheckFrozenWatchdog` (`TravelerBehavior.cs:2963-3033`): a bot that has not
 moved `FrozenMoveTiles` (2) in `FrozenLimit` (60 s) is rooted whatever the plan says, and the spot
-itself is the problem. Ours is the same clock on the walker: a minute within two tiles of one spot
-goes straight to the top rung, which keeps its own rule about players watching. Their two stages
-(repick, then rescue) collapse to one here because the ladder's first rung is already a re-plan.
+itself is the problem. Ours is the same clock on the walker, with one number re-derived: their 60 s
+outlasts their whole ladder, whose rungs are seconds apart, but ours are 20 s apart, so one pass
+through Repath, Sidestep, Door and Skip is 80 s and a 60 s window pre-empted a Skip that would have
+worked - three teleports in one life probe. The window is **six hop timeouts**, 120 s: the ladder's
+whole turn, the Skip's own hop, and one more. Two tiles within that, and the bot goes straight to
+the top rung, which keeps its own rule about players watching. Their two stages (repick, then
+rescue) collapse to one here because the ladder's first rung is already a re-plan.
 
 ### A home is a town tag, not a `City` column
 

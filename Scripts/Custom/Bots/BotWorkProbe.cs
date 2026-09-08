@@ -394,7 +394,7 @@ namespace Server.Custom
                 && !miner.HaulPending
                 && crafter != null
                 && OreReachedASmith(crafter)
-                && crafter.Made > madeBefore
+                && TakerMade(crafter, madeBefore)
                 // The packed forge: the second smith is at its own tile and has made something.
                 && SecondSmithWorking()
                 // The walking miner is part of the bar, not a bonus. Without it here the probe
@@ -456,6 +456,22 @@ namespace Server.Custom
         private static bool OreReachedASmith(CrafterBehavior first)
         {
             return (first != null && first.Received > 0) || (_second != null && _second.Received > 0);
+        }
+
+        /// <summary>
+        /// Did the smith that took the ore turn it into something? The first smith is stripped
+        /// dry on purpose and the second keeps its kit, and FindBuyer hands the load to whichever
+        /// it meets first - so "the smith made nothing" is only a finding about the one that had
+        /// ore to make it from.
+        /// </summary>
+        private static bool TakerMade(CrafterBehavior first, int firstMadeBefore)
+        {
+            if (first != null && first.Received > 0)
+            {
+                return first.Made > firstMadeBefore;
+            }
+
+            return _second != null && _second.Received > 0 && _second.Made > 0;
         }
 
         /// <summary>
@@ -742,20 +758,29 @@ namespace Server.Custom
                             notes.Add("its bench filled up");
                         }
 
-                        if (crafter.Made - madeBefore <= 0)
+                        // The smith that TOOK the ore has to have made something from it. The
+                        // first is stripped dry on purpose, so when the load went to the second
+                        // the first staying dry is the probe's own arrangement, not a fault.
+                        if (crafter.Received > 0)
                         {
-                            problems.Add(String.Format(
-                                "the smith made nothing in {0:0}s ({1} attempt(s)){2}",
-                                Window.TotalSeconds,
-                                crafter.Attempts,
-                                crafter.IsDry ? " - it never received any ore" : ""));
+                            if (crafter.Made - madeBefore <= 0)
+                            {
+                                problems.Add(String.Format(
+                                    "the first smith took the ore and made nothing in {0:0}s ({1} attempt(s))",
+                                    Window.TotalSeconds,
+                                    crafter.Attempts));
+                            }
+                            else
+                            {
+                                notes.Add(String.Format(
+                                    "the first smith made {0} item(s) in {1} attempt(s) from the ore",
+                                    crafter.Made - madeBefore,
+                                    crafter.Attempts));
+                            }
                         }
-                        else
+                        else if (_second != null && _second.Received > 0)
                         {
-                            notes.Add(String.Format(
-                                "the smith made {0} item(s) in {1} attempt(s)",
-                                crafter.Made - madeBefore,
-                                crafter.Attempts));
+                            notes.Add("the first smith stayed dry - the ore went to the second");
                         }
                     }
                 }
