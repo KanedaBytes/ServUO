@@ -1,0 +1,40 @@
+# Line endings, pinned per path.
+#
+# `core.autocrlf` is true on this machine, so without these rules a checkout rewrites every text
+# file to CRLF - including the JSON files this repo requires to be LF. That is not cosmetic: two
+# tests compare RAW BYTES, and the failure they produce blames content when the cause is the
+# checkout. It has bitten twice, most recently when a plain `git checkout Data/Custom/navigation.json`
+# brought the file back as CRLF and the golden byte-identity test started failing on a file whose
+# records were identical.
+#
+# See CLAUDE.md, "Line endings are not uniform in this tree".
+
+# --- JSON that must be LF -------------------------------------------------------------------
+#
+# All of it is written by a program rather than typed: the shard through `AtomicFile.Write`, the
+# editor through `compact.js`, and the reference through `tools/nav-import/uo-offline.js`. All
+# three emit LF, so LF is what the file is, and `project.test.js` asserts the shipped files are
+# byte-for-byte what the writer produces.
+
+Data/Custom/navigation.json          text eol=lf
+Data/Custom/britain-daily-life.json  text eol=lf
+Data/Custom/restricted-zones.json    text eol=lf
+Data/Custom/core-smoke.json          text eol=lf
+Data/Custom/golden/*.json            text eol=lf
+Data/Custom/reference/*.json         text eol=lf
+
+# `bots.json` is deliberately absent: it is hand-edited, is CRLF today, and nothing compares its
+# bytes. Pinning it would renormalise a file for no reason.
+
+# --- C# stays CRLF --------------------------------------------------------------------------
+#
+# Which is what it already checks out as. Stated rather than inherited from autocrlf, so a
+# checkout on a machine configured differently produces the same tree.
+#
+# SCOPED TO OUR OWN CODE, deliberately. A bare `*.cs` reaches the whole of upstream ServUO, whose
+# blobs were committed containing CRLF - 272 files, every line of each, would be rewritten to
+# satisfy the rule. That is a line-ending-only diff across somebody else's tree, and it would make
+# those files show as permanently modified until somebody took it. Our own files are the ones we
+# write, and the ones a flip would actually cost us.
+
+Scripts/Custom/**/*.cs text eol=crlf
