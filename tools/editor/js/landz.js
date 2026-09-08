@@ -80,6 +80,21 @@ export function at(x, y) {
 }
 
 /**
+ * The Z at a tile if it has already been asked about, and NOTHING otherwise.
+ *
+ * What the radar readout uses. `at` would be the obvious call and would be wrong: the readout runs
+ * on every mousemove, so it would queue a tile per frame and send a query per frame - down the same
+ * serial stdin channel the art tiles are rendered on, where sixty small questions a second would
+ * sit in front of the picture somebody is waiting for. A hover is not worth that; a placement is,
+ * and `resolve` below is what a placement calls.
+ */
+export function peek(x, y) {
+    const answer = known.get(`${x},${y}`);
+
+    return answer === undefined ? null : answer;
+}
+
+/**
  * The Z at a tile, waiting one batch for it if it is not known yet.
  *
  * What a PLACEMENT uses in radar view, where there is no pick map to read and the cursor knows only

@@ -2784,11 +2784,15 @@ function tileAt(event) {
     const [worldX, worldY] = worldAt(event);
     const estimate = { x: Math.floor(worldX), y: Math.floor(worldY), z: null, exact: !view.isArt };
 
-    if (!view.isArt) {
+    // The facet check is not defensive padding: `canvasAt` needs the facet's height to find the
+    // pyramid's origin, and the renderer's handshake can land before /api/status does.
+    if (!view.isArt || !view.facet) {
         // Radar has no surface under the cursor to read, but the land under a tile is still a
-        // question with an answer, and it is the same one the pick map records. Asked here so a
-        // hover warms it and a placement finds it already there.
-        return { ...estimate, z: landz.at(estimate.x, estimate.y) };
+        // question with an answer, and it is the same one the pick map records. PEEKED, not asked:
+        // this runs on every mousemove, and asking here would put a query per frame in front of the
+        // art tiles on the renderer's one serial channel. A placement asks (see pickedTile), so the
+        // readout fills in for the tiles that have actually been worth an answer.
+        return { ...estimate, z: landz.peek(estimate.x, estimate.y) };
     }
 
     const [screenX, screenY] = screenAt(event);
@@ -2811,7 +2815,7 @@ function tileAt(event) {
  * clicked would look right and be wrong, which is the whole reason this exists.
  */
 async function pickedTile(event) {
-    if (!view.isArt) {
+    if (!view.isArt || !view.facet) {
         const tile = tileAt(event);
 
         // THE ONE STEP OUTSIDE THIS SESSION'S SCOPE, and taken deliberately: every record the
