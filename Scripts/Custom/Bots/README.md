@@ -402,6 +402,43 @@ floor cannot make one bank the only place anybody goes. **Bots already routing t
 the floor.** Validated at load: a floor larger than the destination's authored arrival points warns
 (`brit-bank` has four).
 
+### Z resolution: a translated piece
+
+`NavWalker.ResolveZ` answers "what Z would a mobile stand at on this tile", and every flood, audit
+and scout we own goes through it. It used to probe the hint Z once and fall back to
+`map.GetAverageZ`:
+
+```
+if (map.CanFit(x, y, hintZ, ...)) return hintZ;
+return map.GetAverageZ(x, y);
+```
+
+Correct on open ground, wrong on anything built. **A bridge deck is a chain of statics whose Z
+changes tile by tile**, so the tile after a Z 6 deck tile is at 7, the single probe at 6 fails, and
+the answer comes back as the river bed underneath. The Britain-Trinsic crossing was unwalkable to
+every tool we have for that reason alone.
+
+**Translated from uo-offline's `CustomBots/Nav/Walkable.cs`**, numbers included:
+
+- `MaxClimb = 4`, `MaxDrop = 20` (`Walkable.cs:27-28`) - asymmetric, because UO lets a mobile climb
+  a little and drop a lot.
+- `TryFindStandZ` (`Walkable.cs:118-140`) searches that window around the reference Z, nearest
+  first, instead of probing one value.
+- `CanStep` (`Walkable.cs:143-159`) hands the resolved Z on to the next step, which is what lets a
+  flood follow a surface rather than a plane.
+- `TryFindSeedZ` (`Walkable.cs:38-62`) honours the stored Z before the land Z - our fallback order,
+  reversed from what we had.
+
+Ours keeps its own `CanFit` flags (`requireSurface: true`, so it cannot answer with a Z in mid-air
+over a hole) and adds one thing theirs does not: if nothing stands within the window of the hint,
+it retries the window from the tile's own land surface before giving up. A hint can be stale, and
+the ground is still the right answer when it is - it was only ever wrong as the *first* answer.
+
+**This was not a pathfinder difference.** ServUO's `MovementPath` crosses that bridge perfectly
+well when handed Z 6 to Z 3; we had never handed it the deck. `CoreSmoke` now walks four known
+bridges as a regression test, because nothing cheaper catches this: the audit only paths edges we
+have already authored, and there is no authored edge over a bridge nobody could cross.
+
 ### Bots move at a player's pace, and ride
 
 Every bot moved at exactly half a second a step, which is the one speed nothing in UO moves at.

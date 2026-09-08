@@ -820,6 +820,40 @@ namespace Server.Custom
         /// NavAudit resolves Z exactly the same way. They must agree, or the audit will pass a
         /// hop the walker then aims at the wrong floor.
         /// </summary>
+        /// <summary>
+        /// How far a step may climb while looking for the surface to stand on.
+        ///
+        /// Translated from uo-offline's `CustomBots/Nav/Walkable.cs:27-28`, numbers included:
+        /// UO lets a mobile climb a little and drop a lot, so the window is asymmetric. Theirs
+        /// is the only implementation of this idea either tree has, and it is the piece we were
+        /// missing - see `Scripts/Custom/Bots/README.md`.
+        /// </summary>
+        private const int MaxClimb = 4;
+
+        /// <summary>And how far it may drop. See MaxClimb.</summary>
+        private const int MaxDrop = 20;
+
+        /// <summary>
+        /// The Z a mobile would actually stand at on this tile, given a Z to start looking from.
+        ///
+        /// THE HINT IS A HINT, NOT AN ANSWER, and that distinction is the whole of this method.
+        /// The first version probed the hint once and fell straight back to `GetAverageZ`:
+        ///
+        ///     if (map.CanFit(x, y, point.Z, ...)) return point.Z;
+        ///     return map.GetAverageZ(x, y);
+        ///
+        /// which is correct on open ground and wrong on anything built. A bridge deck is a chain
+        /// of statics whose Z changes tile by tile, so the tile after a Z 6 deck tile is at 7, the
+        /// single probe at 6 fails, and the answer came back as the RIVER BED under the bridge.
+        /// The Britain-Trinsic crossing was unwalkable to every flood and audit we have for that
+        /// reason alone - and `MovementPath` crosses it perfectly well when handed Z 6 to Z 3,
+        /// which is how we know the pathfinder was never the problem.
+        ///
+        /// So: search a window around the hint, nearest first, climb 4 and drop 20. If nothing in
+        /// the window stands, start again from the tile's own land surface before giving up -
+        /// a hint can be stale or simply wrong, and the ground is still the right fallback when
+        /// it is. Falling back to the ground FIRST was the bug.
+        /// </summary>
         public static int ResolveZ(Map map, Point3D point)
         {
             if (map == null)
@@ -827,12 +861,57 @@ namespace Server.Custom
                 return point.Z;
             }
 
-            if (map.CanFit(point.X, point.Y, point.Z, 16, false, false, true))
+            int z;
+
+            if (TryStandZ(map, point.X, point.Y, point.Z, out z))
             {
-                return point.Z;
+                return z;
             }
 
-            return map.GetAverageZ(point.X, point.Y);
+            // The hint was no use here. Try again from the ground this tile actually has, which is
+            // what the old implementation did immediately - correct as a fallback, wrong as a rule.
+            int landZ = map.GetAverageZ(point.X, point.Y);
+
+            if (TryStandZ(map, point.X, point.Y, landZ, out z))
+            {
+                return z;
+            }
+
+            return landZ;
+        }
+
+        /// <summary>
+        /// A standable Z within the climb/drop window of a reference, nearest to it first.
+        ///
+        /// uo-offline's `Walkable.TryFindStandZ` (`Nav/Walkable.cs:118-140`), with our CanFit
+        /// flags rather than theirs: `requireSurface` true is what keeps this from answering with
+        /// a Z in mid-air over a hole.
+        /// </summary>
+        private static bool TryStandZ(Map map, int x, int y, int reference, out int z)
+        {
+            z = reference;
+
+            if (map.CanFit(x, y, reference, 16, false, false, true))
+            {
+                return true;
+            }
+
+            for (int d = 1; d <= MaxDrop; d++)
+            {
+                if (d <= MaxClimb && map.CanFit(x, y, reference + d, 16, false, false, true))
+                {
+                    z = reference + d;
+                    return true;
+                }
+
+                if (map.CanFit(x, y, reference - d, 16, false, false, true))
+                {
+                    z = reference - d;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>A fresh hop: full deadline, bottom of the ladder, no best distance yet.</summary>

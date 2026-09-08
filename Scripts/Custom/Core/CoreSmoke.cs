@@ -203,6 +203,7 @@ namespace Server.Custom
         {
             passed &= CompleteLoopQueueProbes(report, probe);
             passed &= RunJsonConfigCheck(report);
+            passed &= RunCrossingCheck(report);
             passed &= RunPersistenceCheck(report, from);
 
             int failing, warning;
@@ -236,6 +237,70 @@ namespace Server.Custom
             {
                 CommandReport.Send(from, passed ? "[CoreSmoke - PASSED" : "[CoreSmoke - FAILED", report);
             }
+        }
+
+        /// <summary>
+        /// Bridges and other crossings a corridor has to be able to walk.
+        ///
+        /// A REGRESSION TEST, and it exists because of one bug. `NavWalker.ResolveZ` used to probe
+        /// its hint Z once and then fall back to `map.GetAverageZ`, which is correct on open ground
+        /// and wrong on anything built: a bridge deck is a chain of statics whose Z changes tile by
+        /// tile, so the tile after a Z 6 deck tile is at 7, the single probe fails, and the answer
+        /// comes back as the river bed underneath. The Britain-Trinsic crossing was unwalkable to
+        /// every flood and audit we own for that reason alone, and an adopt of the road south left
+        /// 372 waypoints unreachable because of it.
+        ///
+        /// Nothing cheaper catches it. The audit paths our own authored edges and there is no
+        /// authored edge over that bridge; the unit tests have no map. So the check is here, in the
+        /// heavyweight headless verifier, driving the same flood the corridor tool drives.
+        ///
+        /// Coordinates rather than waypoint ids on purpose: these crossings are not in the graph,
+        /// and the point is to know the ground can be walked BEFORE anybody authors a road over it.
+        /// </summary>
+        private static bool RunCrossingCheck(List<string> report)
+        {
+            report.Add("-- nav crossings --");
+
+            // from-x, from-y, to-x, to-y, what it is.
+            int[][] crossings =
+            {
+                new[] { 1473, 2159, 1484, 2158 },
+                new[] { 1396, 1748, 1410, 1734 },
+                new[] { 1504, 1707, 1487, 1714 },
+                new[] { 1537, 1630, 1527, 1629 },
+            };
+
+            string[] names =
+            {
+                "Britain-Trinsic bridge",
+                "Britain west bridge",
+                "Britain road bridge",
+                "Britain east bridge",
+            };
+
+            bool ok = true;
+
+            for (int i = 0; i < crossings.Length; i++)
+            {
+                int[] pair = crossings[i];
+                var from = new Point3D(pair[0], pair[1], 0);
+                var to = new Point3D(pair[2], pair[3], 0);
+
+                List<Point3D> path;
+                string error;
+
+                if (NavCorridor.TryPath(Map.Trammel, from, to, out path, out error))
+                {
+                    report.Add(String.Format(
+                        "  ok: {0} walks in {1} tile(s)", names[i], path.Count));
+                    continue;
+                }
+
+                ok = false;
+                report.Add(String.Format("  FAIL: {0} - {1}", names[i], error ?? "no route"));
+            }
+
+            return ok;
         }
 
         private static bool RunLoggerCheck(List<string> report)

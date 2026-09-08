@@ -185,6 +185,87 @@ against real map data and is the check that keeps the file honest; set
 See `Scripts/Custom/Core/Navigation/README.md`, and `Scripts/Custom/Core/Navigation/nav-format-comparison.md`
 for how the schema maps onto the `uo-offline-server` bot navigation format.
 
+## 5d-1b — uo-offline's navigation as a base
+
+**All four items are done and committed.** What remains is the acceptance test, which is Sean's to
+run; see the bottom of this section.
+
+`Data/Custom/reference/uo-offline-nav.trammel.json` holds 3952 waypoints, 4291 edges and 485
+destinations converted from uo-offline (GPL-3, pinned commit in that directory's README). The shard
+never loads it. The editor draws it as a read-only layer, and **Adopt** copies a region into
+`navigation.json` after re-walking every edge — 56% of theirs are longer than our hop cap, so
+nothing in that file is usable until something walks it.
+
+1. **Converter** — `tools/nav-import/uo-offline.js`, run by hand. Waypoints keep `uo-wp-N`;
+   destinations are named `<town>-<kind>` from their `City` (`trinsic-bank`, `trinsic-shop-smith`).
+   Every adopted record carries `source: "uo-offline"`.
+2. **Reference layer** — bbox-loaded like the stock spawners, dashed and half-opacity so it can
+   never be mistaken for authored data. Dungeon (1988) and Lost Lands (43) are separate toggles,
+   off by default, and Adopt refuses both.
+3. **Adopt** — `NavAdopt.cs`, driven by the `nav-adopt` token and the editor's *Adopt region* tool.
+   It cannot write nav data: it writes a proposal to `Data/Live/nav-adopt.json` and the editor
+   accepts it through the ordinary save path.
+4. **Island check** — `Nav.Data` warns when a component holding a destination or arrival cannot
+   reach the main graph, and `[NavAudit` repeats it.
+
+### The ResolveZ window fix, and why it mattered
+
+`NavWalker.ResolveZ` probed its hint Z once and fell back to `map.GetAverageZ`. A bridge deck is a
+chain of statics whose Z changes tile by tile, so the probe missed and the answer came back as the
+river bed underneath. **The Britain-Trinsic bridge was unwalkable to every flood, audit and scout
+we own** — and an adopt of the road south left 372 waypoints unreachable because of it.
+
+It now searches a window around the hint, nearest first, climb 4 / drop 20 — translated from
+uo-offline's `CustomBots/Nav/Walkable.cs:27-28,118-140`; see `Scripts/Custom/Bots/README.md`. This
+was **not** a pathfinder difference: ServUO's `MovementPath` crosses that bridge when handed Z 6 to
+Z 3, and we had simply never handed it the deck.
+
+Two things it bought beyond the bridge: the adopt's unreachable count fell from **372 to 134**, and
+the **walk probe passed for the first time** — sidestep recoveries went from 1-5 per run to zero,
+because bots had been resolving onto the wrong surface and shouldering around it.
+
+`CoreSmoke` walks four bridges as a regression test (`RunCrossingCheck`). Nothing cheaper catches
+this: `[NavAudit` only paths edges already authored, and there was no authored edge over a bridge
+nobody could cross.
+
+### Config keys
+
+| key | default | what it does |
+| --- | --- | --- |
+| `Custom.NavAdoptJoinReach` | 100 | How far a join may reach for one of our waypoints. Not the hop cap: a join is walked and subdivided like any edge, so it never has to fit in one hop. At the cap, one adopt made a single join and left 372 waypoints floating. |
+| `Custom.NavHomeWaypoint` | `brit-bank-2` | Which component is "the main graph". Was the *largest* component, which held only while we were the biggest thing in the file — one adopt of 481 waypoints against Britain's 231 inverted it and reported Britain as the island. |
+
+### Sending a bot somewhere
+
+```
+[BotSendTo <destination or words> [bot name]
+```
+
+Target the bot, or name it when it is not within 12 tiles. A partial argument lists the matches, so
+`[BotSendTo trinsic bank` resolves without knowing the exact id. It routes through
+`TravelerBehavior.SendTo`, the same path the lifecycle uses. `[BotInfo` shows behaviour,
+destination and leg progress; the editor's Bots panel shows the same live.
+
+### The Britain-Trinsic adopt, as it stands
+
+Adopting `1283,1711 871x1372` currently gives: 484 waypoints, 513 edges, **1 join**, 0 edges over
+the cap, 5 failures, 1 stranded, 8 destinations skipped for having no arrival inside the hop cap,
+and **134 waypoints that cannot reach the existing graph**.
+
+Save is refused while any waypoint cannot reach the graph, with no override — an island is the one
+fault that looks perfect from inside the editor.
+
+The 5 remaining failures are all **inside Trinsic** (x 1824-2069), a walled city whose roads run
+through gates; one of them, `1824,2843 -> 1824,2843`, is two reference records on the same tile,
+which `TryPath` cannot route between. Those are the next thing to look at.
+
+### What the acceptance test still needs
+
+1. Adopt outward from Britain **one box at a time**, each overlapping ground already saved, so each
+   box's edges have something to join onto. One large box cannot join and will be refused.
+2. Save each box, then run `[NavAudit`.
+3. `[BotSendTo trinsic-bank` and watch the bot arrive.
+
 ## Britain daily life
 
 `Data/Custom/britain-daily-life.json` drives the town's day: tavern patrons after dark, the night

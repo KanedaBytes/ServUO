@@ -386,23 +386,36 @@ namespace Server.Custom
                             continue;
                         }
 
-                        int comma = word.IndexOf(',');
+                        // "x,y" or "x,y,z". Z MATTERS AND USED TO BE DROPPED: every point was
+                        // built at Z 0, so probing a bridge deck at Z 6 over water asked the
+                        // pathfinder about the river bed and answered "not walkable" about a
+                        // bridge a player rides across. A probe that silently substitutes its own
+                        // Z cannot be used to decide whether a Z is right.
+                        string[] numbers = word.Split(',');
                         int x, y;
 
-                        if (!Int32.TryParse(word.Substring(0, comma), out x)
-                            || !Int32.TryParse(word.Substring(comma + 1), out y))
+                        if (numbers.Length < 2
+                            || !Int32.TryParse(numbers[0], out x)
+                            || !Int32.TryParse(numbers[1], out y))
                         {
                             continue;
                         }
 
+                        int z = 0;
+
+                        if (numbers.Length > 2 && !Int32.TryParse(numbers[2], out z))
+                        {
+                            z = 0;
+                        }
+
                         if (snapping)
                         {
-                            snap = new Point3D(x, y, 0);
+                            snap = new Point3D(x, y, z);
                             snapping = false;
                         }
                         else
                         {
-                            pairs.Add(new Point3D(x, y, 0));
+                            pairs.Add(new Point3D(x, y, z));
                         }
                     }
 
