@@ -724,6 +724,50 @@ test('a pick sidecar is served as bytes, still compressed', async () => {
     assert.strictEqual(bytes[4], 1, 'unexpected pick format');
 });
 
+test('the browser read path lands on the tile it was aimed at, end to end', async () => {
+    // THE ACCEPTANCE TEST, as far as it can be run without a browser: the forward projection picks
+    // a tile and a pixel, the bridge renders and serves the sidecar, the browser's own decoder
+    // reads it, and the answer has to be the world tile it started from. Every seam in the feature
+    // is in this line - iso.tileFor, the URL shape, parseTilePath, the renderer's pass, the gzip,
+    // and js/pickmap.js - and a drift in any of them shows up here as a tile in the wrong place
+    // rather than as an error.
+    //
+    // brit-forge, the anvil in the smithy yard: 1424,1557 at z 30, which is where Britain's upper
+    // town stands and therefore where a ground-plane inverse would be about 2.7 tiles out.
+    const info = await (await fetch(origin + '/api/artinfo')).json();
+
+    if (!info.available) {
+        return;   // MapExport.exe has not been built; the shape of this is checked above.
+    }
+
+    const iso = await import('./js/iso.js');
+    const pickmap = await import('./js/pickmap.js');
+
+    const [x, y, z] = [1424, 1557, 30];
+    const max = info.maxLevel;
+    const at = iso.tileFor(x, y, z, max, max, 4096, info.tileSize);
+
+    // The centre of the tile's diamond: the anchor is its south vertex, and land art is 44 tall.
+    const centre = iso.canvasToTile(
+        at.canvasX, at.canvasY - (iso.LAND_ART_SIZE / 2), max, max, info.tileSize);
+
+    const url = `${origin}/tiles/iso/Trammel/v${info.version}/map/all/${max}`
+        + `/${centre.tileX}/${centre.tileY}.pick`;
+
+    const response = await fetch(url);
+
+    assert.strictEqual(response.status, 200, url);
+
+    const map = pickmap.decode(await response.arrayBuffer(), info.pickFormat);
+    const found = map.at(centre.pixelX, centre.pixelY);
+
+    assert.ok(found, 'nothing was drawn at the centre of the smithy yard');
+    assert.deepStrictEqual(
+        { x: found.x, y: found.y, z: found.z, what: found.what },
+        { x, y, z, what: 'land' },
+        'the pick map did not name the tile the projection aimed at');
+});
+
 test('landz validates its tile list before it reaches the renderer', async () => {
     const refused = [
         '',                       // absent

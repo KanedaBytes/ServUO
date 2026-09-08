@@ -104,6 +104,7 @@ Ported from the ModernUO shard, in this order:
 | 5a | Map export + editor bridge, read-only layers | **done** |
 | 5b | Editing through the bridge | **done** |
 | 5c | Spawners in the editor | **done** |
+| 5d | The editor's isometric art view — the renderer, then editing on the art | **done** |
 | 6 | `Scripts/Custom/Bots/` — PlayerBots, session 1: the bot mobile you can spawn and inspect | **done** |
 | 7 | PlayerBots, session 2: the behaviour tick, `Traveler` on `NavWalker`, class-weighted destinations | **done** |
 | 8 | PlayerBots, session 3: the lifecycle roller, bank crowds and shoppers | **done** |
@@ -116,7 +117,16 @@ phase roller, a bank with a standing crowd, and shops worth browsing. Speech and
 See `Scripts/Custom/Bots/README.md`, in particular its **Deviations from uo-offline** and **Severed
 seams** sections.
 
-Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
+The art view (5d) took three sessions: the isometric renderer and its on-demand tile cache; then
+stretched terrain, the shard's own furniture and the floor slider; then **the pick map**, which is
+what made it an editor rather than a picture. The isometric projection has no inverse — a screen
+pixel names a world tile only once a Z is assumed — so the renderer writes down which tile and which
+standing Z each pixel belongs to while it is drawing, and everything the radar view can do the art
+view now does on the art. See `tools/editor/README.md`, **The pick map**.
+
+Roadmap beyond the port: a test project, a possible .NET retarget, a `TimedSpawner`, and the art
+view's cave section mode — a cut through the world rather than a storey of a building, which is the
+one thing the floor slider cannot express.
 
 ### Picking the bot layer up cold
 

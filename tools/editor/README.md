@@ -57,6 +57,8 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `tiles/` | Rendered map, gitignored |
 | `artrenderer.js` | The isometric renderer's child process, its queue and its cache paths |
 | `js/iso.js` | The isometric projection - one formula, shared by the camera and every layer |
+| `js/pickmap.js` | Which world tile the cursor is on - the renderer's per-pixel answer, decoded |
+| `js/landz.js` | Where the ground is, for the rects that are drawn on it and carry no Z |
 | `../MapExport/` | The tile renderers, radar and isometric |
 
 ## Security
@@ -372,6 +374,11 @@ A second facet is another run, not a code change: `export-tiles.ps1 -Facet Feluc
 
 The real client art, drawn isometrically. **Base map → Art** in the sidebar.
 
+Everything the radar view can do, the art view does — on the art, at the tile the cursor is on.
+Placing, dragging, the create tools, zone rects, the readout: all of it goes through the renderer's
+own **pick map**, below, because the isometric projection has no inverse and guessing one put things
+about 2.7 tiles from where they were clicked.
+
 ```
 tools\editor\export-tiles.ps1 -Prerender 1380,1495,365,345   # optional; warms Britain
 node tools\editor\bridge.js
@@ -673,23 +680,137 @@ Two things follow, and they are why this was a small change rather than a rewrit
 The camera stays in world space, so `centerOn`, `goTo`, `fitAll`, the Britain button and the
 filter's jump-to-shape all work unchanged.
 
-### Why placing and dragging are disabled in art view
+### The pick map, and why the inverse stopped mattering
 
-**The inverse is not a function.** A screen pixel names a world tile only once you assume a Z, so
-`isoToWorld` answers for the ground plane and is off by `z*4/44` tiles — about **2.7 tiles** where
-Britain stands, near z 30. A waypoint dropped three tiles from where it was clicked would look
-right and be wrong, which is worse than a refusal.
+**The isometric inverse is not a function.** A screen pixel names a world tile only once you assume
+a Z, so `isoToWorld` answers for the ground plane and is off by `z*4/44` tiles — about **2.7 tiles**
+where Britain stands, near z 30. That is why placing and dragging were refused here for two
+sessions: a waypoint dropped three tiles from where it was clicked would look right and be wrong.
 
-**Selecting still works**, because the editor drew every one of these shapes itself and drew them
-at their own Z. So `hitTest` compares in *screen* space in art view: the projected anchor of each
-candidate against the cursor's pixel. Points by anchor, polylines by projected segment, rects by
-point-in-projected-diamond. No depth buffer needed, and no inverse.
+The renderer does not have to invert anything. **It knew the answer while it was drawing**, so it
+writes it down: beside each 1:1 tile, a `.pick` sidecar recording, per pixel, which world tile it
+belongs to and the Z a mobile would stand at there.
 
-Nudging with the arrow keys works too — it moves by whole tiles from the keyboard and never asks
-where the cursor is.
+```
+tools/editor/tiles/iso/<Facet>/v<N>/<map|items-<id>>/<floor>/<maxLevel>/<x>/<y>.pick
+```
 
-The fix for the rest is a per-pixel pick map from the renderer, which is the next session's first
-job.
+Written by the **same painter's pass and the same floor filter as the picture**, at the same two
+pixel-write sites (`IsoTileRenderer.Blit` and `.Triangle`, beside the existing `_owner` plane). So a
+click lands on the tile the eye sees. Measured at the smithy:
+
+| tile | stop | picked |
+| --- | --- | --- |
+| the yard paving `1424,1557` | any | `1424,1557 z30 land` |
+| the anvil `1423,1556` | any, snapshot loaded | `1423,1556 z30 item` |
+| inside the smithy `1418,1547` | **All** | `1421,1550 z56 static` — the roof |
+| inside the smithy `1418,1547` | **Ground** | `1418,1547 z30 land` — the floor under it |
+
+Those Zs are `navigation.json`'s own, which `[NavAudit` verified against real map data, and
+`brit-plaza-1` reads back `z20` the same way.
+
+#### One resolution answers every zoom
+
+Pick maps exist **only at the deepest level**. The lookup goes through a *facet-global canvas
+pixel* — `iso.canvasToTile`, the inverse half of `tileFor` — and a canvas pixel is the same number
+whatever the camera is doing. So the 1:1 sidecar answers a click at 1:2 and at 1:8 exactly as well.
+
+That is not a shortcut, it is the only honest option: `Halve` box-averages colour, and world
+coordinates cannot be averaged. Any rule for picking one of a 2×2 is a lie about the other three.
+
+It also means there is **no zoom gate**. The pick is exact for the pixel clicked at any art level;
+what gets coarse as you zoom out is aiming, not correctness, and the readout showing the picked
+`x, y, z` at every zoom is what makes coarse aiming visible rather than guessed.
+
+#### Binary, not a PNG
+
+Getting **exact** bytes back out of a PNG in a browser means a canvas round trip, and that path
+premultiplies alpha and applies colour management. A pick map that is nearly right is a waypoint
+three tiles out. And an RGBA8 pixel could not hold it anyway: world x is 13 bits, y is 12, Z is 8 —
+33 bits, one over.
+
+```
+ 0  "GGPK"  magic          16  size*size  kind   0 none, 1 land, 2 static, 3 world item
+ 4  u8      format             size*size  dx     worldX - baseX
+ 6  u16     size               size*size  dy     worldY - baseY
+ 8  i32,i32 baseX, baseY       size*size  z      standing Z + 128
+```
+
+**Planar, not interleaved**, because each plane is piecewise constant over a drawn sprite — one land
+diamond is one value in all four — and deflate finds those runs only when they are adjacent. The
+whole file is gzipped and served with `Content-Encoding: gzip`, so the browser inflates it natively
+and `fetch().arrayBuffer()` hands over the bytes with no decoder written on either side.
+
+Measured over 24 fresh tiles: **262,160 bytes raw, about 7.8 KB on the wire, 13 ms each** — against
+roughly 100 KB for the PNG beside it. Z fits a byte exactly because UO's Z is an sbyte; `dx`/`dy` fit
+because a tile spans about sixty world tiles per axis at worst, and the writer **refuses** rather
+than wrapping if that is ever untrue.
+
+#### Lazy, and one tile at a time
+
+The sidecar has its own request and is rendered on demand. 1,284 art tiles and 82 MB were already
+cached under `v3`, and both `Prerender` and `ArtRenderer.tile` short-circuit on the PNG existing — so
+emitting it eagerly would have meant bumping the renderer version and throwing all of that away, for
+a file that changes no pixel. A pick map is only wanted for tiles somebody puts the cursor on, and a
+256-pixel sidecar covers about twelve world tiles at 1:1, so crossing into a new one is rare and
+costs 13 ms once, ever.
+
+Neighbours are deliberately **not** prefetched: the renderer is serial and its queue is LIFO, so
+eight speculative tiles would sit in front of the one the cursor is actually on.
+
+A press whose pick has not arrived **waits** for it rather than falling back to the guess. It is
+almost never reached, because the mousemove that positioned the cursor already asked.
+
+#### What is in the Z
+
+`map.GetAverageZ` for land — the shard's own four-corner rule, *called* rather than copied, through
+one accessor (`IsoTileRenderer.StandingZ`) that the `landz` query below shares. For a static or a
+world item it is `Z + CalcHeight` when the thing is a surface or a bridge, and its own `Z`
+otherwise: a wall answers its foot, which is the only honest answer for something nothing stands on.
+
+**One Z for the whole land tile**, not the corner Z interpolated across the quad — which the
+stretched rasteriser could hand over for nothing. The picture is stretched; the record is not. A
+waypoint names a tile, so both ends of the same square have to give the same number.
+
+#### Verifying it
+
+```
+tools\MapExport\bin\Release\MapExport.exe --pick 1424,1557 --items Data\Live\world-items.json
+```
+
+renders the pick tile covering a world tile at each floor stop and prints the decoded `x y z kind`
+at that tile's centre. **This tool has no test project**, so that mode is how the C# half is checked;
+the JavaScript half is `pickmap.test.js` (the format, from fixtures built byte by byte against the
+spec) and one end-to-end test in `bridge.test.js` that runs the whole chain — `tileFor`, the URL, the
+render, the gzip, `pickmap.decode` — and asserts it lands on the tile it aimed at.
+
+### Zones sit on the ground
+
+A zone is a **rectangle of ground** and carries no Z in the schema; none has been added. Where the
+land is under each corner is a question with an answer, so it is asked:
+
+```
+landz <x>,<y> <x>,<y> ...   ->   ok <z> <z> ...      on the renderer's own stdin channel
+GET /api/landz?tiles=x,y;x,y;...
+```
+
+answering the **same** `StandingZ` the pick map records, so a zone corner and a waypoint on the same
+tile cannot disagree. `js/landz.js` caches by tile and coalesces every request made before the next
+animation frame into one query, so a draw pass over eight zones is one round trip.
+
+The drawn quad, its selection handles and `hitTest`'s point-in-diamond all take the same corner Zs —
+which matters more than it looks: they were all on the ground plane before, so the diamond you
+clicked was not the diamond you saw.
+
+Two callers deliberately keep the ground plane: the **stock region overlay** (hundreds of rectangles
+across a facet) and the **coverage grid** (thousands of cells). Sampling those would be a facet's
+worth of queries for two diagnostic overlays.
+
+**Radar placement samples it too**, which is the one step this took outside the art view. Every
+record the editor has ever created was written `z: 0`, because `build.js` flattened it — survivable
+only because `navigation.json`'s Z is advisory and the shard falls back to `map.GetAverageZ` when
+the authored one will not fit. With no renderer it still places, at `z: 0`, and the readout says
+`z?` rather than letting a silent zero look like a measurement.
 
 ### What the art does not show
 
@@ -698,9 +819,9 @@ job.
   then the smithy yard is empty paving, and the art line in the sidebar says so.
 - **A cave passage as a trench.** See **Stretched terrain** — the floor slider filters statics,
   and a mountain is land, so there is no stop at which you can see into a cave mouth.
-- **A zone rect at its true height.** Zones carry no Z in the schema, so they project on the ground
-  plane and sit about 2.7 tiles off where Britain stands. Fixing it needs a land-Z lookup from the
-  renderer, which is the same data the pick map needs.
+- **A live bot's route at its own height.** The dot is drawn at the bot's Z and is clickable there;
+  the trail behind it is a flat `[x, y, …]` list in the snapshot with no Z per step, and adding one
+  would triple the payload. So a bot walks above its own route on a hillside.
 
 ## Coverage-gap overlay
 
@@ -1054,12 +1175,18 @@ destination names rather than an arbitrary fifth of everything. A test pins it.
 
 ## Art tiles are the one route that is not a static file
 
-`GET /tiles/iso/<facet>/v<n>/<floor>/<level>/<x>/<y>.png` is a real handler rather than
+`GET /tiles/iso/<facet>/v<n>/<layer>/<floor>/<level>/<x>/<y>.png` is a real handler rather than
 `serveStatic`, because a miss has to be rendered before it can be answered. Every segment is
-checked against what it is allowed to *be* — three floor names and non-negative integers — and the
-path is then rebuilt from those numbers, so there is nothing to traverse because there is nothing
-to steer. Radar tiles keep falling through to `serveStatic`; they are exported ahead of time and
-there is nothing to render.
+checked against what it is allowed to *be* — three floor names, one of two extensions, and
+non-negative integers — and the path is then rebuilt from those numbers, so there is nothing to
+traverse because there is nothing to steer. Radar tiles keep falling through to `serveStatic`; they
+are exported ahead of time and there is nothing to render.
+
+**`.pick` goes down the same route**, because the sidecar is rendered on a miss exactly as the
+picture is. The extension is a closed set — `png` or `pick`, never a pattern — for the same reason
+every other segment is: a name that has to be cleaned up before it is safe is a name worth refusing.
+It is served with `Content-Encoding: gzip` and `application/octet-stream`, so the browser inflates it
+and `fetch().arrayBuffer()` gets the exact bytes.
 
 ## The request channel
 
