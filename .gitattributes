@@ -38,3 +38,31 @@ Data/Custom/reference/*.json         text eol=lf
 # write, and the ones a flip would actually cost us.
 
 Scripts/Custom/**/*.cs text eol=crlf
+
+# --- tools/ is LF throughout ------------------------------------------------------------------
+#
+# The editor, its bridge and MapExport. Without this, `core.autocrlf` rewrites all 56 of them to
+# CRLF on a fresh checkout - and one of them, `js/compact.js`, is the writer whose byte-for-byte
+# output `project.test.js` compares against the shipped JSON. A checkout would break a test about
+# content by changing something else entirely, which is the exact failure the rules above exist
+# to stop.
+#
+# NOTHING IS RENORMALISED BY THIS. All 56 tracked files are already LF in both the index and the
+# working tree (`git ls-files --eol tools/`), because every one of them was written by a tool
+# rather than checked out. The rule records what they are; it does not change them.
+#
+# NOTE THAT `tools/MapExport/*.cs` BECOMES LF, while `Scripts/Custom/**/*.cs` above stays CRLF.
+# That is deliberate rather than an oversight. `tools/` is a self-contained toolchain that is
+# already LF end to end, and pinning it to what it is beats renormalising eight C# files to match
+# a convention that belongs to the shard's source tree.
+
+tools/**                             text eol=lf
+
+# Insurance rather than a live concern: no binary is tracked under tools/ today (42 .js, 8 .cs,
+# 2 .ps1, and one each of .md, .html, .css, .csproj - the rendered tiles are gitignored). A
+# screenshot fixture added later would be silently corrupted by the rule above, so it is excluded
+# now while the cost is one line.
+
+tools/**/*.png                       -text
+tools/**/*.jpg                       -text
+tools/**/*.ico                       -text

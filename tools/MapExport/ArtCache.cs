@@ -55,9 +55,19 @@ namespace Server.Custom.MapExport
 
         private readonly Dictionary<long, Sprite> _sprites = new Dictionary<long, Sprite>();
 
+        /// <summary>
+        /// Texmaps, in their own table rather than sharing the sprite one.
+        ///
+        /// Key would collide otherwise: it packs id, hue and one land flag, and a texture id lives
+        /// in the same 0..0x3FFF space a land id does with no bit left to tell them apart. A
+        /// second dictionary is also the honest shape - a LandTile carries no hue, so a texture is
+        /// keyed by nothing but its id.
+        /// </summary>
+        private readonly Dictionary<int, Sprite> _textures = new Dictionary<int, Sprite>();
+
         private int _misses;
 
-        public int Count { get { return _sprites.Count; } }
+        public int Count { get { return _sprites.Count + _textures.Count; } }
 
         public int Decoded { get { return _misses; } }
 
@@ -83,6 +93,77 @@ namespace Server.Custom.MapExport
             }
 
             return Get(Key(id, hue < 0 ? 0 : hue, false), id, hue < 0 ? 0 : hue, false);
+        }
+
+        /// <summary>
+        /// The texmap for a land tile's TextureID, or null where there is none.
+        ///
+        /// THE BITMAP IS NOT DISPOSED, and that is the opposite of what Decode does for art. The
+        /// two cache in opposite directions: Art stores into m_Cache only when Files.CacheData is
+        /// TRUE (Ultima/Art.cs:354-361), and we turn that off, so an art bitmap is ours to dispose.
+        /// Textures stores when CacheData is FALSE (Ultima/Textures.cs:182-189) - inverted, almost
+        /// certainly by accident upstream - so the bitmap handed back here belongs to
+        /// Textures.m_Cache and disposing it would poison that id for every later tile. Bounded
+        /// anyway: 4,116 valid entries, about 46 MB, for the life of a --serve process.
+        ///
+        /// Texmap pixels are never transparent - GetTexture ORs in the alpha bit on every one
+        /// (Ultima/Textures.cs:174) - so the quad rasteriser needs no transparency test. Land is
+        /// the bottom layer and everything else is painted over it.
+        /// </summary>
+        public Sprite Texture(int textureId)
+        {
+            if (textureId <= 0)
+            {
+                return null;
+            }
+
+            Sprite sprite;
+
+            if (_textures.TryGetValue(textureId, out sprite))
+            {
+                return sprite;
+            }
+
+            sprite = DecodeTexture(textureId);
+            _textures[textureId] = sprite; // null is cached too, so a missing id is asked once
+            _misses++;
+            return sprite;
+        }
+
+        private static Sprite DecodeTexture(int textureId)
+        {
+            Bitmap bitmap;
+
+            try
+            {
+                if (!Ultima.Textures.TestTexture(textureId))
+                {
+                    return null;
+                }
+
+                bitmap = Ultima.Textures.GetTexture(textureId);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            if (bitmap == null || bitmap.Width <= 0 || bitmap.Height <= 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                // 64x64 or 128x128, decided by the texidx entry's `extra` field. Read, never
+                // assumed: 555 of the 4,116 valid entries are the larger size.
+                return new Sprite(
+                    bitmap.Width, bitmap.Height, ReadPixels(bitmap, bitmap.Width, bitmap.Height));
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         // Ids reach 0xFFFF and hues reach 3000, so the id needs 20 bits of clearance above the hue

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -33,7 +34,7 @@ namespace Server.Custom.MapExport
         /// stretched terrain. It is a path segment in the cache, so a bump orphans the whole old
         /// tree in one directory instead of leaving a cache that is half old and half new.
         /// </summary>
-        public const int Version = 1;
+        public const int Version = 2;
 
         public static string CacheRoot(string tilesRoot, string facet)
         {
@@ -154,6 +155,122 @@ namespace Server.Custom.MapExport
             text.Append('}');
 
             return text.ToString();
+        }
+
+        /// <summary>
+        /// How much of a hillside actually stretched, and what stopped the rest.
+        ///
+        /// "Does this fix the slopes" deserves a number before it deserves an opinion. Only 4,085
+        /// of 16,384 land ids carry a texmap, so a slope built from the other three quarters still
+        /// terraces - faithfully, because that is what the client shows, but the question of
+        /// whether any given hillside is in that quarter is empirical. This answers it, and names
+        /// the untextured ids so the decision about warping the flat art onto a quad later is made
+        /// from a list rather than a hunch.
+        /// </summary>
+        public static void TerrainReport(
+            TileMatrix tiles, int facetWidth, int facetHeight, Rectangle2D bounds, Action<string> log)
+        {
+            int x0 = Math.Max(0, bounds.Start.X);
+            int y0 = Math.Max(0, bounds.Start.Y);
+            int x1 = Math.Min(facetWidth - 1, bounds.End.X);
+            int y1 = Math.Min(facetHeight - 1, bounds.End.Y);
+
+            int total = 0, level = 0, stretched = 0, terraced = 0;
+            var untextured = new Dictionary<int, int>();
+
+            for (int x = x0; x <= x1; x++)
+            {
+                for (int y = y0; y <= y1; y++)
+                {
+                    LandTile land = tiles.GetLandTile(x, y);
+
+                    int zTop = land.Z;
+                    int zRight = EdgeZ(tiles, x + 1, y, facetWidth, facetHeight);
+                    int zLeft = EdgeZ(tiles, x, y + 1, facetWidth, facetHeight);
+                    int zBottom = EdgeZ(tiles, x + 1, y + 1, facetWidth, facetHeight);
+
+                    total++;
+
+                    if (zTop == zRight && zTop == zLeft && zTop == zBottom)
+                    {
+                        level++;
+                        continue;
+                    }
+
+                    int id = land.ID & 0x3FFF;
+                    int textureId = Ultima.TileData.LandTable[id].TextureID;
+
+                    if (textureId != 0 && Ultima.Textures.TestTexture(textureId))
+                    {
+                        stretched++;
+                        continue;
+                    }
+
+                    terraced++;
+
+                    int seen;
+                    untextured.TryGetValue(id, out seen);
+                    untextured[id] = seen + 1;
+                }
+            }
+
+            int sloped = stretched + terraced;
+
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "  {0},{1} {2}x{3}: {4} tile(s), {5} level, {6} sloped",
+                bounds.Start.X, bounds.Start.Y, bounds.Width, bounds.Height, total, level, sloped));
+
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "  of the sloped: {0} stretched ({1:F1}%), {2} terraced for want of a texture ({3:F1}%)",
+                stretched,
+                sloped == 0 ? 0.0 : (stretched * 100.0) / sloped,
+                terraced,
+                sloped == 0 ? 0.0 : (terraced * 100.0) / sloped));
+
+            if (untextured.Count == 0)
+            {
+                log("  every sloped tile here had a texture.");
+                return;
+            }
+
+            var ids = new List<KeyValuePair<int, int>>(untextured);
+            ids.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            log(String.Format(
+                CultureInfo.InvariantCulture,
+                "  {0} untextured land id(s) on slopes here:", ids.Count));
+
+            for (int i = 0; i < ids.Count && i < 12; i++)
+            {
+                log(String.Format(
+                    CultureInfo.InvariantCulture,
+                    "    0x{0:X4}  {1,5} tile(s)  {2}",
+                    ids[i].Key,
+                    ids[i].Value,
+                    Ultima.TileData.LandTable[ids[i].Key].Name));
+            }
+
+            if (ids.Count > 12)
+            {
+                log(String.Format(CultureInfo.InvariantCulture, "    ... and {0} more.", ids.Count - 12));
+            }
+        }
+
+        private static int EdgeZ(TileMatrix tiles, int x, int y, int facetWidth, int facetHeight)
+        {
+            if (x >= facetWidth)
+            {
+                x = facetWidth - 1;
+            }
+
+            if (y >= facetHeight)
+            {
+                y = facetHeight - 1;
+            }
+
+            return tiles.GetLandTile(x, y).Z;
         }
 
         /// <summary>

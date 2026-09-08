@@ -123,6 +123,21 @@ namespace Server.Custom.MapExport
 
         private int[] _order = new int[64];
 
+        // What --terrain-report counts. Cheap enough to keep always, so the report is a mode rather
+        // than a build.
+        private int _stretched;
+        private int _terraced;
+
+        public int StretchedTiles { get { return _stretched; } }
+
+        public int TerracedTiles { get { return _terraced; } }
+
+        public void ResetTerrainCounters()
+        {
+            _stretched = 0;
+            _terraced = 0;
+        }
+
         public IsoTileRenderer(
             TileMatrix tiles,
             ArtCache art,
@@ -221,12 +236,7 @@ namespace Server.Custom.MapExport
             LandTile land = _tiles.GetLandTile(x, y);
             int landZ = land.Z;
 
-            Sprite ground = _art.Land(land.ID);
-
-            if (ground != null)
-            {
-                Blit(target, span, ground, anchorX, IsoTransform.IsoY(x, y, landZ) - isoY0);
-            }
+            PaintLand(target, span, isoX0, isoY0, x, y, land, anchorX);
 
             StaticTile[] column = _tiles.GetStaticTiles(x, y);
 
@@ -248,6 +258,204 @@ namespace Server.Custom.MapExport
                 }
 
                 Blit(target, span, sprite, anchorX, IsoTransform.IsoY(x, y, tile.Z) - isoY0);
+            }
+        }
+
+        /// <summary>
+        /// The land tile: a stretched texture where the client would stretch one, the flat 44x44
+        /// diamond where it would not.
+        ///
+        /// THE RULE IS THE CLIENT'S AND IT IS NOT STATED ANYWHERE IN THIS TREE. Server/TileData.cs
+        /// discards the land texture id outright (":219" and ":259", `bin.ReadInt16(); // skip 2
+        /// bytes -- textureID`), Ultima/Textures.cs has no caller, and Ultima/Map.cs renders radar
+        /// colours and never opens a texmap. So it is cited from ClassicUO's Land.ApplyStretch,
+        /// which refuses to stretch when TexmapsLoader.GetValidRefEntry(TileData.TexID).Length is
+        /// zero and otherwise stretches only when the sampled corners differ:
+        ///
+        ///     stretched  iff  TextureID != 0  and the texmap exists  and the corners differ
+        ///
+        /// BOTH PATHS ARE LOAD-BEARING. Only 4,085 of 16,384 land ids have a texture at all - just
+        /// under a quarter - so a stretched-only renderer would blank three land tiles in four.
+        /// A slope built from untextured ids therefore still terraces, exactly as it does in the
+        /// client, and --terrain-report is the mode that says how much of a given hillside that is.
+        ///
+        /// THE FOUR CORNERS ARE THE SHARD'S OWN. Server/Map.cs:552-592 (GetAverageZ) samples
+        /// (x,y), (x+1,y), (x,y+1) and (x+1,y+1) - the four lattice points around the tile - and
+        /// every movement decision on this shard is made from them. Reading the same four means a
+        /// slope is drawn from the numbers the walker walks, which is the same reason this tool
+        /// reads Server.TileMatrix rather than a private .mul reader. GetAverageZ collapses them to
+        /// a min/avg/top and we want them raw, so the samples are repeated rather than called.
+        /// </summary>
+        private void PaintLand(
+            byte[] target, int span, int isoX0, int isoY0, int x, int y, LandTile land, int anchorX)
+        {
+            Sprite flat = _art.Land(land.ID);
+
+            int zTop = land.Z;
+            int zRight = LandZ(x + 1, y);
+            int zLeft = LandZ(x, y + 1);
+            int zBottom = LandZ(x + 1, y + 1);
+
+            bool level = zTop == zRight && zTop == zLeft && zTop == zBottom;
+
+            if (!level)
+            {
+                // Ultima.TileData, not Server.TileData - the ServUO copy throws the texture id away
+                // at read time. A documented exception to "map data from Server, pixels from
+                // Ultima": a texture id is art metadata, not map data, so Ultima is its home.
+                int textureId = Ultima.TileData.LandTable[land.ID & 0x3FFF].TextureID;
+                Sprite texture = _art.Texture(textureId);
+
+                if (texture != null)
+                {
+                    BlitQuad(target, span, texture,
+                        IsoTransform.IsoCornerX(x, y) - isoX0,
+                        IsoTransform.IsoCornerY(x, y, zTop) - isoY0,
+                        IsoTransform.IsoCornerX(x + 1, y) - isoX0,
+                        IsoTransform.IsoCornerY(x + 1, y, zRight) - isoY0,
+                        IsoTransform.IsoCornerX(x + 1, y + 1) - isoX0,
+                        IsoTransform.IsoCornerY(x + 1, y + 1, zBottom) - isoY0,
+                        IsoTransform.IsoCornerX(x, y + 1) - isoX0,
+                        IsoTransform.IsoCornerY(x, y + 1, zLeft) - isoY0);
+
+                    _stretched++;
+                    return;
+                }
+
+                _terraced++;
+            }
+
+            if (flat != null)
+            {
+                Blit(target, span, flat, anchorX, IsoTransform.IsoY(x, y, zTop) - isoY0);
+            }
+        }
+
+        /// <summary>
+        /// A corner's land Z. Off the facet TileMatrix hands back a zeroed block
+        /// (Server/TileMatrix.cs:335-340), so the east and south edges would read a corner at Z 0
+        /// and shear the last row into the sea. Clamping to the edge tile makes those tiles level
+        /// instead, which is what they look like anyway.
+        /// </summary>
+        private int LandZ(int x, int y)
+        {
+            if (x >= _facetWidth)
+            {
+                x = _facetWidth - 1;
+            }
+
+            if (y >= _facetHeight)
+            {
+                y = _facetHeight - 1;
+            }
+
+            return _tiles.GetLandTile(x, y).Z;
+        }
+
+        /// <summary>
+        /// Maps a texture onto the tile's four projected corners, as two triangles.
+        ///
+        /// Nothing in this repo rasterises anything, so this is written rather than reused. Two
+        /// triangles - (N,E,S) and (N,S,W) - with barycentric interpolation of the texture
+        /// coordinates, which is exact for an affine map and close enough over 44 pixels for the
+        /// bilinear patch the quad really is.
+        ///
+        /// EDGE TESTS ARE INCLUSIVE, which is the detail that decides whether the ground has holes
+        /// in it. Adjacent tiles share corner vertices exactly and at integer pixels, so a
+        /// >= 0 test on all three barycentric coordinates covers every shared edge from both sides:
+        /// some pixels are written twice, which costs nothing because land is opaque and drawn
+        /// first, and none are written zero times, which would be a one-pixel crack running the
+        /// length of every hillside.
+        ///
+        /// The quad can self-intersect where corners differ sharply - a 30z step is 120 pixels, and
+        /// UO cliffs do that. The two triangles then overlap or gap, which is what the client shows
+        /// too; smeared cliffs are a UO look, not a bug being introduced here.
+        ///
+        /// Texture (0,0) goes to the north corner and u grows with world x, so the texture's axes
+        /// follow the world's. If a directional texture - a path, a road - runs visibly the wrong
+        /// way, this assignment is the thing to transpose.
+        /// </summary>
+        private static void BlitQuad(
+            byte[] target, int span, Sprite texture,
+            int nx, int ny, int ex, int ey, int sx, int sy, int wx, int wy)
+        {
+            int size = texture.Width;
+
+            Triangle(target, span, texture,
+                nx, ny, 0, 0,
+                ex, ey, size, 0,
+                sx, sy, size, size);
+
+            Triangle(target, span, texture,
+                nx, ny, 0, 0,
+                sx, sy, size, size,
+                wx, wy, 0, size);
+        }
+
+        private static void Triangle(
+            byte[] target, int span, Sprite texture,
+            int ax, int ay, int au, int av,
+            int bx, int by, int bu, int bv,
+            int cx, int cy, int cu, int cv)
+        {
+            int area = ((bx - ax) * (cy - ay)) - ((by - ay) * (cx - ax));
+
+            if (area == 0)
+            {
+                return; // degenerate: the three corners are collinear, so there is no surface
+            }
+
+            int left = Math.Max(0, Math.Min(ax, Math.Min(bx, cx)));
+            int right = Math.Min(span - 1, Math.Max(ax, Math.Max(bx, cx)));
+            int top = Math.Max(0, Math.Min(ay, Math.Min(by, cy)));
+            int bottom = Math.Min(span - 1, Math.Max(ay, Math.Max(by, cy)));
+
+            if (left > right || top > bottom)
+            {
+                return;
+            }
+
+            // Winding is whatever the corner heights made it, so the sign is normalised rather than
+            // assumed - an inverted quad on a cliff face is a legitimate shape here.
+            int sign = area < 0 ? -1 : 1;
+            int magnitude = area < 0 ? -area : area;
+
+            for (int py = top; py <= bottom; py++)
+            {
+                for (int px = left; px <= right; px++)
+                {
+                    int w0 = sign * (((bx - ax) * (py - ay)) - ((by - ay) * (px - ax)));
+                    int w1 = sign * (((cx - bx) * (py - by)) - ((cy - by) * (px - bx)));
+                    int w2 = sign * (((ax - cx) * (py - cy)) - ((ay - cy) * (px - cx)));
+
+                    if (w0 < 0 || w1 < 0 || w2 < 0)
+                    {
+                        continue;
+                    }
+
+                    // w1 weights a, w2 weights b, w0 weights c - the barycentric coordinate of a
+                    // vertex is the area of the triangle opposite it.
+                    int u = ((w1 * au) + (w2 * bu) + (w0 * cu)) / magnitude;
+                    int v = ((w1 * av) + (w2 * bv) + (w0 * cv)) / magnitude;
+
+                    if (u < 0) { u = 0; }
+                    if (v < 0) { v = 0; }
+                    if (u >= texture.Width) { u = texture.Width - 1; }
+                    if (v >= texture.Height) { v = texture.Height - 1; }
+
+                    ushort pixel = texture.Pixels[(v * texture.Width) + u];
+
+                    int destination = ((py * span) + px) * BytesPerPixel;
+
+                    int r = (pixel >> 10) & 0x1F;
+                    int g = (pixel >> 5) & 0x1F;
+                    int b = pixel & 0x1F;
+
+                    target[destination] = (byte)((r << 3) | (r >> 2));
+                    target[destination + 1] = (byte)((g << 3) | (g >> 2));
+                    target[destination + 2] = (byte)((b << 3) | (b >> 2));
+                    target[destination + 3] = 255;
+                }
             }
         }
 

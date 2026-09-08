@@ -204,20 +204,49 @@ test('a destination is named for its town and what it is, not serially', () => {
 
 // --- the committed reference file ------------------------------------------------------------
 
-test('no reference id collides with one already in navigation.json', () => {
+// What Adopt stamps on every record it copies out of the reference and into navigation.json:
+// `NavAdopt.SourceTag` (Scripts/Custom/Core/Navigation/NavAdopt.cs:49), landing in the optional
+// `source` field of NavRecords.cs:654. It is the only thing that distinguishes a road we adopted
+// from a road somebody walked and marked by hand.
+const ADOPTED_SOURCE = 'uo-offline';
+
+
+test('no reference id collides with an AUTHORED record in navigation.json', () => {
     // The guard that makes "Adopt never overwrites an authored record" structural rather than a
     // check somebody has to remember to write.
+    //
+    // ADOPTED RECORDS ARE NOT AUTHORED ONES, and telling them apart is the whole of this test.
+    // When it was written nothing had been adopted, so "already in navigation.json" and "authored
+    // by hand" were the same set of ids. The Trinsic adopt separated them: 239 reference ids are
+    // now also in navigation.json, every one of them carrying `source: 'uo-offline'`, because
+    // Adopt is what put them there. Re-adopting one is an idempotent no-op and the editor joins
+    // onto it rather than replacing it - so a collision with an adopted record is the system
+    // working, and the test failed for a year of sessions saying otherwise.
+    //
+    // A collision with a record somebody typed still fails, which is the case worth guarding.
     const doc = JSON.parse(fs.readFileSync(REFERENCE, 'utf8'));
     const ours = JSON.parse(fs.readFileSync(
         path.join(__dirname, '..', '..', 'Data', 'Custom', 'navigation.json'), 'utf8'));
 
     const authored = new Set();
+    let adopted = 0;
 
     for (const key of ['waypoints', 'destinations', 'zones']) {
         for (const record of ours[key]) {
+            if (record.source === ADOPTED_SOURCE) {
+                adopted++;
+                continue;
+            }
+
             authored.add(record.id);
         }
     }
+
+    // Neither half may be empty, or this passes without testing anything. An authored set of zero
+    // would make every collision invisible; an adopted count of zero would mean the marker stopped
+    // being written and the exclusion above had quietly become a no-op.
+    assert.ok(authored.size > 0, 'no hand-authored records left to guard');
+    assert.ok(adopted > 0, `nothing carries source: '${ADOPTED_SOURCE}' any more`);
 
     const clash = [];
 
@@ -230,6 +259,30 @@ test('no reference id collides with one already in navigation.json', () => {
     }
 
     assert.deepStrictEqual(clash, [], 'adopting one of these would overwrite authored data');
+});
+
+test('the collision guard still catches a hand-authored id', () => {
+    // The exclusion above is a hole by construction, so this is the proof it is only as wide as it
+    // was meant to be: take a real reference id, present it as a record with no `source`, and the
+    // same comparison has to reject it.
+    const doc = JSON.parse(fs.readFileSync(REFERENCE, 'utf8'));
+    const borrowed = doc.waypoints[0].id;
+
+    const ours = { waypoints: [{ id: borrowed }], destinations: [], zones: [] };
+
+    const authored = new Set();
+
+    for (const key of ['waypoints', 'destinations', 'zones']) {
+        for (const record of ours[key]) {
+            if (record.source === ADOPTED_SOURCE) {
+                continue;
+            }
+
+            authored.add(record.id);
+        }
+    }
+
+    assert.ok(authored.has(borrowed), 'a record with no source must count as authored');
 });
 
 test('the shipped reference file is well formed and internally consistent', () => {

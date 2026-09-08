@@ -97,6 +97,65 @@ test('at z=0 the projection is the linear map isoMatrix describes', () => {
     assert.ok(Math.abs((alongY[1] - origin[1]) - d) < 1e-9, 'dsy/dy');
 });
 
+// --- stretched land -------------------------------------------------------------------------------
+
+test("a level tile's four corners are exactly the flat art's four vertices", () => {
+    // THE INVARIANT THE WHOLE FEATURE RESTS ON. Stretching may only move ground that is genuinely
+    // sloped; a flat tile has to land on the same pixels it landed on before there was a quad at
+    // all. If this drifts, every level tile in the world moves and nobody would guess why.
+    const x = 1424;
+    const y = 1557;
+    const z = 30;
+
+    const { ix, iy } = iso.worldToIso(x, y, z);   // where the 44x44 art's bottom centre goes
+    const quad = iso.landQuad(x, y, z, z, z, z);
+
+    assert.deepStrictEqual(quad.north, { ix: ix, iy: iy - 44 });
+    assert.deepStrictEqual(quad.east, { ix: ix + 22, iy: iy - 22 });
+    assert.deepStrictEqual(quad.south, { ix: ix, iy: iy });
+    assert.deepStrictEqual(quad.west, { ix: ix - 22, iy: iy - 22 });
+});
+
+test('neighbouring tiles share their corner vertices exactly', () => {
+    // Why the quads tile watertight and the rasteriser needs no seam filling: the south corner of
+    // one tile IS the north corner of the tile south-east of it, at the same integer pixel. Held at
+    // a shared Z, because two tiles only agree about a corner they both own.
+    const z = 12;
+    const here = iso.landQuad(100, 200, z, z, z, z);
+    const southEast = iso.landQuad(101, 201, z, z, z, z);
+
+    assert.deepStrictEqual(here.south, southEast.north);
+
+    const east = iso.landQuad(101, 200, z, z, z, z);
+    assert.deepStrictEqual(here.east, east.north);
+});
+
+test('a corner rises four pixels per Z, and only vertically', () => {
+    const flat = iso.isoCorner(500, 400, 0);
+    const raised = iso.isoCorner(500, 400, 25);
+
+    assert.strictEqual(raised.ix, flat.ix, 'Z must not move a corner sideways');
+    assert.strictEqual(flat.iy - raised.iy, 25 * iso.Z_STEP);
+});
+
+test('a sloped tile is a quad with three distinct x values and four distinct y values', () => {
+    // The shape the rasteriser has to cope with. x is fixed by the lattice - only three columns
+    // exist - so every distortion a cliff produces is vertical, which is why two triangles are
+    // enough and why a 30z step (120 pixels) can invert the quad rather than merely skew it.
+    const quad = iso.landQuad(1449, 1521, 39, 35, 20, 30);
+
+    const xs = new Set([quad.north.ix, quad.east.ix, quad.south.ix, quad.west.ix]);
+    const ys = new Set([quad.north.iy, quad.east.iy, quad.south.iy, quad.west.iy]);
+
+    assert.strictEqual(xs.size, 3);
+    assert.strictEqual(ys.size, 4);
+
+    // north and south share a column; east and west are 22 either side of it.
+    assert.strictEqual(quad.north.ix, quad.south.ix);
+    assert.strictEqual(quad.east.ix - quad.north.ix, iso.HALF_WIDTH);
+    assert.strictEqual(quad.north.ix - quad.west.ix, iso.HALF_WIDTH);
+});
+
 // --- the grid -------------------------------------------------------------------------------------
 
 test('the whole facet lands inside the canvas, sprite bleed included', () => {

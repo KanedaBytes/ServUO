@@ -80,6 +80,38 @@ namespace Server.Custom.MapExport
         }
 
         /// <summary>
+        /// A GRID CORNER, as opposed to a tile. Land is stretched between its four corner heights,
+        /// and a corner is a point on the lattice between tiles rather than a tile of its own.
+        ///
+        /// It is the anchor formula applied to the corner's own cell and lifted one tile:
+        ///
+        ///     isoCorner(cx, cy, cz) = ( (cx-cy)*22, (cx+cy)*22 - 4*cz - 44 )
+        ///
+        /// The lift is what reconciles the two conventions. IsoY is where a SPRITE hangs from -
+        /// its bottom centre, which for a 44x44 land tile is the diamond's south vertex - while a
+        /// corner is a vertex in its own right. Subtracting the land art's height turns one into
+        /// the other, and the payoff is the invariant this whole feature rests on:
+        ///
+        ///     WHEN THE FOUR CORNER Zs ARE EQUAL, THE FOUR CORNERS ARE EXACTLY THE FOUR VERTICES
+        ///     OF THE FLAT 44x44 ART - north (ix, iy-44), east (ix+22, iy-22), south (ix, iy),
+        ///     west (ix-22, iy-22).
+        ///
+        /// So a flat tile occupies the same pixels stretched or not, and this change can only move
+        /// ground that is genuinely sloped. iso.test.js and the JS copy in js/iso.js assert it.
+        /// Adjacent tiles share corner vertices exactly, at integer pixels, so the quads tile
+        /// watertight with no seam to fill.
+        /// </summary>
+        public static int IsoCornerX(int cornerX, int cornerY)
+        {
+            return (cornerX - cornerY) * HalfWidth;
+        }
+
+        public static int IsoCornerY(int cornerX, int cornerY, int cornerZ)
+        {
+            return ((cornerX + cornerY) * HalfHeight) - (cornerZ * ZStep) - LandArtSize;
+        }
+
+        /// <summary>
         /// The iso X of canvas column 0. Negative, because a tile at (0, height-1) projects to a
         /// large negative iso X and the canvas has to start left of it.
         /// </summary>

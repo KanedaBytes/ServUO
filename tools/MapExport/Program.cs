@@ -59,6 +59,7 @@ namespace Server.Custom.MapExport
             int tileSize = DefaultTileSize;
             bool serve = false;
             string prerender = null;
+            string terrainReport = null;
             int floorGround = FloorRules.DefaultGround;
             int floorFirst = FloorRules.DefaultFirst;
 
@@ -71,6 +72,9 @@ namespace Server.Custom.MapExport
                         break;
                     case "--prerender":
                         prerender = Require(args, ++i, "--prerender");
+                        break;
+                    case "--terrain-report":
+                        terrainReport = Require(args, ++i, "--terrain-report");
                         break;
                     case "--floor-ground":
                         floorGround = Int32.Parse(Require(args, ++i, "--floor-ground"));
@@ -140,7 +144,7 @@ namespace Server.Custom.MapExport
             // and nothing else in the process can accidentally depend on it.
             var map = new Map(mapId, index, fileIndex, width, height, 0, name, MapRules.FeluccaRules);
 
-            if (serve || prerender != null)
+            if (serve || prerender != null || terrainReport != null)
             {
                 // stdout is the protocol channel in --serve, so every human-readable line goes to
                 // stderr. Doing the same for --prerender keeps one habit rather than two.
@@ -165,6 +169,13 @@ namespace Server.Custom.MapExport
                     IsoTransform.CanvasHeight(width, height),
                     renderer.MaxLevel));
                 log("");
+
+                if (terrainReport != null)
+                {
+                    TileServer.TerrainReport(
+                        map.Tiles, width, height, ParseBounds(terrainReport), log);
+                    return 0;
+                }
 
                 TileServer.Prerender(renderer, output, name, width, height, ParseBounds(prerender), log);
                 return 0;
@@ -366,6 +377,7 @@ namespace Server.Custom.MapExport
             Console.WriteLine();
             Console.WriteLine("  --serve              Read tile requests on stdin; the bridge's child.");
             Console.WriteLine("  --prerender x,y,w,h  Warm the cache over a world rectangle.");
+            Console.WriteLine("  --terrain-report x,y,w,h  How much of a box stretched, and what did not.");
             Console.WriteLine("  --floor-ground <n>   Ground cutoff above the land (default 20).");
             Console.WriteLine("  --floor-first <n>    First-floor cutoff above the land (default 40).");
             Console.WriteLine();

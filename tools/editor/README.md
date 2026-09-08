@@ -448,6 +448,86 @@ likely to want an eyeball tune and a rebuild is a poor way to try a number. Roof
 outright below the top stop: the height cutoff alone would keep a one-storey roof at `landZ + 20`
 on the First floor stop, which is exactly the thing the slider is being moved to get rid of.
 
+### Stretched terrain
+
+A land tile is not a flat diamond. The client stretches it between the heights of its four corners
+and paints a texture from `texmaps.mul` across the result; v1 of this renderer drew the flat 44×44
+art at the tile's own Z, so a hillside came out as a staircase of diamonds **with white gaps
+between them** — not merely terraced but holed, because diamonds at different Z do not tile.
+
+```
+stretched  iff  LandData.TextureID != 0
+           and  Ultima.Textures.TestTexture(TextureID)
+           and  the four corner Zs are not all equal
+otherwise  the flat 44x44 art at the tile's own Z, exactly as before
+```
+
+**That rule is the client's and it is stated nowhere in this tree**, so it is cited rather than
+inferred: ClassicUO's `Land.ApplyStretch`, which refuses to stretch when
+`TexmapsLoader.GetValidRefEntry(TileData.TexID).Length <= 0`. Everything here points the other way —
+`Server/TileData.cs:219` and `:259` *discard* the land texture id (`bin.ReadInt16(); // skip 2
+bytes -- textureID`), `Ultima/Textures.cs` had no caller at all, and `Ultima/Map.cs` renders radar
+colours and never opens a texmap.
+
+**Both paths are load-bearing: only 4,085 of 16,384 land ids have a texture (24.9%).** A
+stretched-only renderer would blank three land tiles in four. The texture id has to come from
+`Ultima.TileData.LandTable[id & 0x3FFF].TextureID` — a deliberate exception to this tool's "map data
+from Server, pixels from Ultima" rule, because a texture id is art metadata rather than map data.
+
+**The four corners are the shard's own.** `Server/Map.cs:552-592` (`GetAverageZ`) samples `(x,y)`,
+`(x+1,y)`, `(x,y+1)` and `(x+1,y+1)` — the lattice points around the tile — and every movement
+decision on this shard is made from them. Reading the same four means a slope is drawn from the
+numbers the walker walks, for the same reason the tool reads `Server.TileMatrix` rather than a
+private `.mul` reader.
+
+#### The invariant that makes it safe
+
+A grid corner is the anchor formula applied to the corner's own cell, lifted one land tile:
+
+```
+isoCorner(cx, cy, cz) = ( (cx-cy)*22, (cx+cy)*22 - 4*cz - 44 )
+```
+
+**When the four corner Zs are equal, those four points are exactly the four vertices of the flat
+44×44 art** — north `(ix, iy-44)`, east `(ix+22, iy-22)`, south `(ix, iy)`, west `(ix-22, iy-22)`.
+So a level tile occupies the same pixels stretched or not, and this change can only move ground that
+is genuinely sloped. `iso.test.js` asserts it, along with the fact that neighbouring tiles share
+corner vertices exactly at integer pixels — which is why the quads tile watertight and the
+rasteriser needs no seam filling.
+
+The rasteriser is written from scratch; there was nothing in the repo to reuse. Two triangles,
+barycentric, nearest sampling, and **inclusive edge tests** — a `>= 0` on all three coordinates
+covers every shared edge from both sides, so some pixels are written twice (free: land is opaque and
+first) and none are written zero times, which would be a one-pixel crack down every hillside.
+
+#### How much of a hillside actually stretches
+
+`--terrain-report x,y,w,h`, because "does this fix the slopes" deserves a number. Measured:
+
+| site | box | sloped | stretched | terraced |
+| --- | --- | --- | --- | --- |
+| Britain Graveyard | `1333,1441,84,82` | 1,931 | **100%** | 0 |
+| Behind LBCastle | `1480,1390,90,120` | 1,458 | **99.4%** | 9, all `water` (`0x00A8`) |
+| `brit-mine-north` outcrop | `1438,1503,24,36` | 370 | **100%** | 0 |
+| Cave entrance `1263,1251` | `1243,1231,40,40` | 1,421 | **100%** | 0 |
+
+So the 75%-untextured figure does not bite in practice: the ids without texmaps are things like
+animated water, which never slopes meaningfully. Warping the flat art onto a quad as a fallback —
+the obvious next idea — has nothing to fix at these four sites, and the report is the tool for
+checking that before assuming it elsewhere.
+
+#### The cave is not a trench, and stretching was never going to make it one
+
+`1263,1251` renders as a solid stretched mountain with a dark cave mouth against it. The passage
+does not read as a trench, and the four tiles around it are **byte-identical at the All and Ground
+stops** — because the floor slider filters *statics*, and a mountain is *land*. Land is always
+drawn, at every stop, so there is no setting at which you can see into it.
+
+Making a cave legible needs the cutoff to apply to land as well: drop land above the floor's height
+and draw what is underneath. That is a different feature from the floor slider — it is a section
+through the world rather than a storey of a building — and it is worth doing on its own terms rather
+than bolting onto this one.
+
 ### The cache key carries the renderer version
 
 ```
@@ -455,8 +535,9 @@ tools/editor/tiles/iso/<Facet>/v<N>/<floor>/<level>/<x>/<y>.png
 ```
 
 `v<N>` is `TileServer.Version`, handed to the bridge in the handshake and to the editor by
-`/api/artinfo`. Bumping it — stretched terrain, a draw-order fix, a hue fix — orphans the whole old
-tree in one directory instead of leaving a cache that is half old and half new. `/tools/editor/tiles`
+`/api/artinfo`. Bumping it — a draw-order fix, a hue fix — orphans the whole old tree in one
+directory instead of leaving a cache that is half old and half new. **Stretched terrain took it to
+v2**, so a `v1` tree left on disk is dead and can be deleted. `/tools/editor/tiles`
 is already gitignored, which matters more here than for radar: **rendered client art is licensed
 and must never be committed.**
 
@@ -512,10 +593,8 @@ job.
   are `SmallForgeAddon` and `AnvilEastAddon` from `Data/Decoration/Britannia/britain.cfg`, so the
   smithy yard draws as empty paving with the nav markers on it. Live entities still draw, from
   `entities.json`, as they do in radar.
-- **Sloped terrain.** The client stretches each land tile across its four corner Zs using
-  `texmaps.mul`; we draw the flat 44×44 diamond at the tile's own Z, so hills terrace rather than
-  slope. Britain's town is level enough not to care; the mountain west of it is visibly stepped.
-  That is the named next step for the art view, and it is a renderer-version bump when it lands.
+- **A cave passage as a trench.** See **Stretched terrain** — the floor slider filters statics,
+  and a mountain is land, so there is no stop at which you can see into a cave mouth.
 - **A zone rect at its true height.** Zones carry no Z in the schema, so they project on the ground
   plane and sit about 2.7 tiles off where Britain stands. Fixing it needs a land-Z lookup from the
   renderer, which is the same data the pick map needs.

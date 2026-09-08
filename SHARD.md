@@ -435,11 +435,18 @@ but placing and dragging need the inverse projection and the inverse is not a fu
 pixel names a world tile only once you assume a Z, which is 2.7 tiles of error where Britain stands.
 A per-pixel pick map from the renderer is the fix.
 
-**The named next step for the art view is stretched terrain.** The client stretches each land tile
-across its four corner Zs using `texmaps.mul`; we draw the flat 44x44 diamond at the tile's own Z,
-so hills terrace rather than slope. Britain's town is level enough not to notice; the mountain west
-of it is visibly stepped. The renderer version is a path segment in the cache, so landing it
-orphans the flat tiles rather than leaving a mixed cache.
+**Terrain is stretched (v2).** Each land tile is drawn across the heights of its four corners with
+a `texmaps.mul` texture, where the client would use one, and as the flat 44x44 art where it would
+not - 75% of land ids have no texmap, so both paths are needed. The corners come from the shard's
+own rule, `Server.Map.GetAverageZ`, so a slope is drawn from the four numbers the walker walks. At
+the graveyard, the castle, the north outcrop and the cave entrance, 99.4-100% of sloped tiles
+stretch; the handful that do not are animated water. `MapExport --terrain-report x,y,w,h` reports
+that for any box.
+
+**A cave passage still does not read as a trench.** The floor slider filters statics, and a mountain
+is land, so `1263,1251` is byte-identical at every stop. Seeing into a cave needs the cutoff to
+apply to land too - a section through the world rather than a storey of a building - which is its
+own feature.
 
 Also absent, and for a different reason: **anything the shard places at runtime**, `[Decorate`
 included. The forge and anvil at `brit-forge` are decoration addons, so the smithy yard draws as

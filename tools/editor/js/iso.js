@@ -68,6 +68,46 @@ export function isoToWorld(ix, iy, z = 0) {
     };
 }
 
+/**
+ * A GRID CORNER, as opposed to a tile. Land is stretched between its four corner heights, and a
+ * corner is a point on the lattice between tiles rather than a tile of its own.
+ *
+ * It is the anchor formula applied to the corner's own cell and lifted one land tile. The lift is
+ * what reconciles the two conventions: `worldToIso` gives the point a SPRITE hangs from - its
+ * bottom centre, which for a 44x44 land tile is the diamond's south vertex - while a corner is a
+ * vertex in its own right.
+ *
+ * The payoff is the invariant the whole stretched-terrain feature rests on, and the one iso.test.js
+ * asserts: WHEN THE FOUR CORNER Zs ARE EQUAL, THE FOUR CORNERS ARE EXACTLY THE FOUR VERTICES OF THE
+ * FLAT 44x44 ART. So a flat tile occupies the same pixels stretched or not, and stretching can only
+ * move ground that is genuinely sloped.
+ *
+ * The renderer is the only consumer today, in C# - tools/MapExport/IsoTransform.cs IsoCornerX/Y.
+ * This copy exists for the same reason every constant in this file does: so the two can be pinned
+ * together, because a projection that exists twice and drifts once is the failure that reads as bad
+ * nav data rather than a bad projection.
+ */
+export function isoCorner(cornerX, cornerY, cornerZ = 0) {
+    return {
+        ix: (cornerX - cornerY) * HALF_WIDTH,
+        iy: (cornerX + cornerY) * HALF_HEIGHT - cornerZ * Z_STEP - LAND_ART_SIZE
+    };
+}
+
+/**
+ * A land tile's four projected corners, north/east/south/west - the quad the texture is stretched
+ * onto. The Z arguments are the land heights at (x,y), (x+1,y), (x+1,y+1) and (x,y+1), which is the
+ * order Server/Map.cs:552-592 samples them in.
+ */
+export function landQuad(x, y, zTop, zRight, zBottom, zLeft) {
+    return {
+        north: isoCorner(x, y, zTop),
+        east: isoCorner(x + 1, y, zRight),
+        south: isoCorner(x + 1, y + 1, zBottom),
+        west: isoCorner(x, y + 1, zLeft)
+    };
+}
+
 /** Where a w x h sprite's top-left goes, given its anchor. Ultima/Multis.cs:505-507. */
 export function spriteTopLeft(ix, iy, width, height) {
     return { x: ix - Math.floor(width / 2), y: iy - height };
