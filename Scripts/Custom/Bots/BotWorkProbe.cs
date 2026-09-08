@@ -134,7 +134,15 @@ namespace Server.Custom
                 _walkIn = null;
 
                 NavDestination site = FirstUsable(map, new BotStation("mine", null));
-                NavDestination forge = FirstUsable(map, BotClassHelper.StationFor(BotClass.Smith));
+
+                // The forge NEAREST THE MINE BY ROAD, not the first one in the file. With one
+                // forge on the graph the two were the same thing; with four, file order chose a
+                // bench and the miner's roll chose another, and the probe asserted on whichever
+                // the dice preferred. The smith goes where a laden miner will most want to go,
+                // and the assertion below is that the ore reached THAT smith.
+                NavDestination forge = site == null
+                    ? null
+                    : NearestByRoad(site, BotWorkSites.Available(map, BotClassHelper.StationFor(BotClass.Smith)));
 
                 if (site == null || forge == null)
                 {
@@ -358,8 +366,8 @@ namespace Server.Custom
             return _clockedInZone
                 && BotWorkSites.Mined > minedBefore
                 && !miner.HaulPending
-                && BotWorkSites.Deliveries > 0
                 && crafter != null
+                && crafter.Received > 0
                 && crafter.Made > madeBefore
                 // The walking miner is part of the bar, not a bonus. Without it here the probe
                 // exits the moment the face-spawned miner finishes its cycle - about two minutes
@@ -417,6 +425,44 @@ namespace Server.Custom
             List<NavDestination> usable = BotWorkSites.Available(map, station);
 
             return usable.Count == 0 ? null : usable[0];
+        }
+
+        /// <summary>
+        /// The candidate with the shortest road from a site, measured with the router the bot
+        /// will itself use - the same reason BotDestinations.DistanceFactor is measured along
+        /// the road. Falls back to the first candidate when nothing routes, so a broken graph
+        /// still runs the probe and fails it for the real reason.
+        /// </summary>
+        private static NavDestination NearestByRoad(NavDestination from, List<NavDestination> candidates)
+        {
+            NavDestination best = null;
+            int bestTiles = Int32.MaxValue;
+
+            foreach (NavDestination candidate in candidates)
+            {
+                NavRoute route;
+                string error;
+
+                if (!Nav.TryRoute(from.Id, candidate.Id, out route, out error) || route == null)
+                {
+                    continue;
+                }
+
+                int tiles = BotMovement.RouteTiles(route);
+
+                if (tiles < bestTiles)
+                {
+                    bestTiles = tiles;
+                    best = candidate;
+                }
+            }
+
+            if (best == null && candidates.Count > 0)
+            {
+                best = candidates[0];
+            }
+
+            return best;
         }
 
         private static void Report(List<PlayerBot> bots, int madeBefore, int minedBefore)
@@ -512,18 +558,6 @@ namespace Server.Custom
                     notes.Add("clocked in once, as a shift should");
                 }
 
-                if (BotWorkSites.Deliveries == 0)
-                {
-                    problems.Add("no load was delivered");
-                }
-                else
-                {
-                    notes.Add(String.Format(
-                        "{0} load(s), {1} unit(s) delivered",
-                        BotWorkSites.Deliveries,
-                        BotWorkSites.Delivered));
-                }
-
                 if (smith == null || smith.Deleted)
                 {
                     problems.Add("the smith did not survive the window");
@@ -538,6 +572,30 @@ namespace Server.Custom
                     }
                     else
                     {
+                        // THE HAND-OVER IS TO THIS SMITH, not to anybody. "A delivery happened"
+                        // was true of a load banked at an empty Trinsic forge, and with three
+                        // unstaffed forges on the graph that is where one haul in three went.
+                        // The rule under test is that a laden miner goes to the bench with
+                        // somebody at it; the proof is that this bench's stock rose.
+                        if (crafter.Received <= 0)
+                        {
+                            problems.Add(BotWorkSites.Deliveries == 0
+                                ? "no load was delivered anywhere"
+                                : String.Format(
+                                    "the ore never reached the smith at '{0}' - {1} load(s) went "
+                                    + "somewhere else (an empty bench or the bank)",
+                                    crafter.DestinationId,
+                                    BotWorkSites.Deliveries));
+                        }
+                        else
+                        {
+                            notes.Add(String.Format(
+                                "the smith at '{0}' took {1} unit(s) over {2} hand-over(s)",
+                                crafter.DestinationId,
+                                crafter.Received,
+                                crafter.Deliveries));
+                        }
+
                         if (crafter.Blocked != null)
                         {
                             problems.Add("the smith could not work: " + crafter.Blocked);

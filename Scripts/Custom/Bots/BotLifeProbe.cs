@@ -21,8 +21,38 @@ namespace Server.Custom
 
         public const int BotCount = 12;
 
-        /// <summary>How long the probe watches before reporting.</summary>
-        public static readonly TimeSpan Window = TimeSpan.FromSeconds(180.0);
+        /// <summary>
+        /// How long the probe watches before reporting - DERIVED FROM THE GRAPH at the start of
+        /// each run, never a constant.
+        ///
+        /// It was 180 seconds, which held while Britain was the whole graph. The Britain-Trinsic
+        /// adopt put a destination 1,100 tiles down the road on the roll, and a bot that drew it
+        /// on its first pick was still walking when the window closed - reported as "never
+        /// changed behaviour" for doing exactly what a Traveler does. The bound is now the
+        /// longest route a probe bot could be sent on, at the pace the engine assigns that route
+        /// on foot, plus the most it can linger, the longest phase clamp, and two roller passes.
+        /// See DeriveWindow; the result line names the window and the route that set it.
+        /// </summary>
+        public static TimeSpan Window
+        {
+            get { return _window; }
+        }
+
+        private static TimeSpan _window = TimeSpan.FromSeconds(180.0);
+
+        /// <summary>Which route set the window, for the result line.</summary>
+        private static string _windowNote = "not derived";
+
+        /// <summary>
+        /// The phase clamp installed for a run, seconds. The longest phase a probe bot can roll
+        /// is the ceiling; it is part of the window bound, so it lives here rather than inline.
+        /// </summary>
+        public const int PhaseClampMinSeconds = 15;
+
+        public const int PhaseClampMaxSeconds = 30;
+
+        /// <summary>The roller's cadence for a run.</summary>
+        public static readonly TimeSpan PassInterval = TimeSpan.FromSeconds(5.0);
 
         /// <summary>
         /// What share of the fleet must visibly change behaviour for the run to pass.
@@ -111,8 +141,8 @@ namespace Server.Custom
                 {
                     accelerated.Phases[name] = new BotPhaseClamp
                     {
-                        MinSeconds = 15,
-                        MaxSeconds = 30
+                        MinSeconds = PhaseClampMinSeconds,
+                        MaxSeconds = PhaseClampMaxSeconds
                     };
                 }
 
@@ -125,15 +155,34 @@ namespace Server.Custom
                 // Five, not ten. The hand-switch assertion needs at least HandSwitchPasses passes
                 // to fall inside the shortest phase clamp above, and at ten seconds it did not.
                 // Asking the roller more often also helps the churn bar it was already tuned for.
-                BotLifecycle.IntervalOverride = TimeSpan.FromSeconds(5.0);
+                BotLifecycle.IntervalOverride = PassInterval;
 
                 BotLifecycle.ResetTransitions();
+
+                // The window, from the graph as it is today. Before the bots exist, so that a
+                // derivation that throws leaves nothing to clean up.
+                _window = DeriveWindow(map, location, out _windowNote);
+
+                // Every probe bot is a RESIDENT of the town it is spawned in. The constructor
+                // rolls a home the way upstream's does, weighted by town size, and on a graph
+                // with two towns about half the fleet would be Trinsic residents standing in
+                // Britain with the bias pulling them home. That is correct for a shard and wrong
+                // for this probe, which is about the roller: a bot that spends the window walking
+                // to Trinsic tells us nothing about whether phases expire. Pinned, not because
+                // the roll is wrong, but because it is not what is under test.
+                string home = BotHomeTowns.Nearest(location, map);
 
                 for (int i = 0; i < BotCount; i++)
                 {
                     var bot = new PlayerBot();
 
                     bots.Add(bot);
+
+                    if (home != null)
+                    {
+                        bot.HomeTown = home;
+                    }
+
                     bot.MoveToWorld(location, map);
 
                     bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
@@ -169,9 +218,11 @@ namespace Server.Custom
                 }
 
                 Log.Info(
-                    "Life probe: {0} bot(s) on accelerated phases ({1:0}s window), {2} hand-switched to Idle.",
+                    "Life probe: {0} bot(s) on accelerated phases, {1} window ({2}), home {3}, {4} hand-switched to Idle.",
                     bots.Count,
-                    Window.TotalSeconds,
+                    BotProbeClock.Format(Window),
+                    _windowNote,
+                    home ?? "none",
                     _switched == null ? "nobody" : _switched.Name);
 
                 List<PlayerBot> captured = bots;
@@ -389,7 +440,7 @@ namespace Server.Custom
                         // idle. Brain changes fixed that and are still the right measure for a bot
                         // living in town; they are the wrong one for a bot on a long errand, because
                         // the errand IS the behaviour.
-                        string errand = LongErrand(traveler);
+                        string errand = LongErrand(bot, traveler);
 
                         if (errand != null)
                         {
@@ -434,10 +485,15 @@ namespace Server.Custom
 
                 string clock = _clock == null ? "?" : _clock.Describe();
 
+                // The window and what set it are in every result line, pass or fail. A future
+                // adopt that puts a longer road on the graph lengthens this probe, and the place
+                // to notice that is [CoreSmoke, not a smoke chain that got slower for no reason
+                // anybody could name.
                 string summary = String.Format(
-                    "in {0} - {1} bot(s), {2} brain change(s), {3} lifecycle transition(s) [{4}], "
-                    + "{5} destination(s) below floor",
+                    "in {0} (window set by {1}) - {2} bot(s), {3} brain change(s), "
+                    + "{4} lifecycle transition(s) [{5}], {6} destination(s) below floor",
                     clock,
+                    _windowNote,
                     alive,
                     changes,
                     BotLifecycle.TotalTransitions,
@@ -533,14 +589,22 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// The name of the work site this Traveler is walking to, or null.
+        /// The name of the far-off place this Traveler is walking to, or null.
         ///
-        /// Deliberately narrow: only a WORK destination counts, not any long walk. "Still walking"
-        /// is the normal steady state for a Traveler and excusing it wholesale would blunt the
-        /// probe to nothing - the walk probe learned that one already. Work sites are the specific
-        /// thing this shard added that takes longer to reach than the probe runs for.
+        /// Deliberately narrow: "still walking" is the normal steady state for a Traveler and
+        /// excusing it wholesale would blunt the probe to nothing - the walk probe learned that
+        /// one already. Two kinds of trip count, and both are ones this shard's graph makes
+        /// longer than a phase:
+        ///
+        ///   - a WORK site, which is out in the wilderness by design;
+        ///   - a destination in ANOTHER TOWN, which is the second-town case itself. The window is
+        ///     sized so a bot that draws one on its first pick can finish it, but a bot that
+        ///     draws one late in the run cannot, and it has done nothing wrong.
+        ///
+        /// The probe bots are residents of the town they spawn in (see Run), so "another town"
+        /// is unambiguous here.
         /// </summary>
-        private static string LongErrand(TravelerBehavior traveler)
+        private static string LongErrand(PlayerBot bot, TravelerBehavior traveler)
         {
             if (traveler == null || !traveler.IsTravelling)
             {
@@ -551,12 +615,107 @@ namespace Server.Custom
                 ? null
                 : Nav.Destination(traveler.DestinationId);
 
-            if (destination == null || !BotWorkSites.IsWorkType(destination.Type))
+            if (destination == null)
             {
                 return null;
             }
 
-            return destination.Name;
+            if (BotWorkSites.IsWorkType(destination.Type))
+            {
+                return destination.Name;
+            }
+
+            string town = BotHomeTowns.TownOf(destination);
+
+            if (town != null && bot.HomeTown != null && !Insensitive.Equals(town, bot.HomeTown))
+            {
+                return String.Format("{0} (in {1})", destination.Name, town);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The window this graph needs: the longest route a probe bot could be sent on, walked at
+        /// the pace the engine assigns it ON FOOT (the slow case - the mount roll is 70%, so the
+        /// other 30% is real), plus the longest linger, the longest phase clamp and two roller
+        /// passes - the time between arriving and the roller acting on it.
+        ///
+        /// Only destinations some rollable class may visit are measured, and only ones the
+        /// graph can route to from the spawn tile. Routing is a graph search, not a tile A*, so
+        /// fifty-odd of them at probe start is cheap.
+        /// </summary>
+        private static TimeSpan DeriveWindow(Map map, Point3D location, out string note)
+        {
+            BotDestinationConfig config = BotSystem.Store.Destinations;
+
+            int longestTiles = 0;
+            string longestId = null;
+            BotPace longestPace = BotPace.Walk;
+            int measured = 0;
+
+            foreach (NavDestination destination in Nav.Destinations(map, null, null))
+            {
+                if (BotWorkSites.IsExcluded(destination.Id))
+                {
+                    continue;
+                }
+
+                bool rollable = false;
+
+                foreach (BotClass cls in BotClassHelper.Rollable())
+                {
+                    if (config.WeightFor(destination, cls) > 0.0)
+                    {
+                        rollable = true;
+                        break;
+                    }
+                }
+
+                if (!rollable)
+                {
+                    continue;
+                }
+
+                NavRoute route;
+                string error;
+
+                if (!Nav.TryRouteFrom(location, map, destination.Id, null, out route, out error) || route == null)
+                {
+                    continue;
+                }
+
+                measured++;
+
+                int tiles = BotMovement.RouteTiles(route);
+
+                if (tiles > longestTiles)
+                {
+                    longestTiles = tiles;
+                    longestId = destination.Id;
+                    longestPace = BotMovement.PaceForRoute(route);
+                }
+            }
+
+            double secondsPerTile = BotMovement.DelayFor(longestPace, false);
+            double walk = longestTiles * secondsPerTile;
+
+            TimeSpan window = TimeSpan.FromSeconds(walk)
+                + TravelerBehavior.MaxLinger
+                + TimeSpan.FromSeconds(PhaseClampMaxSeconds)
+                + TimeSpan.FromSeconds(PassInterval.TotalSeconds * 2.0);
+
+            note = longestId == null
+                ? String.Format("no routable destination from {0},{1}; allowances only", location.X, location.Y)
+                : String.Format(
+                    "'{0}', {1} tiles at {2:0.00}s/tile {3} on foot, of {4} routable",
+                    longestId,
+                    longestTiles,
+                    secondsPerTile,
+                    longestPace == BotPace.Run ? "run" : "walk",
+                    measured);
+
+            return window;
         }
 
         private static void Finish(List<PlayerBot> bots, HealthResult result)

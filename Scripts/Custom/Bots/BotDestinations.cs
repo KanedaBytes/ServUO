@@ -81,6 +81,18 @@ namespace Server.Custom
                     weight *= 0.05;
                 }
 
+                // Home bias - "regulars emerge for free", upstream's words at
+                // DestinationCatalog.cs:216-223 and its number. Applied to the haul roll as well,
+                // exactly as theirs is: a laden miner from Britain prefers Britain's forge over
+                // Trinsic's the same way it prefers Britain's bank. This is the WHOLE of what a
+                // home does. There is no distance term for a town destination and no rule that
+                // sends a bot home; a Trinsic resident standing in Britain rolls Trinsic's bank at
+                // 2.5 and Britain's at 1, and walks whichever the dice pick.
+                if (weight > 0.0 && bot.HomeTown != null && candidate.HasTag(bot.HomeTown))
+                {
+                    weight *= config.HomeBias;
+                }
+
                 // A destination short of its standing crowd pulls harder. CAPPED at four times,
                 // because an uncapped multiplier on a large floor makes one bank the only place
                 // anybody goes - the shard would empty into it.
@@ -318,7 +330,25 @@ namespace Server.Custom
                 // upstream, and a small one - it changes which of two sensible destinations a
                 // laden miner picks, and nothing else. It also makes the difference between the
                 // work probe proving the hand-over and proving it four times in five.
-                return IsStaffed(candidate, profile) ? 20.0 : 9.0;
+                //
+                // And the other half of the same rule, which took a second town to notice: once
+                // somebody IS at a bench, an EMPTY bench of the same trade weighs what the bank
+                // weighs, because that is what it is - a load in a bank box with extra steps.
+                // Left at 9, the three unstaffed forges the Trinsic adopt brought in outbid the
+                // one staffed forge between them about one haul in three, and the work probe
+                // became a lottery about which forge the ore went to rather than a test of the
+                // hand-over. Upstream never met this case: its spawner pins a smith at every
+                // forge, so every forge is staffed by construction.
+                //
+                // "Staffed" is read live, from a crafter clocked in NOW - never from data. A
+                // Trinsic forge becomes a delivery point the moment a smith settles at it, and
+                // stops being one when the smith walks away.
+                if (IsStaffed(candidate, profile))
+                {
+                    return 20.0;
+                }
+
+                return AnyStaffedStation(bot, raw) ? 0.02 : 9.0;
             }
 
             if (Insensitive.Equals(candidate.Type, "bank"))
@@ -346,7 +376,9 @@ namespace Server.Custom
 
             foreach (CrafterBehavior crafter in CrafterBehavior.Live())
             {
-                if (crafter.RawGood == raw && !BotWorkSites.IsExcluded(crafter.DestinationId))
+                if (crafter.RawGood == raw
+                    && crafter.IsAtStation
+                    && !BotWorkSites.IsExcluded(crafter.DestinationId))
                 {
                     return true;
                 }
@@ -355,12 +387,19 @@ namespace Server.Custom
             return false;
         }
 
-        /// <summary>Is a crafter of this trade actually working at this station right now?</summary>
+        /// <summary>
+        /// Is a crafter of this trade actually working at this station right now?
+        ///
+        /// "Right now" is IsAtStation, not merely wearing the Crafter brain: a smith ten hops
+        /// from the forge is a smith on the road, and a miner sent to meet it there would find
+        /// an empty bench. Live() alone counted the walkers, and its own summary said otherwise.
+        /// </summary>
         private static bool IsStaffed(NavDestination destination, CrafterProfile profile)
         {
             foreach (CrafterBehavior crafter in CrafterBehavior.Live())
             {
                 if (crafter.RawGood == profile.RawGood
+                    && crafter.IsAtStation
                     && Insensitive.Equals(crafter.DestinationId, destination.Id))
                 {
                     return true;

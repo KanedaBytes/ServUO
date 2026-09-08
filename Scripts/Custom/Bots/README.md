@@ -247,6 +247,55 @@ Door recoveries in the walk probe.
 
 Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
 
+### A home is a town tag, not a `City` column
+
+Upstream gives every destination a `City` field and every bot a `HomeCity`, rolled at creation and
+weighted by how many destinations each city has (`BotEconomy.cs:34-83`); the roll then weighs home
+destinations 2.5× (`DestinationCatalog.cs:216-223`), and that is the whole of what a home does -
+no distance term, no "go home" rule, no fallback for a resident whose town has no station of its
+kind. All of that is mirrored exactly: `PlayerBot.HomeTown`, `BotHomeTowns.Roll`, and the
+`homeBias` multiplier in `BotDestinations.Pick`, applied to the haul roll as theirs is.
+
+The one seam is where the town lives. Ours has no `City` column, because the geography of this
+graph is **tags** - the adopt step writes `britain` and `trinsic`, the editor writes whatever an
+author types - and a second column saying the same thing would drift from the first. So a town is
+a tag named in `bots.json` (`destinations.towns`), and a destination belongs to it by carrying the
+tag. Our own Britain records gained a `britain` tag for this; the mines are tagged too, as
+upstream's Britain `MiningSpot` carries `City: Britain`.
+
+What a resident does when its home has no station of its kind is upstream's answer, unchanged: it
+rolls like anybody else. A Trinsic-home Miner sees two mines, both Britain's, and works them; a
+Trinsic-home Smith sees `trinsic-forge` at 8 × 2.5 and mostly works at home. `Bots.Population`
+counts those residents (`no station at home:`) as a report, not a rule.
+
+### An empty bench weighs what the bank weighs
+
+Upstream's haul roll gives *every* station of the right trade 9.0 against the bank's 2.0 and never
+asks whether anybody is there (`DestinationCatalog.cs:191-206`); it does not have to, because its
+`[GenerateBots` pins one `Crafter:Smith` at every forge arrival point, so every forge is staffed by
+construction. Ours are not, which is why the 20/9 split already existed here (see *The hand-over*
+below). The Trinsic adopt found the half of that rule still missing: three unstaffed forges at 9
+each outbid the one staffed forge at 20 about one haul in three, and the work probe became a
+lottery about which forge the ore went to.
+
+Now, once **any** bench of the trade is staffed, an unstaffed one weighs **0.02** - the bank's
+weight, because that is what it is: a load in a bank box with extra steps. With nobody at any
+bench the 9/2 upstream split stands. "Staffed" is read live on every roll from
+`CrafterBehavior.IsAtStation` - a crafter settled at its bench and not `Blocked`, so a smith still
+walking to the forge does not count - and never from data. A Trinsic forge is a delivery point the
+moment somebody works it and stops being one when they leave.
+
+### The probes pin home and derive their window
+
+Upstream has no probes. Ours make two choices a shard would not: the life probe's bots are all
+residents of the town they spawn in, because the roller is under test and a Trinsic resident
+walking home from Britain says nothing about phases; and its window is derived from the graph at
+every run rather than written down - the longest route a probe bot could roll, at the pace the
+engine assigns it on foot, plus the longest linger, the longest phase clamp and two roller passes.
+The result line names the window and the route that set it, so an adopt that lengthens the road
+shows up in `[CoreSmoke` rather than as a slower chain nobody can explain. The work probe puts its
+smith at the forge nearest the mine by road and asserts that the ore reached **that** smith.
+
 ### The Z window climbs 5, not 4
 
 `NavWalker.MaxClimb` is 5; uo-offline's `Walkable.MaxClimb` (`Nav/Walkable.cs:27`) is 4. The
@@ -1233,6 +1282,11 @@ final = byType[type][class or "default"] * product over the destination's tags o
 
 Absent means **1.0** ("no opinion"), never 0. A weight of **0 excludes** — which is how `home`,
 `guard` and `work` are kept off the list.
+
+Then the home bias: a destination carrying the bot's `HomeTown` tag is multiplied by
+`destinations.homeBias` (2.5, upstream's number). `destinations.towns` lists the tags that count
+as towns; a bot rolls one at creation, weighted by how many destinations carry each. A town that
+nothing is tagged with is reported by `Bots.Population` as `towns.<name>` among the unknown keys.
 
 Two tables rather than one because of what the data looks like: our `type` is a free token with nine
 values, but **13 of the 27 destinations are `shop`**, so type alone cannot tell a forge from a

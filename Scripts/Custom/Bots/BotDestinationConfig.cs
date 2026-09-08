@@ -52,6 +52,28 @@ namespace Server.Custom
         [JsonProperty("distanceHalfTiles")]
         public double DistanceHalfTiles { get; set; }
 
+        /// <summary>
+        /// The tags that name a town. A destination belongs to a town when it carries the tag,
+        /// and a bot rolls one of these as its home at creation (BotHomeTowns).
+        ///
+        /// Upstream keeps this as a `City` column on every destination. Ours is a list of tags
+        /// because tags are the geography this graph already has - the adopt step writes
+        /// `britain` and `trinsic`, and a second column that says the same thing would drift from
+        /// the first. Empty means no town anywhere: nobody has a home, and the bias never fires.
+        /// </summary>
+        [JsonProperty("towns")]
+        public string[] Towns { get; set; }
+
+        /// <summary>
+        /// How much more a bot wants a destination in its home town. Upstream's 2.5
+        /// (DestinationCatalog.cs:216-223), applied to every class, every type, and to the haul
+        /// roll as well. Zero or absent falls back to 2.5 rather than switching the bias off,
+        /// for the same reason distanceHalfTiles does: an unset value must not silently disable
+        /// the rule. To disable it, empty `towns`.
+        /// </summary>
+        [JsonProperty("homeBias")]
+        public double HomeBias { get; set; }
+
         /// <summary>The key standing for "every class that is not named".</summary>
         public const string DefaultKey = "default";
 
@@ -79,6 +101,34 @@ namespace Server.Custom
             if (DistanceHalfTiles <= 0.0)
             {
                 DistanceHalfTiles = 150.0;
+            }
+
+            if (HomeBias <= 0.0)
+            {
+                HomeBias = 2.5;
+            }
+
+            if (Towns == null)
+            {
+                Towns = new string[0];
+            }
+
+            for (int i = 0; i < Towns.Length; i++)
+            {
+                if (String.IsNullOrWhiteSpace(Towns[i]))
+                {
+                    errors.Add("destinations.towns has a blank entry at index {0}.", i);
+                    continue;
+                }
+
+                for (int j = 0; j < i; j++)
+                {
+                    if (Insensitive.Equals(Towns[i], Towns[j]))
+                    {
+                        errors.Add("destinations.towns lists '{0}' twice.", Towns[i]);
+                        break;
+                    }
+                }
             }
 
             Validate(errors, ByType, "destinations.byType");
@@ -202,6 +252,19 @@ namespace Server.Custom
                 if (!tags.Contains(key))
                 {
                     unknown.Add("byTag." + key);
+                }
+            }
+
+            // A town nothing is tagged with is a home nobody can be biased toward - the same
+            // silent no-op as a weight key that matches nothing.
+            if (Towns != null)
+            {
+                foreach (string town in Towns)
+                {
+                    if (!String.IsNullOrWhiteSpace(town) && !tags.Contains(town))
+                    {
+                        unknown.Add("towns." + town);
+                    }
                 }
             }
 

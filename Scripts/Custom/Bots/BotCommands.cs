@@ -175,9 +175,9 @@ namespace Server.Custom
                 BotLog.Entries(bot).Count));
         }
 
-        [Usage("SpawnBot [class] [tier]")]
+        [Usage("SpawnBot [class] [tier] [home:<town>]")]
         [Aliases("SpawnTestBot")]
-        [Description("Spawns a bot at your feet. Class and tier are rolled when omitted.")]
+        [Description("Spawns a bot at your feet. Class, tier and home town are rolled when omitted.")]
         private static void SpawnBot_OnCommand(CommandEventArgs e)
         {
             Mobile from = e.Mobile;
@@ -190,15 +190,19 @@ namespace Server.Custom
 
             BotClass cls = BotClassHelper.RollRandom();
             BotSkillTier tier = BotSkillTierHelper.RollRandom();
+            string home = null;
 
             // Free-order arguments: whichever token parses as a class is the class, whichever
             // parses as a tier is the tier. [SpawnBot 6 mage reads as well as [SpawnBot mage 6.
+            // The home is the one argument that has to be labelled, because a town tag and a
+            // class name are both plain words and 'britain' could one day be either.
             for (int i = 0; i < e.Length; i++)
             {
                 string argument = e.GetString(i);
 
                 BotClass parsedClass;
                 BotSkillTier parsedTier;
+                string parsedHome;
 
                 if (BotClassHelper.TryParse(argument, out parsedClass))
                 {
@@ -208,10 +212,14 @@ namespace Server.Custom
                 {
                     tier = parsedTier;
                 }
+                else if (TryParseHome(argument, out parsedHome))
+                {
+                    home = parsedHome;
+                }
                 else
                 {
-                    from.SendMessage(0x35, String.Format("'{0}' is not a bot class or tier.", argument));
-                    from.SendMessage(0x35, "Usage: [SpawnBot [class] [tier]");
+                    from.SendMessage(0x35, String.Format("'{0}' is not a bot class, tier or home:<town>.", argument));
+                    from.SendMessage(0x35, "Usage: [SpawnBot [class] [tier] [home:<town>]");
                     SendVocabulary(from);
                     return;
                 }
@@ -230,12 +238,21 @@ namespace Server.Custom
                 return;
             }
 
+            // Pinned AFTER construction rather than passed in: the constructor rolls a home the
+            // way upstream's does, and a pin is the staff overriding the roll, not a second way
+            // of rolling.
+            if (home != null)
+            {
+                bot.HomeTown = home;
+            }
+
             bot.MoveToWorld(from.Location, from.Map);
 
             from.SendMessage(String.Format(
-                "Spawned {0}, {1}.",
+                "Spawned {0}, {1}, of {2}.",
                 bot.Name,
-                bot.Title));
+                bot.Title,
+                bot.HomeTown ?? "no town"));
 
             CommandLogging.WriteLine(
                 from,
@@ -246,6 +263,22 @@ namespace Server.Custom
                     tier,
                     cls,
                     bot.Name));
+        }
+
+        /// <summary>
+        /// `home:britain`, against the towns bots.json names. An unknown town is a usage error
+        /// rather than a silent roll, and the message lists what would have been accepted.
+        /// </summary>
+        private static bool TryParseHome(string argument, out string home)
+        {
+            home = null;
+
+            if (argument == null || !argument.StartsWith("home:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return BotHomeTowns.TryParse(argument.Substring("home:".Length), out home);
         }
 
         [Usage("BotInfo")]
@@ -293,9 +326,10 @@ namespace Server.Custom
             }
 
             lines.Add(String.Format(
-                "Class: {0}   Tier: {1}",
+                "Class: {0}   Tier: {1}   Home: {2}",
                 BotClassHelper.DisplayName(bot.Class),
-                BotSkillTierHelper.DisplayName(bot.SkillTier)));
+                BotSkillTierHelper.DisplayName(bot.SkillTier),
+                bot.HomeTown ?? "-"));
 
             if (bot.Class == BotClass.Crafter)
             {
@@ -987,6 +1021,12 @@ namespace Server.Custom
 
             from.SendMessage("Classes: " + String.Join(", ", classes.ToArray()));
             from.SendMessage("Tiers: Novice, Apprentice, Journeyman, Adept, Expert, Master, Grandmaster (or 0-6).");
+
+            string[] towns = BotSystem.Store.Destinations.Towns;
+
+            from.SendMessage(towns == null || towns.Length == 0
+                ? "Towns: none configured (destinations.towns in bots.json)."
+                : "Towns: home:" + String.Join(", home:", towns));
         }
     }
 }

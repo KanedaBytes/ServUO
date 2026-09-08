@@ -107,6 +107,20 @@ namespace Server.Custom
         public int BehaviorChanges { get; private set; }
 
         /// <summary>
+        /// The town this bot calls home - a town tag from bots.json, or null when the graph has
+        /// no towns. Rolled once at creation, weighted by how many destinations each town has;
+        /// transient, exactly as upstream's HomeCity is (uo-offline PlayerBot.cs:196-201).
+        ///
+        /// It does ONE thing: every destination carrying this tag weighs `homeBias` times more
+        /// in the roll (BotDestinations.Pick), so the same faces keep turning up at the same bank
+        /// and forge. It is a multiplier and never a fallback - a resident of a town with no
+        /// station of its kind simply rolls like anyone else, which is upstream's rule and the
+        /// only one there is. Deliberately not a City column on the destination: the geography
+        /// of this graph is tags, and this reads the ones the editor already writes.
+        /// </summary>
+        public string HomeTown { get; set; }
+
+        /// <summary>
         /// The phase expired while the behaviour was refusing to be interrupted; roll as soon as
         /// it stops refusing.
         ///
@@ -240,6 +254,11 @@ namespace Server.Custom
             // years, which is greater than any phase length, so the roller wanted to transition it
             // on every single pass. [BotInfo showed it as "63924344915s of 14160s elapsed".
             PhaseStartedAt = CustomTime.Now;
+
+            // Where it lives. Upstream rolls this in the constructor too (PlayerBot.cs:301-303),
+            // independent of where the bot is about to be placed: born in Britain and living in
+            // Trinsic is a real thing, and the bias is what walks it home.
+            HomeTown = BotHomeTowns.Roll();
 
             _behavior = new IdleBehavior();
 

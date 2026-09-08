@@ -113,6 +113,32 @@ seams** sections.
 
 Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedSpawner`.
 
+### Picking the bot layer up cold
+
+Where a fresh session should start, in order:
+
+1. **`Scripts/Custom/Bots/README.md`**, its **Deviations from uo-offline** and **Severed seams**
+   sections first. Every place this port does something other than upstream is a row there, with
+   the reason; every place it stops short is a seam with the session that restores it. If a
+   behaviour looks wrong, check those two tables before reading code.
+2. **The reference is `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO`**, `Projects/UOContent/CustomBots/`
+   for source and `Distribution/Data/` for data - see the table at the top of `CLAUDE.md` for the
+   three trees that are *not* it. The rule for any design question is uo-offline's answer first,
+   deviate only at a named seam.
+3. **`docs-src/uo-offline-port-survey.md`** for what has been ported and what the September 2026
+   upstream release changed under files not yet reached.
+4. **Run `[BotSmoke`** and read `[CoreSmoke`. The chain is walk → life → chat → work; each probe's
+   result line says what it measured and, for the life probe, the window it derived and the route
+   that set it.
+
+What a bot is, in one paragraph: a `BaseCreature` flagged `Player`, with a class, tier, personality
+and a **home town** rolled at creation. It picks destinations from `navigation.json` weighted by
+`bots.json` - class × kind, times 2.5 for its home town, with a distance term only on work sites -
+walks them on `NavWalker`, and hands off to a visit behaviour on arrival. A 60-second roller
+transitions it between `Traveler` and `Idle` when its phase expires and it is not mid-walk. Nothing
+about it survives a restart. There is no spawner, no session curve and no population yet; that is
+the population session.
+
 ## Staff commands
 
 | Command | Access | Effect |
@@ -145,7 +171,7 @@ Roadmap beyond the port: a test project, a possible .NET retarget, and a `TimedS
 | `[DailyLifeSmoke` | Administrator | Force a full day cycle and check the town reacts |
 | `[GG_MigrateVendors` | Administrator | Hand Britain's six shopkeeper spawn points to daily life (one time, reversible) |
 | `[GG_RestoreVendors` | Administrator | Undo the migration |
-| `[SpawnBot [class] [tier]` | GameMaster | Spawn a bot at your feet; class and tier roll when omitted (alias `[SpawnTestBot`) |
+| `[SpawnBot [class] [tier] [home:<town>]` | GameMaster | Spawn a bot at your feet; class, tier and home town roll when omitted (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and skills against the caps in force |
 | `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
 | `[BotBehavior [name]` | GameMaster | Target a bot; report its brain, or switch it (`Idle`, `Traveler`) |

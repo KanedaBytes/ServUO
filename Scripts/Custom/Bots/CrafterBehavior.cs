@@ -112,6 +112,19 @@ namespace Server.Custom
             get { return _drySince != null; }
         }
 
+        /// <summary>
+        /// Clocked in: settled at its bench and able to work. This is what "staffed" means to a
+        /// laden gatherer choosing where to deliver (BotDestinations.IsStaffed).
+        ///
+        /// False while walking to the station and false while Blocked, because in both cases a
+        /// load brought here goes into a bank box. Dry and full are NOT exclusions - a dry
+        /// smith is precisely the one waiting for the ore.
+        /// </summary>
+        public bool IsAtStation
+        {
+            get { return !_walkingToStation && Blocked == null && _profile != null; }
+        }
+
         public CrafterBehavior()
         {
             ChatCategories = CraftChat;
@@ -803,10 +816,18 @@ namespace Server.Custom
             if (accepted > 0)
             {
                 _drySince = null;
+                Received += accepted;
+                Deliveries++;
             }
 
             return accepted;
         }
+
+        /// <summary>Units taken over the counter from gatherers since attaching. The work probe's proof.</summary>
+        public int Received { get; private set; }
+
+        /// <summary>Hand-overs this crafter has taken since attaching.</summary>
+        public int Deliveries { get; private set; }
 
         /// <summary>What raw good this crafter buys, for the delivery hook to match against.</summary>
         public Type RawGood
@@ -901,7 +922,10 @@ namespace Server.Custom
             return id == 0x0FAF || id == 0x0FB0 || id == 0x0FB1 || (id >= 0x197A && id <= 0x19A9);
         }
 
-        /// <summary>Every crafter currently at a station, for Bots.Work.</summary>
+        /// <summary>
+        /// Every crafter wearing the brain right now, for Bots.Work - walkers included. Ask
+        /// IsAtStation on each for whether it is actually at its bench.
+        /// </summary>
         public static List<CrafterBehavior> Live()
         {
             var crafters = new List<CrafterBehavior>();

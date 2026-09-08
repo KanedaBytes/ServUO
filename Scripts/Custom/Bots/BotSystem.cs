@@ -202,6 +202,7 @@ namespace Server.Custom
 
             var byClass = new Dictionary<BotClass, int>();
             var byTier = new Dictionary<BotSkillTier, int>();
+            var byHome = new Dictionary<string, int>(StringComparer.Ordinal);
             int count = 0;
             int travelling = 0;
             int lingering = 0;
@@ -235,6 +236,11 @@ namespace Server.Custom
                 byTier.TryGetValue(bot.SkillTier, out tierCount);
                 byTier[bot.SkillTier] = tierCount + 1;
 
+                string home = bot.HomeTown ?? "no town";
+                int homeCount;
+                byHome.TryGetValue(home, out homeCount);
+                byHome[home] = homeCount + 1;
+
                 if (facet == null && bot.Map != null && bot.Map != Map.Internal)
                 {
                     facet = bot.Map;
@@ -265,8 +271,8 @@ namespace Server.Custom
             }
 
             string detail = String.Format(
-                "{0} bot(s) live ({1} travelling, {2} lingering, {3} idle; {4} name(s) claimed){5}{6}. "
-                + "recovery: {7}. {8}. Last load {9}",
+                "{0} bot(s) live ({1} travelling, {2} lingering, {3} idle; {4} name(s) claimed){5}{6}{7}. "
+                + "recovery: {8}. {9}. Last load {10}",
                 count,
                 travelling,
                 lingering,
@@ -274,9 +280,22 @@ namespace Server.Custom
                 NamePool.InUseCount,
                 Describe(byClass, BotClassHelper.DisplayName),
                 Describe(byTier, BotSkillTierHelper.DisplayName),
+                Describe(byHome, home => "of " + home),
                 NavWalker.DescribeRungTotals(),
                 caps,
                 loaded);
+
+            // Residents of a town with no station of their kind. Not a fault and not a rule -
+            // upstream's home is a multiplier with no fallback, and so is ours - but a number
+            // worth seeing, because it is the count of bots whose work is always a road trip.
+            List<string> stationlessResidents = BotHomeTowns.StationlessResidents(facet ?? Map.Trammel);
+
+            if (stationlessResidents.Count > 0)
+            {
+                detail += String.Format(
+                    ". no station at home: {0}",
+                    String.Join(", ", stationlessResidents.ToArray()));
+            }
 
             if (BotTickManager.NoRouteLastTick > 0 || BotTickManager.NoDestinationLastTick > 0)
             {

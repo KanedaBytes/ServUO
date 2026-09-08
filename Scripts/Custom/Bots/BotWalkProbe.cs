@@ -82,11 +82,24 @@ namespace Server.Custom
                     return;
                 }
 
+                // Residents of the town they spawn in, as the life probe's bots are. The
+                // constructor rolls a home weighted by town size, and a bot that drew Trinsic
+                // would disperse toward a Trinsic destination 1,100 tiles away - "still
+                // travelling" when a 45-second disperse window closes, for doing exactly what a
+                // resident does. The walk is under test here, not the home roll.
+                string home = BotHomeTowns.Nearest(location, map);
+
                 for (int i = 0; i < BotCount; i++)
                 {
                     var bot = new PlayerBot();
 
                     bots.Add(bot);
+
+                    if (home != null)
+                    {
+                        bot.HomeTown = home;
+                    }
+
                     bot.MoveToWorld(location, map);
 
                     // Traveler rather than Idle: this is the behaviour under test, and attaching
