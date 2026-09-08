@@ -26,7 +26,8 @@ import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
     READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
-    hitTest, pick, nearSegment, geometryOf, applyGeometry, moveShape, resizeRect, moveNode, syncDerived
+    hitTest, pick, entityAt, nearSegment, geometryOf, applyGeometry, moveShape, resizeRect,
+    moveNode, syncDerived
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
@@ -1072,6 +1073,29 @@ async function sendReach(body) {
  * logged almost none of it. A list that says "walking in to The Northern Outcrop" next to one that
  * says "standing outside a work site" separates two of them at a glance.
  */
+/**
+ * Opens a bot's inspector, from the Bots panel or from a click on the map.
+ *
+ * `centre` is the difference between the two. A name clicked in a list has to bring the map to the
+ * bot, because the list gives no idea where it is; a bot clicked ON the map is already in front of
+ * you, and moving the view out from under the cursor is exactly the thing that makes a canvas feel
+ * like it is fighting you.
+ *
+ * `state.selectedBot` is a serial and is deliberately parallel to `state.selected`, which is a
+ * shape: a bot is not a record, cannot be edited, dragged or saved, and giving it the shape
+ * selection would mean every writer path having to ask what kind of thing it was holding.
+ */
+function selectBot(bot, centre) {
+    state.selectedBot = bot.serial;
+
+    if (centre) {
+        view.centerOn(bot.x, bot.y);
+    }
+
+    renderBots();
+    requestRender();
+}
+
 function renderBots() {
     const filter = (dom.botFilter.value || '').trim().toLowerCase();
 
@@ -1123,18 +1147,15 @@ function renderBots() {
 
         row.append(swatch, label, count);
 
-        row.addEventListener('click', () => {
-            state.selectedBot = bot.serial;
-
-            // Centre rather than select: a bot is not a shape, so it cannot enter the normal
-            // selection - and centring is what somebody clicking a name in a list wants anyway.
-            view.centerOn(bot.x, bot.y);
-            renderBots();
-            requestRender();
-        });
+        row.addEventListener('click', () => selectBot(bot, true));
 
         if (bot.serial === state.selectedBot) {
             row.classList.add('selected');
+
+            // A bot selected by clicking its dot on the map may be a hundred rows down a list
+            // nobody has scrolled. Bringing the row into view is what makes the two halves of the
+            // panel feel like one thing rather than two that happen to agree.
+            row.scrollIntoView({ block: 'nearest' });
         }
 
         dom.bots.append(row);
@@ -2952,6 +2973,27 @@ function wireInput() {
             view, state.shapes, state.visible, state.selected, worldX, worldY, screenX, screenY);
 
         if (!hit) {
+            // Nothing editable here - so is there a bot? Checked AFTER the shapes, deliberately: a
+            // bot standing on a waypoint should still give you the waypoint, because that is the
+            // thing a click can change. Until now a bot could only be opened from the Bots panel,
+            // in either projection; on the art it is drawn at its own Z, so the dot is exactly
+            // where it looks and the screen comparison needs no pick map at all.
+            //
+            // Bots only, not every live entity: the inspector this opens is the Bots panel's, and
+            // an NPC or a player has no row in it - selecting one would set a serial that resolves
+            // to nothing and look exactly like the click having missed.
+            const bot = state.visible.has('entities')
+                ? entityAt(
+                    view,
+                    state.entities.filter((entity) => entity.kind === 'bot'),
+                    worldX, worldY, screenX, screenY)
+                : null;
+
+            if (bot) {
+                selectBot(bot, false);
+                return;
+            }
+
             select(null);
 
             if (live) {

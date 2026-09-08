@@ -679,6 +679,65 @@ function rectHandles([x, y, w, h]) {
 }
 
 /**
+ * The live entity under the cursor, or null.
+ *
+ * SEPARATE FROM hitTest ON PURPOSE. An entity is not a shape: it is not in `state.shapes`, it is
+ * never edited, never saved and never dragged, and folding it into the picking tiers would mean
+ * every caller that expects a shape back having to check what it got. So it is its own pass, run
+ * only where hitTest found nothing - a bot standing on a waypoint should still give you the
+ * waypoint, because that is the thing you can change.
+ *
+ * The comparison is the same one hitTest makes for a point, and it works in art because entities
+ * are already drawn at their OWN Z (see drawEntities): the projected dot is where it looks, so
+ * comparing screen pixels against it needs no inverse and no pick map.
+ */
+export function entityAt(view, entities, worldX, worldY, screenX = null, screenY = null) {
+    if (!entities || entities.length === 0) {
+        return null;
+    }
+
+    const art = Boolean(view.isArt) && screenX !== null && screenY !== null;
+    const slack = GRAB / view.scale;
+
+    let best = null;
+    let bestDistance = Infinity;
+
+    for (const entity of entities) {
+        if (entity.map && view.facet && entity.map !== view.facet.name) {
+            continue;
+        }
+
+        const x = entity.x + 0.5;
+        const y = entity.y + 0.5;
+
+        let distance;
+
+        if (art) {
+            const [sx, sy] = view.toScreen(x, y, entity.z || 0);
+
+            if (Math.abs(sx - screenX) > GRAB || Math.abs(sy - screenY) > GRAB) {
+                continue;
+            }
+
+            distance = Math.abs(sx - screenX) + Math.abs(sy - screenY);
+        } else {
+            if (Math.abs(x - worldX) > slack || Math.abs(y - worldY) > slack) {
+                continue;
+            }
+
+            distance = Math.abs(x - worldX) + Math.abs(y - worldY);
+        }
+
+        if (distance < bestDistance) {
+            best = entity;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
+/**
  * What is under the cursor, nearest first. Handles beat bodies so a corner is always grabbable
  * even when it sits inside another shape.
  */

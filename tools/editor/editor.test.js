@@ -953,6 +953,55 @@ function stubArtView(scale = 22) {
     };
 }
 
+test('a live bot is picked at its own Z in art, and nowhere near the ground plane', () => {
+    // Bots have always DRAWN at their own Z; what they could not do is be clicked at all, in either
+    // projection - hitTest walks state.shapes and an entity is not one, so the only way into a bot
+    // was the Bots panel. The comparison is the same one hitTest makes for a point, and it needs no
+    // pick map: the dot is drawn where it is, so the projected anchor is exact.
+    const bot = { kind: 'bot', serial: 1, name: 'Alric', x: 1424, y: 1557, z: 30, map: 'Trammel' };
+    const view = stubArtView();
+
+    const [sx, sy] = view.toScreen(1424.5, 1557.5, 30);
+
+    assert.strictEqual(shapes.entityAt(view, [bot], 0, 0, sx, sy), bot);
+
+    // And where a ground-plane inverse would have put it, there is nothing - the same distinction
+    // the waypoint test above makes, and for the same reason.
+    const [gx, gy] = view.toScreen(1424.5, 1557.5, 0);
+
+    assert.strictEqual(shapes.entityAt(view, [bot], 0, 0, gx, gy), null);
+});
+
+test('a bot on another facet, or nowhere near the cursor, is not picked', () => {
+    const view = stubArtView();
+    const here = { kind: 'bot', serial: 1, x: 1424, y: 1557, z: 30, map: 'Trammel' };
+    const elsewhere = { kind: 'bot', serial: 2, x: 1424, y: 1557, z: 30, map: 'Felucca' };
+
+    const [sx, sy] = view.toScreen(1424.5, 1557.5, 30);
+
+    assert.strictEqual(shapes.entityAt(view, [elsewhere], 0, 0, sx, sy), null);
+    assert.strictEqual(shapes.entityAt(view, [here], 0, 0, sx + 200, sy), null);
+    assert.strictEqual(shapes.entityAt(view, [], 0, 0, sx, sy), null);
+});
+
+test('the nearest bot wins when two stand on top of each other', () => {
+    const view = stubArtView();
+    const near = { kind: 'bot', serial: 1, x: 1424, y: 1557, z: 30, map: 'Trammel' };
+    const far = { kind: 'bot', serial: 2, x: 1425, y: 1557, z: 30, map: 'Trammel' };
+
+    const [sx, sy] = view.toScreen(1424.5, 1557.5, 30);
+
+    assert.strictEqual(shapes.entityAt(view, [far, near], 0, 0, sx, sy).serial, 1);
+});
+
+test('in radar a bot is picked in world space, with the same slack a waypoint gets', () => {
+    const view = stubView(4);
+    const bot = { kind: 'bot', serial: 1, x: 100, y: 200, z: 5, map: 'Trammel' };
+
+    assert.strictEqual(shapes.entityAt(view, [bot], 100.5, 200.5), bot);
+    assert.strictEqual(shapes.entityAt(view, [bot], 140, 200.5), null);
+});
+
 test('a world rect is a rect in radar and four projected corners in art', () => {
     const zone = {
         layer: 'nav-zones', id: 'zone:town', kind: 'rect', map: 'Trammel',
