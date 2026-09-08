@@ -451,7 +451,7 @@ namespace Server.Custom
         /// so a bot sent by hand walks exactly as one sent by the roller does. Nothing here is a
         /// test harness with its own movement.
         /// </summary>
-        [Usage("BotSendTo <destination> [bot name]")]
+        [Usage("BotSendTo <destination or words> [bot name]")]
         [Description("Sends a bot to a named destination as a Traveler. Target the bot, or name it.")]
         private static void BotSendTo_OnCommand(CommandEventArgs e)
         {
@@ -466,10 +466,36 @@ namespace Server.Custom
             string id = e.GetString(0);
             NavDestination destination = Nav.Destination(id);
 
+            // Not an exact id: list what it could have meant rather than refusing flatly. Guessing
+            // 'uo-trinsic-bank' and being told only that it does not exist leaves you no better
+            // off - the ids are the one thing you cannot see from in game.
             if (destination == null)
             {
-                from.SendMessage(0x35, String.Format("'{0}' is not a destination.", id));
-                return;
+                List<NavDestination> matches = Matching(id);
+
+                if (matches.Count == 1)
+                {
+                    destination = matches[0];
+                }
+                else
+                {
+                    var lines = new List<string>();
+
+                    lines.Add(matches.Count == 0
+                        ? String.Format("No destination matches '{0}'.", id)
+                        : String.Format("'{0}' matches {1} destinations:", id, matches.Count));
+
+                    for (int i = 0; i < matches.Count && i < 40; i++)
+                    {
+                        lines.Add(String.Format(
+                            "  {0} - {1} ({2},{3})",
+                            matches[i].Id, matches[i].Name ?? matches[i].Id,
+                            matches[i].X, matches[i].Y));
+                    }
+
+                    CommandReport.Send(from, "[BotSendTo", lines);
+                    return;
+                }
             }
 
             // Named, when the bot is nowhere near the caller - which is the usual case for the
@@ -503,6 +529,48 @@ namespace Server.Custom
             from.SendMessage(String.Format("Target a bot to send to {0}.", destination.Id));
             from.BeginTarget(12, false, TargetFlags.None,
                 (m, targeted) => SendBot(m, targeted as PlayerBot, destination));
+        }
+
+        /// <summary>
+        /// Destinations whose id or name contains every word given, in any order.
+        ///
+        /// Word-wise rather than a plain substring so "trinsic bank" finds `trinsic-bank` - the
+        /// hyphen is in the id and not in what anybody types.
+        /// </summary>
+        private static List<NavDestination> Matching(string query)
+        {
+            var found = new List<NavDestination>();
+            string[] words = (query ?? "").Split(
+                new[] { ' ', '-', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+            if (words.Length == 0)
+            {
+                return found;
+            }
+
+            foreach (NavDestination destination in NavigationSystem.Destinations)
+            {
+                string haystack = String.Format(
+                    "{0} {1}", destination.Id, destination.Name ?? "").ToLowerInvariant();
+
+                bool all = true;
+
+                for (int i = 0; i < words.Length; i++)
+                {
+                    if (haystack.IndexOf(words[i].ToLowerInvariant(), StringComparison.Ordinal) < 0)
+                    {
+                        all = false;
+                        break;
+                    }
+                }
+
+                if (all)
+                {
+                    found.Add(destination);
+                }
+            }
+
+            return found;
         }
 
         private static void SendBot(Mobile from, PlayerBot bot, NavDestination destination)
