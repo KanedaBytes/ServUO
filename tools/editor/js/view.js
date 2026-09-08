@@ -181,6 +181,25 @@ export class View {
         return this.scale / iso.HALF_WIDTH;
     }
 
+    /**
+     * A screen point as a FACET-GLOBAL CANVAS PIXEL - the coordinate the art pyramid is cut from,
+     * and the one a pick map is addressed by.
+     *
+     * The camera decides how many screen pixels one canvas pixel is worth; it does not change which
+     * canvas pixel the cursor is over. That is what lets one 1:1 pick map answer at every zoom, and
+     * it is the only conversion in this file that has no Z in it at all - a canvas pixel is where
+     * the cursor is, not where anything stands.
+     */
+    canvasAt(px, py) {
+        const s = this.isoScale;
+        const centre = iso.worldToIso(this.centerX, this.centerY, 0);
+
+        return [
+            (px - this.canvas.clientWidth / 2) / s + centre.ix - iso.originX(this.facet.height),
+            (py - this.canvas.clientHeight / 2) / s + centre.iy - iso.originY()
+        ];
+    }
+
     isoToScreen(ix, iy) {
         const s = this.isoScale;
         const centre = iso.worldToIso(this.centerX, this.centerY, 0);

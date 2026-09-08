@@ -234,6 +234,64 @@ test('the same point is the same place at every art level', () => {
     }
 });
 
+// --- reading the pick map -------------------------------------------------------------------------
+
+test('canvasToTile is tileFor run backwards, at every art level', () => {
+    // The pair is what makes a pick map a lookup instead of an inverse. tileFor says where a world
+    // point lands in the pyramid; canvasToTile says which pyramid pixel a canvas point is. A drift
+    // between them would put every click one tile out, uniformly, which is exactly the kind of
+    // wrongness that reads as bad data.
+    const max = iso.maxLevel(7168, 4096);
+
+    for (const [x, y, z] of [[1424, 1557, 30], [1475, 1645, 20], [0, 0, 0], [7167, 4095, -5]]) {
+        for (let level = iso.minArtLevel(max); level <= max; level++) {
+            const forward = iso.tileFor(x, y, z, level, max, 4096);
+            const back = iso.canvasToTile(forward.canvasX, forward.canvasY, level, max);
+
+            assert.deepStrictEqual(
+                back,
+                {
+                    tileX: forward.tileX, tileY: forward.tileY,
+                    pixelX: forward.pixelX, pixelY: forward.pixelY
+                },
+                `${x},${y},${z} at level ${level}`);
+        }
+    }
+});
+
+test('a canvas pixel names the same tile at every zoom, which is why one pick map is enough', () => {
+    // The whole argument for rendering pick maps at the deepest level only. A canvas pixel is a
+    // facet-global number; the camera decides how many SCREEN pixels it is worth and nothing else.
+    // So the pixel under the cursor at 1:8 is the same pixel it would be at 1:1, and the 1:1
+    // sidecar answers both.
+    const max = iso.maxLevel(7168, 4096);
+    const deep = iso.tileFor(1424, 1557, 30, max, max, 4096);
+
+    for (let level = iso.minArtLevel(max); level < max; level++) {
+        const coarse = iso.tileFor(1424, 1557, 30, level, max, 4096);
+
+        assert.strictEqual(coarse.canvasX, deep.canvasX, `canvas x moved at level ${level}`);
+        assert.strictEqual(coarse.canvasY, deep.canvasY, `canvas y moved at level ${level}`);
+
+        const answered = iso.canvasToTile(coarse.canvasX, coarse.canvasY, max, max);
+
+        assert.deepStrictEqual(
+            { tileX: answered.tileX, tileY: answered.tileY },
+            { tileX: deep.tileX, tileY: deep.tileY },
+            `the deepest pick tile is not reachable from level ${level}`);
+    }
+});
+
+test('a canvas pixel off the north-west of the facet is outside the pyramid, not inside tile 0', () => {
+    // `%` on a negative in JavaScript keeps the sign, so a truncating version of this would put a
+    // cursor dragged off the top-left into tile -0 at a positive pixel - a confident answer about a
+    // tile that does not exist. Floored, it stays negative and the caller drops it.
+    const max = iso.maxLevel(7168, 4096);
+    const off = iso.canvasToTile(-1, -1, max, max);
+
+    assert.ok(off.tileX < 0 && off.tileY < 0, 'a negative canvas pixel is not tile 0');
+});
+
 // --- the two copies -------------------------------------------------------------------------------
 
 test('every constant matches tools/MapExport/IsoTransform.cs', () => {
@@ -261,6 +319,23 @@ test('every constant matches tools/MapExport/IsoTransform.cs', () => {
     assert.strictEqual(constant('HeadroomBottom'), iso.HEADROOM_BOTTOM);
     assert.strictEqual(constant('ArtLevelDepth'), iso.ART_LEVEL_DEPTH);
     assert.strictEqual(constant('FloorLevelDepth'), iso.FLOOR_LEVEL_DEPTH);
+});
+
+test('the pick sidecar format the browser decodes is the one the renderer writes', () => {
+    // PickMap.Format is not a cache key - the file is gzipped whole, so the byte is not readable
+    // without inflating it, and changing the format means bumping TileServer.Version. What this
+    // pins is the two ends of the decode: the header size and the magic have to be the same on both
+    // sides or a sidecar reads as garbage rather than as an error.
+    const source = fs.readFileSync(path.join(REPO, 'tools', 'MapExport', 'PickMap.cs'), 'utf8');
+
+    const header = source.match(/public const int HeaderSize = (\d+);/);
+    assert.ok(header, 'PickMap.cs has no HeaderSize');
+    assert.strictEqual(Number(header[1]), 16, 'js/pickmap.js decodes a 16-byte header');
+
+    // "GGPK", one byte per character, in the order the decoder checks them.
+    assert.ok(
+        source.includes("{ (byte)'G', (byte)'G', (byte)'P', (byte)'K' }"),
+        'PickMap.cs no longer writes the magic js/pickmap.js looks for');
 });
 
 test('the floor names are the ones the renderer parses', () => {

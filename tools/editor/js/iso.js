@@ -20,10 +20,14 @@
 // (-scale, +scale), so it is an ordinary canvas matrix - which is how the radar underlay is drawn
 // beneath the art with the existing world-space tile loop and a setTransform.
 //
-// THE INVERSE IS NOT A FUNCTION. A screen pixel names a world tile only once you assume a Z, so
-// `isoToWorld` answers for the ground plane and is off by z*4/44 tiles - about 2.7 in Britain,
-// which sits near z 30. That is why placing and dragging are disabled in art view: a click that
-// looks right and is wrong is worse than one that is refused.
+// THE INVERSE IS NOT A FUNCTION, and that is why there is a pick map. A screen pixel names a world
+// tile only once you assume a Z, so `isoToWorld` answers for the ground plane and is off by
+// z*4/44 tiles - about 2.7 in Britain, which sits near z 30. It survives here for panning and
+// zooming, where being a couple of tiles out about the point under the cursor does not matter, and
+// as the momentary estimate the readout marks with a ~ while a pick tile is still in flight.
+//
+// The real answer is a lookup: `canvasToTile` below turns a canvas pixel into a tile and a pixel
+// inside it, and js/pick.js reads what the renderer recorded there while it was drawing.
 
 export const HALF_WIDTH = 22;
 export const HALF_HEIGHT = 22;
@@ -191,6 +195,36 @@ export function tileFor(x, y, z, level, max, facetHeight, tileSize = TILE_SIZE) 
         pixelX: Math.floor((canvasX % span) / divisor(level, max)),
         pixelY: Math.floor((canvasY % span) / divisor(level, max))
     };
+}
+
+/**
+ * Which tile of the art pyramid a canvas pixel falls in, and where inside it - the other half of
+ * `tileFor`, and the first step of reading a pick map.
+ *
+ * This is what makes the pick map a lookup rather than an inverse. A FACET-GLOBAL CANVAS PIXEL IS
+ * THE SAME NUMBER AT EVERY ZOOM: the camera decides how many screen pixels one of them is worth,
+ * but not which one the cursor is over. So the 1:1 pick map answers a click at 1:2 and at 1:8 just
+ * as exactly, and there is no second sidecar and no decimation - which matters, because world
+ * coordinates cannot be box-averaged the way colour can.
+ *
+ * Floored rather than truncated, because a cursor dragged off the north or west edge of the facet
+ * gives a negative canvas pixel, and `%` in JavaScript would put it in the wrong tile rather than
+ * outside the pyramid where it belongs.
+ */
+export function canvasToTile(canvasX, canvasY, level, max, tileSize = TILE_SIZE) {
+    const step = divisor(level, max);
+    const span = tileSize * step;
+
+    return {
+        tileX: Math.floor(canvasX / span),
+        tileY: Math.floor(canvasY / span),
+        pixelX: Math.floor(floorMod(canvasX, span) / step),
+        pixelY: Math.floor(floorMod(canvasY, span) / step)
+    };
+}
+
+function floorMod(value, span) {
+    return ((value % span) + span) % span;
 }
 
 /**

@@ -38,6 +38,7 @@ import { buildShape } from './build.js';
 import { liveStatusText } from './live.js';
 import * as adopt from './adopt.js';
 import * as iso from './iso.js';
+import * as pickmap from './pickmap.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -123,7 +124,14 @@ const state = {
     drag: null,
     spaceDown: false,
     tool: null,
-    draft: null
+    draft: null,
+
+    /**
+     * The cursor, in canvas pixels, so a pick map that arrives after the cursor has stopped moving
+     * can correct the readout. Without it, stopping dead on a tile nobody has hovered before leaves
+     * the readout showing the ground-plane estimate until the mouse twitches.
+     */
+    cursor: null
 };
 
 const canvas = $('map');
@@ -281,9 +289,12 @@ async function pollArt() {
 
         if (stats.items && (!view.items || view.items.id !== stats.items.id)) {
             view.setItems(stats.items);
+            // A new snapshot is a whole new set of pick URLs, and the old entries are 256 KB each.
+            pickmap.reset();
             requestRender();
         } else if (!stats.items && view.items) {
             view.setItems(null);
+            pickmap.reset();
             requestRender();
         }
 
@@ -2702,12 +2713,82 @@ function screenAt(event) {
 }
 
 /**
+ * The tile under the cursor, as the editor is willing to state it: {x, y, z, exact}.
+ *
+ * `exact` is the whole of it. In art view the answer comes from the renderer's own pick map and
+ * names the tile the eye is on, at the Z a mobile would stand there; while that tile is still in
+ * flight - or where nothing was drawn at all - it falls back to the ground-plane inverse, which is
+ * off by z*4/44 tiles, about 2.7 where Britain stands. The readout marks that with a ~ and nothing
+ * is placed from it. In radar there is nothing to be inexact about, and Z is not a question the
+ * cursor can answer at all.
+ *
+ * Asking also ASKS FOR the pick map, so hovering a tile is what fetches it - which means that by
+ * the time a button goes down, the answer a click needs is almost always already in memory.
+ */
+function tileAt(event) {
+    const [worldX, worldY] = worldAt(event);
+    const estimate = { x: Math.floor(worldX), y: Math.floor(worldY), z: null, exact: !view.isArt };
+
+    if (!view.isArt) {
+        return estimate;
+    }
+
+    const [screenX, screenY] = screenAt(event);
+    const [canvasX, canvasY] = view.canvasAt(screenX, screenY);
+
+    state.cursor = [canvasX, canvasY];
+    pickmap.request(view, canvasX, canvasY, refreshReadout);
+
+    const found = pickmap.at(view, canvasX, canvasY);
+
+    return found ? { x: found.x, y: found.y, z: found.z, what: found.what, exact: true } : estimate;
+}
+
+/**
+ * The same answer, waiting for the pick map if it has to. What every gesture that WRITES uses.
+ *
+ * A click is rare and a pick map is about 13 ms, so waiting is imperceptible and is the only answer
+ * that is never wrong. In art view a pick that cannot be had at all resolves to null, and the
+ * caller refuses rather than placing from the estimate: a waypoint three tiles from where it was
+ * clicked would look right and be wrong, which is the whole reason this exists.
+ */
+async function pickedTile(event) {
+    if (!view.isArt) {
+        return tileAt(event);
+    }
+
+    const [screenX, screenY] = screenAt(event);
+    const [canvasX, canvasY] = view.canvasAt(screenX, screenY);
+    const found = await pickmap.resolve(view, canvasX, canvasY);
+
+    return found ? { x: found.x, y: found.y, z: found.z, what: found.what, exact: true } : null;
+}
+
+/** The coordinate strip, from wherever the cursor was last seen. */
+function refreshReadout() {
+    if (!view.facet || !dom.coords || !state.cursor) {
+        return;
+    }
+
+    if (!view.isArt) {
+        return;
+    }
+
+    const found = pickmap.at(view, state.cursor[0], state.cursor[1]);
+
+    dom.coords.textContent = found
+        ? `${found.x}, ${found.y}  z${found.z}`
+        : dom.coords.textContent;
+}
+
+/**
  * Whether a gesture that needs to turn a screen point into a WORLD point is allowed right now.
  *
- * In art view it is not. Reading and selecting work, because the editor knows where it drew every
- * shape; putting something new at the cursor, or dragging one to it, needs the inverse projection,
- * and the inverse is not a function without a per-pixel depth. Refusing is the honest answer - a
- * waypoint placed three tiles from where it was clicked would look right and be wrong.
+ * In art view it is not - yet. The readout above already knows where the cursor is, but the create
+ * tools and the drag still take their coordinates from the ground-plane inverse, so letting them
+ * run would place things about 2.7 tiles from where they were clicked. Wiring them to the pick is
+ * the next change; until then the refusal stands, because a click that looks right and is wrong is
+ * worse than one that is refused.
  */
 function canPlace() {
     return !view.isArt;
@@ -2812,8 +2893,15 @@ function wireInput() {
         // and 5a's canvas-bound listener froze the pan the moment the cursor left.
         const [worldX, worldY] = worldAt(event);
 
+        // The tile under the cursor, and in art view the Z of the surface there. A `~` says the
+        // pick map for this tile has not arrived and the number is the ground-plane guess, which is
+        // off by about 2.7 tiles where Britain stands - a distinction the readout used to hide.
         if (view.facet && dom.coords) {
-            dom.coords.textContent = `${Math.floor(worldX)}, ${Math.floor(worldY)}`;
+            const tile = tileAt(event);
+
+            dom.coords.textContent = tile.exact
+                ? `${tile.x}, ${tile.y}${tile.z === null ? '' : `  z${tile.z}`}`
+                : `~${tile.x}, ${tile.y}`;
         }
 
         // Why an adopted road broke, where it broke. The reason comes from the shard's own walker,
