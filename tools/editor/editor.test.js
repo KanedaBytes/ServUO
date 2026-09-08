@@ -946,12 +946,57 @@ function stubArtView(scale = 22) {
         scale,
         isArt: true,
         facet: { name: 'Trammel', width: 7168, height: 4096 },
+
+        // LATTICE, like the real one: iso.isoCorner, which is the anchor lifted by the land art's
+        // 44 pixels. The -44 is the whole of the fix this stub used to hide - without it,
+        // `toScreen(x + 0.5, y + 0.5)` is the tile SOUTH-EAST of (x, y).
         toScreen: (x, y, z = 0) => [
             ((x - y) * 22 - (1475 - 1645) * 22) * s + 600,
-            ((x + y) * 22 - z * 4 - (1475 + 1645) * 22) * s + 400
+            ((x + y) * 22 - z * 4 - 44 - (1475 + 1645) * 22) * s + 400
         ]
     };
 }
+
+test('a marker for a tile lands in the middle of that tile, in both projections', () => {
+    // The regression. `toScreen(x + 0.5, y + 0.5)` has to be the middle of tile (x, y) in art as
+    // well as in radar, because every layer in the editor writes it that way. It was the middle of
+    // (x + 1, y + 1) - forty-four pixels low, one tile along (x + y) - because toScreen projected
+    // the SPRITE ANCHOR, which hangs 22 pixels below the tile it belongs to.
+    const art = stubArtView();
+
+    // A tile's middle is equidistant from the middles of its four diagonal neighbours, and sits
+    // exactly half way between the ones north-west and south-east of it. Nothing about that is true
+    // of a point half a tile off, so this pins the offset without restating the formula.
+    const here = art.toScreen(1424.5, 1557.5, 30);
+    const nw = art.toScreen(1423.5, 1556.5, 30);
+    const se = art.toScreen(1425.5, 1558.5, 30);
+
+    assert.strictEqual(here[1] - nw[1], se[1] - here[1], 'the middle is not centred between its neighbours');
+    assert.strictEqual(here[1], (nw[1] + se[1]) / 2);
+
+    // And one tile in x and one in y at once moves it by exactly one land tile's height, which is
+    // the amount the whole editor was out by.
+    assert.strictEqual(se[1] - here[1], 44);
+});
+
+test('a shape only keeps a click from a bot when it is something you could have dragged', () => {
+    // A bot beats a line or an area and loses to a point or a drag handle. The rule that shipped
+    // first was "only when nothing else is hit", and `brit-town` is a 324x279 zone covering the
+    // whole of Britain - so every click inside it hit the zone body and no bot in the town was
+    // clickable at all. `mode` cannot decide this alone: a point marker and a rect interior both
+    // answer 'move'.
+    const point = { kind: 'point' };
+    const rect = { kind: 'rect' };
+    const line = { kind: 'polyline' };
+
+    assert.strictEqual(shapes.grabsOverEntity(null), false, 'nothing hit');
+    assert.strictEqual(shapes.grabsOverEntity({ shape: rect, mode: 'move' }), false, 'a zone body');
+    assert.strictEqual(shapes.grabsOverEntity({ shape: line, mode: 'body' }), false, 'an edge line');
+
+    assert.strictEqual(shapes.grabsOverEntity({ shape: point, mode: 'move' }), true, 'a waypoint');
+    assert.strictEqual(shapes.grabsOverEntity({ shape: rect, mode: 'resize' }), true, 'a corner handle');
+    assert.strictEqual(shapes.grabsOverEntity({ shape: line, mode: 'node' }), true, 'a polyline node');
+});
 
 test('a live bot is picked at its own Z in art, and nowhere near the ground plane', () => {
     // Bots have always DRAWN at their own Z; what they could not do is be clicked at all, in either

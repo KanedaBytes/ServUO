@@ -213,12 +213,25 @@ export class View {
     // ---- the projection ------------------------------------------------------------------------
 
     /**
-     * Z is honoured in the art projection and ignored in radar, exactly as the two maps do. A
-     * caller with no Z passes none and gets the ground plane.
+     * A WORLD-SPACE POINT ON THE LATTICE, in screen pixels. Z is honoured in art and ignored in
+     * radar, exactly as the two maps do.
+     *
+     * LATTICE, NOT THE SPRITE ANCHOR - `iso.isoCorner`, not `iso.worldToIso`. The point (x, y) is
+     * the corner shared by four tiles and tile (x, y) spans (x, y) to (x + 1, y + 1), so `+ 0.5`
+     * centres a marker in its tile in BOTH projections and a rect's corners are its corners in
+     * both. That agreement is the whole point: every caller in the editor passes either a lattice
+     * corner or a tile centre, and not one of them wants the anchor.
+     *
+     * It used `worldToIso` until it was measured against the client. The anchor is a sprite's
+     * bottom centre, 22 pixels BELOW the middle of the tile it belongs to, so `toScreen(x + 0.5,
+     * y + 0.5)` came out 44 pixels low - one tile along (x + y), which is one tile in x and one in
+     * y at once. Every waypoint placed on the art landed a tile south-east of the diamond that was
+     * clicked, and every live bot was drawn a tile off the ground it was standing on. See the note
+     * at the top of js/iso.js for the ClassicUO citations that settle it.
      */
     toScreen(x, y, z = 0) {
         if (this.isArt) {
-            const { ix, iy } = iso.worldToIso(x, y, z);
+            const { ix, iy } = iso.isoCorner(x, y, z);
             return this.isoToScreen(ix, iy);
         }
 
@@ -240,7 +253,9 @@ export class View {
             const centre = iso.worldToIso(this.centerX, this.centerY, 0);
             const ix = (px - this.canvas.clientWidth / 2) / s + centre.ix;
             const iy = (py - this.canvas.clientHeight / 2) / s + centre.iy;
-            const { x, y } = iso.isoToWorld(ix, iy, 0);
+
+            // isoToCorner, not isoToWorld: this has to undo `toScreen`, and `toScreen` is lattice.
+            const { x, y } = iso.isoToCorner(ix, iy, 0);
 
             return [x, y];
         }

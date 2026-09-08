@@ -738,6 +738,26 @@ export function entityAt(view, entities, worldX, worldY, screenX = null, screenY
 }
 
 /**
+ * Whether a shape hit should keep a click away from a live entity underneath it.
+ *
+ * A BOT BEATS A LINE OR AN AREA AND LOSES TO A POINT OR A DRAG HANDLE. Entities are drawn last,
+ * over everything, so picking what is visually on top is the least surprising rule - but a waypoint
+ * under a wandering bot has to stay draggable, or a bot makes the map read-only wherever it goes.
+ *
+ * The rule that shipped first was "only when nothing else is hit", which sounded conservative and
+ * made bots unclickable in the one place there are any: `brit-town` is a 324x279 zone covering the
+ * whole of Britain, so every click inside it hits the zone's body first. Over 120 positions along
+ * real roads, six were reachable.
+ *
+ * `mode` alone cannot decide it - tier 1 (a point marker) and tier 4 (a rect or poly interior) both
+ * answer 'move' - so the shape's kind is what separates a marker from an area.
+ */
+export function grabsOverEntity(hit) {
+    return Boolean(hit)
+        && (hit.mode === 'resize' || hit.mode === 'node' || hit.shape.kind === 'point');
+}
+
+/**
  * What is under the cursor, nearest first. Handles beat bodies so a corner is always grabbable
  * even when it sits inside another shape.
  */

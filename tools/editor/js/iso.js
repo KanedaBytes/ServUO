@@ -28,6 +28,61 @@
 //
 // The real answer is a lookup: `canvasToTile` below turns a canvas pixel into a tile and a pixel
 // inside it, and js/pickmap.js reads what the renderer recorded there while it was drawing.
+//
+// ------------------------------------------------------------------------------------------------
+// WHERE A TILE ACTUALLY IS: THE ANCHOR IS NOT THE CENTRE
+// ------------------------------------------------------------------------------------------------
+//
+// This distinction cost every waypoint placed in the art view one tile in x AND one tile in y, and
+// it is worth being exact about because the two points are only 44 pixels apart and everything
+// still looks plausible when they are confused.
+//
+//     A(x, y, z) = ((x - y) * 22, (x + y) * 22 - z * 4)
+//
+// A IS THE SPRITE ANCHOR - the point a sprite hangs from by its BOTTOM CENTRE (Ultima/Multis.cs:
+// 505-507, `px -= bmp.Width / 2; py -= bmp.Height`). It is `worldToIso`. For a 44x44 land tile it
+// is the diamond's SOUTH VERTEX, so it is 22 pixels BELOW the middle of the tile it belongs to.
+//
+// THE CENTRE of tile (x, y) is therefore A - (0, 22), which is `isoCorner(x + 0.5, y + 0.5, z)`.
+//
+// The client agrees, and this is the citation rather than a guess. ClassicUO, camera removed:
+//
+//   GameObject.UpdateRealScreenPosition
+//       RealScreenPosition.X = ((X - Y) * 22) - offsetX - 22;
+//       RealScreenPosition.Y = ((X + Y) * 22 - (Z << 2)) - offsetY - 22;
+//
+//   LandView.Draw            batcher.Draw(artInfo.Texture, new Vector2(posX, posY), ..., origin
+//                            Vector2.Zero) - so RSP is the 44x44 art's TOP-LEFT, and the land
+//                            diamond's centre is RSP + (22, 22) = A.
+//
+//   View.DrawStaticAnimated  index.Width  = (UV.Width >> 1) - 22;   x -= index.Width;
+//                            index.Height =  UV.Height      - 44;   y -= index.Height;
+//                            - so a static's sprite lands with its BOTTOM CENTRE at
+//                            RSP + (22, 44) = A + (0, 22).
+//
+//   MobileView.Draw          posY -= 3; drawX += 22; drawY += 22; then the sprite is placed by
+//                            `y -= spriteInfo.UV.Height + spriteInfo.Center.Y` - so a mobile's
+//                            FEET land at A - (0, 3), which is the land diamond's centre give or
+//                            take the three-pixel baseline of the mobile art.
+//
+// So in the client: land centre at A, a static's foot 22 below it, a mobile's feet on the land
+// centre. THE RELATIVE GEOMETRY IS WHAT MATTERS, and ours matches it exactly - this renderer draws
+// land with its bottom on A (centre A - 22) and a static's foot on A, which is the same 22-pixel
+// gap. The whole picture sits 22 pixels higher than ClassicUO's, and that is camera placement: it
+// is unobservable, and no pixel moves relative to any other. A 44x44 FLOOR STATIC tiles exactly
+// with land in both, which is the invariant that pins it.
+//
+// WHAT THIS FILE THEREFORE MEANS BY A COORDINATE. `worldToIso` is the anchor and is for hanging
+// sprites. Everything else - every marker, every label, every rect corner, every entity, every hit
+// test - works in LATTICE space, where the point (x, y) is the corner shared by four tiles and tile
+// (x, y) spans (x, y) to (x + 1, y + 1). `isoCorner` is that mapping and takes fractional
+// coordinates, so `isoCorner(x + 0.5, y + 0.5, z)` is a tile's middle. `view.toScreen` uses it, and
+// that makes the two projections agree: `toScreen(x, y)` is the same world point in radar and in
+// art, and `+ 0.5` centres in both.
+//
+// The bug this replaces: `toScreen` used `worldToIso`, so `toScreen(x + 0.5, y + 0.5)` was A + 22
+// rather than A - 22. Forty-four pixels low, which is one tile along (x + y) - one tile in x and
+// one in y at once, exactly what the client reported against every waypoint placed on the art.
 
 export const HALF_WIDTH = 22;
 export const HALF_HEIGHT = 22;
@@ -73,8 +128,13 @@ export function isoToWorld(ix, iy, z = 0) {
 }
 
 /**
- * A GRID CORNER, as opposed to a tile. Land is stretched between its four corner heights, and a
- * corner is a point on the lattice between tiles rather than a tile of its own.
+ * A POINT ON THE WORLD LATTICE, in iso pixels. The editor's one meaning for a coordinate.
+ *
+ * The lattice point (x, y) is the corner shared by four tiles, and tile (x, y) spans (x, y) to
+ * (x + 1, y + 1) - the same four points Server/Map.cs:552-592 samples for GetAverageZ. Integer
+ * arguments give a grid corner, which is what land is stretched between; FRACTIONAL ARGUMENTS ARE
+ * MEANT TO WORK, and `isoCorner(x + 0.5, y + 0.5, z)` is the middle of tile (x, y). See the note
+ * at the top of this file on why that is 44 pixels above `worldToIso(x + 0.5, y + 0.5, z)`.
  *
  * It is the anchor formula applied to the corner's own cell and lifted one land tile. The lift is
  * what reconciles the two conventions: `worldToIso` gives the point a SPRITE hangs from - its
@@ -96,6 +156,28 @@ export function isoCorner(cornerX, cornerY, cornerZ = 0) {
         ix: (cornerX - cornerY) * HALF_WIDTH,
         iy: (cornerX + cornerY) * HALF_HEIGHT - cornerZ * Z_STEP - LAND_ART_SIZE
     };
+}
+
+/**
+ * The middle of tile (x, y) at height z - where a marker for that tile goes, and where a mobile
+ * standing on it has its feet.
+ *
+ * Named because the alternative is `+ 0.5` scattered across six files, which is what it was, and
+ * a half-tile idiom that means one thing in radar and another in art is how the two came apart.
+ */
+export function tileCentre(x, y, z = 0) {
+    return isoCorner(x + 0.5, y + 0.5, z);
+}
+
+/**
+ * The lattice point a projected iso pixel came from, at an assumed z - the inverse of `isoCorner`.
+ *
+ * `isoToWorld` inverts `worldToIso`, which is the ANCHOR, so it answers 22 pixels out for anything
+ * working in lattice space. The whole reason `view.toWorld` exists is to undo `view.toScreen`, and
+ * `toScreen` is lattice, so it has to undo the lattice mapping.
+ */
+export function isoToCorner(ix, iy, z = 0) {
+    return isoToWorld(ix, iy + LAND_ART_SIZE, z);
 }
 
 /**

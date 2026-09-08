@@ -158,6 +158,93 @@ test('a sloped tile is a quad with three distinct x values and four distinct y v
     assert.strictEqual(quad.north.ix - quad.west.ix, iso.HALF_WIDTH);
 });
 
+// --- the anchor is not the centre -----------------------------------------------------------------
+
+test("a tile's centre is the centroid of the quad the renderer draws for it", () => {
+    // THE PIN THAT WOULD HAVE CAUGHT IT. Every marker, label, entity and hit test in the editor asks
+    // where tile (x, y) is; the renderer answers by drawing a diamond there. If those two disagree
+    // the picture still looks entirely plausible - a waypoint sits neatly in the middle of A tile,
+    // just not the one it names - and the only way to notice is to stand in the client and read the
+    // coordinates back, which is how this was found.
+    for (const [x, y, z] of [[1424, 1557, 30], [1475, 1645, 20], [0, 0, 0], [7167, 4095, -40]]) {
+        const quad = iso.landQuad(x, y, z, z, z, z);
+        const corners = [quad.north, quad.east, quad.south, quad.west];
+
+        const centroid = {
+            ix: corners.reduce((sum, c) => sum + c.ix, 0) / 4,
+            iy: corners.reduce((sum, c) => sum + c.iy, 0) / 4
+        };
+
+        assert.deepStrictEqual(iso.tileCentre(x, y, z), centroid, `tile ${x},${y} z${z}`);
+    }
+});
+
+test('the sprite anchor is 22 pixels below the centre of the tile it belongs to', () => {
+    // worldToIso is where a sprite HANGS - its bottom centre, Ultima/Multis.cs:505-507 - which for a
+    // 44x44 land tile is the diamond's south vertex. Confusing it with the middle is a 22-pixel
+    // error; confusing `worldToIso(x + 0.5, y + 0.5)` with the middle is a 44-pixel one, and 44
+    // pixels is a whole tile along (x + y).
+    const anchor = iso.worldToIso(1424, 1557, 30);
+    const centre = iso.tileCentre(1424, 1557, 30);
+
+    assert.strictEqual(anchor.ix, centre.ix, 'the anchor is directly below the centre, not beside it');
+    assert.strictEqual(anchor.iy - centre.iy, iso.HALF_HEIGHT);
+
+    // And the south vertex of the tile's own quad IS the anchor, which is the same statement.
+    assert.deepStrictEqual(iso.landQuad(1424, 1557, 30, 30, 30, 30).south, anchor);
+});
+
+test('the half-tile idiom moved a marker one tile in x AND one in y, which is the bug', () => {
+    // What `toScreen` did before it was measured against the client: worldToIso(x + .5, y + .5).
+    // The difference is not a rounding error, it is exactly the tile south-east of the right one -
+    // "editor 1425,1555 / client 1426,1556", three times over.
+    const [x, y, z] = [1425, 1555, 30];
+
+    const wrong = iso.worldToIso(x + 0.5, y + 0.5, z);
+    const right = iso.tileCentre(x, y, z);
+
+    assert.strictEqual(wrong.iy - right.iy, iso.LAND_ART_SIZE, 'forty-four pixels low');
+
+    // And 44 pixels low along (x + y) is precisely the neighbour at (x + 1, y + 1).
+    assert.deepStrictEqual(wrong, iso.tileCentre(x + 1, y + 1, z));
+});
+
+test('the lattice inverse recovers the point the lattice mapping was given', () => {
+    // view.toWorld has to undo view.toScreen, and toScreen is lattice - so isoToWorld, which
+    // inverts the ANCHOR, is 22 pixels wrong for this and isoToCorner is what the camera uses.
+    for (const [x, y, z] of [[1424, 1557, 0], [1475.5, 1645.5, 0], [0, 0, 0]]) {
+        const { ix, iy } = iso.isoCorner(x, y, z);
+        const back = iso.isoToCorner(ix, iy, z);
+
+        assert.ok(Math.abs(back.x - x) < 1e-9, `x ${back.x} != ${x}`);
+        assert.ok(Math.abs(back.y - y) < 1e-9, `y ${back.y} != ${y}`);
+    }
+});
+
+test('ClassicUO puts a static 22 pixels below the land centre, and so do we', () => {
+    // The citation is in the header of js/iso.js. What matters is the RELATIVE geometry, because a
+    // uniform shift of everything is only where the camera is - and this is the number that has to
+    // match, or furniture floats half a tile off the floor it stands on.
+    //
+    //   ClassicUO   land diamond centre  RSP + (22, 22)  = A
+    //               static bottom centre RSP + (22, 44)  = A + (0, 22)
+    //   ours        land diamond centre  A - (0, 22)     (Blit hangs the 44x44 art by its bottom)
+    //               static bottom centre A
+    //
+    // Both: 22. And a 44x44 FLOOR static therefore tiles exactly with land in both, which is the
+    // invariant that makes the whole thing checkable without a screenshot.
+    const [x, y, z] = [1424, 1557, 30];
+
+    const ourLandCentre = iso.tileCentre(x, y, z);
+    const ourStaticFoot = iso.worldToIso(x, y, z);
+
+    assert.strictEqual(ourStaticFoot.iy - ourLandCentre.iy, 22);
+
+    // A floor static is 44x44 like land, so its own centre is its foot lifted by half its height -
+    // and that has to be the land centre exactly, or floors and ground would not tile.
+    assert.strictEqual(ourStaticFoot.iy - iso.LAND_ART_SIZE / 2, ourLandCentre.iy);
+});
+
 // --- the grid -------------------------------------------------------------------------------------
 
 test('the whole facet lands inside the canvas, sprite bleed included', () => {

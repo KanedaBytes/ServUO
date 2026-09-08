@@ -680,6 +680,57 @@ Two things follow, and they are why this was a small change rather than a rewrit
 The camera stays in world space, so `centerOn`, `goTo`, `fitAll`, the Britain button and the
 filter's jump-to-shape all work unchanged.
 
+### The anchor is not the centre
+
+The formula above gives the **sprite anchor** — where a sprite hangs by its bottom centre. For a
+44×44 land tile that is the diamond's *south vertex*, so it is **22 pixels below the middle of the
+tile it belongs to**. Confusing the two is a 22-pixel error; confusing `worldToIso(x + 0.5, y + 0.5)`
+with the middle is a 44-pixel one, and 44 pixels along `(x + y)` is one whole tile in x *and* one in
+y at once.
+
+That was the bug, and it was invisible from inside the editor: a waypoint sat neatly in the middle
+of *a* tile, just not the one it named. It took standing in the client on the placed tile and
+reading the coordinates back — editor `1425,1555`, client `1426,1556`, three times over.
+
+**The client settles it.** ClassicUO, camera removed, with `A(x,y,z) = ((x-y)*22, (x+y)*22 - z*4)`:
+
+| ClassicUO | | lands at |
+| --- | --- | --- |
+| `GameObject.UpdateRealScreenPosition` | `RSP = ((X-Y)*22 - 22, (X+Y)*22 - (Z<<2) - 22)` | `A - (22, 22)` |
+| `LandView.Draw` | `batcher.Draw(art, new Vector2(posX, posY), …, Vector2.Zero, …)` — origin zero, so RSP is the 44×44 art's **top-left** | land diamond centre at **`A`** |
+| `View.DrawStaticAnimated` | `index.Width = (UV.Width >> 1) - 22; x -= index.Width;`<br>`index.Height = UV.Height - 44; y -= index.Height;` | static's **bottom centre** at `RSP + (22, 44)` = **`A + (0, 22)`** |
+| `MobileView.Draw` | `posY -= 3; drawX += 22; drawY += 22;` then `y -= UV.Height + Center.Y` | mobile's **feet** at `A - (0, 3)` — the land centre |
+
+So in the client: **a mobile's feet are on the centre of its tile's land diamond, and a static's
+base sits 22 pixels below that.**
+
+**Our renderer matches it, and no pixel had to move.** `Blit` hangs every sprite by its bottom
+centre on `A`, so land (44×44) has its centre at `A - 22` and a static's base at `A` — the *same*
+22-pixel gap. The whole picture sits 22 pixels higher than ClassicUO's, which is camera placement
+and unobservable. The invariant that pins it: a 44×44 **floor static tiles exactly with land** in
+both, which it must, or every wooden floor in Britain would sit half a tile off its own ground.
+
+So the renderer was never wrong. What was wrong was `view.toScreen`, which projected the anchor:
+
+```
+toScreen(x, y, z)   was  iso.worldToIso   the sprite anchor      A
+                    now  iso.isoCorner    the world lattice      A - (0, 22)
+```
+
+**One meaning for a coordinate, in both projections.** `toScreen(x, y)` is the lattice point (x, y)
+— the corner shared by four tiles — and tile (x, y) spans `(x, y)` to `(x+1, y+1)`, which is the
+same four points `Server/Map.cs:552-592` samples for `GetAverageZ`. So `+ 0.5` centres a marker in
+its tile in radar *and* in art, and a rect's corners are its corners in both. Every caller in the
+editor already passed either a lattice corner or a `+ 0.5` centre; not one wanted the anchor, which
+is why the fix is one line and why the bug was perfectly uniform.
+
+`iso.tileCentre(x, y, z)` names the common case, and `iso.isoToCorner` is the inverse `view.toWorld`
+needs — `isoToWorld` inverts the *anchor* and is 22 pixels out for anything in lattice space.
+
+`iso.test.js` pins it against the thing the renderer actually draws: **a tile's centre is the
+centroid of the four corners of `landQuad(x, y, …)`**. That assertion needs no renderer, no
+screenshot and no client, and it is the one that would have caught this.
+
 ### The pick map, and why the inverse stopped mattering
 
 **The isometric inverse is not a function.** A screen pixel names a world tile only once you assume
@@ -822,6 +873,15 @@ the authored one will not fit. With no renderer it still places, at `z: 0`, and 
 - **A live bot's route at its own height.** The dot is drawn at the bot's Z and is clickable there;
   the trail behind it is a flat `[x, y, …]` list in the snapshot with no Z per step, and adding one
   would triple the payload. So a bot walks above its own route on a hillside.
+
+**Clicking a bot** opens its inspector, and the rule is that **a bot beats a line or an area and
+loses to a point or a drag handle** (`shapes.grabsOverEntity`). Entities are drawn last, over
+everything, so picking what is visually on top is the least surprising rule — but a waypoint under a
+wandering bot has to stay draggable, or a bot makes the map read-only wherever it goes. The first
+version checked for a bot only when *nothing else* was hit, which sounded conservative and made bots
+unclickable in the one place there are any: `brit-town` is a 324×279 zone covering the whole of
+Britain, so every click inside it hit the zone's body first. Measured over 120 positions along real
+roads: **six reachable before, 119 after.**
 
 ## Coverage-gap overlay
 
