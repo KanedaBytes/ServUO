@@ -18,9 +18,16 @@ namespace Server.Custom.MapExport
     ///
     /// The protocol is one line in, one line out, over stdin and stdout:
     ///
-    ///     &lt;- {"ready":true,"version":1,...}          the handshake, once
-    ///     -&gt; tile &lt;floor&gt; &lt;level&gt; &lt;x&gt; &lt;y&gt;
-    ///     &lt;- ok &lt;ms&gt; &lt;bytes&gt; &lt;path&gt;   or   err &lt;message&gt;
+    ///     &lt;- {"ready":true,"version":2,...}          the handshake, once
+    ///     -&gt; items &lt;path&gt;
+    ///     &lt;- ok &lt;count&gt; &lt;id&gt;               or   err &lt;message&gt;
+    ///     -&gt; tile &lt;layer&gt; &lt;floor&gt; &lt;level&gt; &lt;x&gt; &lt;y&gt;
+    ///     &lt;- ok &lt;ms&gt; &lt;bytes&gt; &lt;path&gt;       or   empty   or   err &lt;message&gt;
+    ///
+    /// `layer` is `map` - the client's land and statics, cached under the renderer version and kept
+    /// forever - or `items`, the shard's own furniture, cached under the SNAPSHOT's identity so a
+    /// re-decorate throws away seconds of work rather than minutes. `empty` is the answer for an
+    /// item tile with nothing in it, which is most of them, and nothing is written to disk for it.
     ///
     /// Requests are answered in order and one at a time, which is not a simplification: Server's
     /// TileMatrix keeps its block buffers in static fields, so two renders at once corrupt each
@@ -36,22 +43,78 @@ namespace Server.Custom.MapExport
         /// </summary>
         public const int Version = 2;
 
+        /// <summary>The map layer's directory. Items live under `items-&lt;snapshot id&gt;` beside it.</summary>
+        public const string MapLayer = "map";
+
         public static string CacheRoot(string tilesRoot, string facet)
         {
             return Path.Combine(tilesRoot, "iso", facet, "v" + Version.ToString(CultureInfo.InvariantCulture));
         }
 
-        public static string TilePath(string tilesRoot, string facet, Floor floor, int level, int x, int y)
+        /// <summary>
+        /// The directory a layer's tiles live in. `map` is constant; an item layer carries the
+        /// snapshot's own id, so a new snapshot is a new directory and a stale render can never be
+        /// served as a current one.
+        /// </summary>
+        public static string LayerName(Layer layer, WorldItems items)
+        {
+            return layer == Layer.Map ? MapLayer : "items-" + items.Id;
+        }
+
+        public static string TilePath(
+            string tilesRoot, string facet, string layer, Floor floor, int level, int x, int y)
         {
             return Path.Combine(
                 CacheRoot(tilesRoot, facet),
+                layer,
                 FloorRules.Name(floor),
                 level.ToString(CultureInfo.InvariantCulture),
                 x.ToString(CultureInfo.InvariantCulture),
                 y.ToString(CultureInfo.InvariantCulture) + ".png");
         }
 
-        public static int Serve(IsoTileRenderer renderer, string tilesRoot, string facet, FloorRules rules)
+        /// <summary>
+        /// Deletes item layers that are not the current snapshot's.
+        ///
+        /// A snapshot is thrown away wholesale rather than invalidated, so without this every
+        /// re-decorate leaves a full tree behind and the cache grows without bound. The map layer
+        /// is never touched: it is the expensive one and it is still correct.
+        /// </summary>
+        public static void SweepStaleItemLayers(
+            string tilesRoot, string facet, WorldItems items, Action<string> log)
+        {
+            string root = CacheRoot(tilesRoot, facet);
+
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
+            string keep = items.Any ? LayerName(Layer.Items, items) : null;
+
+            foreach (string directory in Directory.GetDirectories(root))
+            {
+                string name = Path.GetFileName(directory);
+
+                if (!name.StartsWith("items-", StringComparison.Ordinal) || name == keep)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Directory.Delete(directory, true);
+                    log("  swept stale item layer " + name);
+                }
+                catch (Exception ex)
+                {
+                    log("  could not sweep " + name + ": " + ex.Message);
+                }
+            }
+        }
+
+        public static int Serve(
+            IsoTileRenderer renderer, string tilesRoot, string facet, FloorRules rules, int facetHeight)
         {
             Console.Out.Write(Handshake(renderer, facet, rules));
             Console.Out.Write('\n');
@@ -73,7 +136,7 @@ namespace Server.Custom.MapExport
                     break;
                 }
 
-                Console.Out.Write(Handle(renderer, tilesRoot, facet, line));
+                Console.Out.Write(Handle(renderer, tilesRoot, facet, facetHeight, line));
                 Console.Out.Write('\n');
                 Console.Out.Flush();
             }
@@ -81,36 +144,71 @@ namespace Server.Custom.MapExport
             return 0;
         }
 
-        private static string Handle(IsoTileRenderer renderer, string tilesRoot, string facet, string line)
+        private static string Handle(
+            IsoTileRenderer renderer, string tilesRoot, string facet, int facetHeight, string line)
         {
             string[] parts = line.Split(' ');
 
-            if (parts.Length != 5 || parts[0] != "tile")
+            if (parts.Length == 2 && parts[0] == "items")
+            {
+                return LoadItems(renderer, tilesRoot, facet, facetHeight, parts[1]);
+            }
+
+            if (parts.Length != 6 || parts[0] != "tile")
             {
                 return "err bad request: " + line;
+            }
+
+            Layer layer;
+
+            if (parts[1] == "map")
+            {
+                layer = Layer.Map;
+            }
+            else if (parts[1] == "items")
+            {
+                layer = Layer.Items;
+            }
+            else
+            {
+                return "err unknown layer: " + parts[1];
+            }
+
+            if (layer == Layer.Items && !renderer.Items.Any)
+            {
+                return "err no world-item snapshot is loaded";
             }
 
             Floor floor;
             int level, x, y;
 
-            if (!FloorRules.TryParse(parts[1], out floor))
+            if (!FloorRules.TryParse(parts[2], out floor))
             {
-                return "err unknown floor: " + parts[1];
+                return "err unknown floor: " + parts[2];
             }
 
-            if (!Int32.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out level) ||
-                !Int32.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out x) ||
-                !Int32.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out y))
+            if (!Int32.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out level) ||
+                !Int32.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out x) ||
+                !Int32.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out y))
             {
                 return "err bad coordinates: " + line;
             }
 
             try
             {
-                string path = TilePath(tilesRoot, facet, floor, level, x, y);
-
                 var watch = Stopwatch.StartNew();
-                byte[] pixels = renderer.Render(level, x, y, floor);
+                byte[] pixels = renderer.Render(layer, level, x, y, floor);
+
+                if (pixels == null)
+                {
+                    // No item can reach this tile. Answered rather than written: tens of thousands
+                    // of identical transparent PNGs is not a cache, it is litter.
+                    return "empty";
+                }
+
+                string path = TilePath(
+                    tilesRoot, facet, LayerName(layer, renderer.Items), floor, level, x, y);
+
                 PngWriter.Write(path, pixels, renderer.TileSize, renderer.TileSize, 4);
                 watch.Stop();
 
@@ -128,6 +226,23 @@ namespace Server.Custom.MapExport
                 Console.Error.WriteLine(ex);
                 return "err " + ex.Message.Replace('\n', ' ').Replace('\r', ' ');
             }
+        }
+
+        private static string LoadItems(
+            IsoTileRenderer renderer, string tilesRoot, string facet, int facetHeight, string path)
+        {
+            string error;
+            WorldItems items = WorldItems.Load(path, facet, facetHeight, out error);
+
+            if (error != null)
+            {
+                return "err " + error;
+            }
+
+            renderer.Items = items;
+            SweepStaleItemLayers(tilesRoot, facet, items, Console.Error.WriteLine);
+
+            return String.Format(CultureInfo.InvariantCulture, "ok {0} {1}", items.Count, items.Id);
         }
 
         /// <summary>
@@ -351,7 +466,7 @@ namespace Server.Custom.MapExport
                     {
                         for (int ty = tileY0; ty <= tileY1; ty++)
                         {
-                            string path = TilePath(tilesRoot, facet, floor, level, tx, ty);
+                            string path = TilePath(tilesRoot, facet, MapLayer, floor, level, tx, ty);
 
                             if (File.Exists(path))
                             {

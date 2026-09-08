@@ -155,7 +155,7 @@ namespace Server.Custom.MapExport
 
                 if (serve)
                 {
-                    return TileServer.Serve(renderer, output, name, rules);
+                    return TileServer.Serve(renderer, output, name, rules, height);
                 }
 
                 log("Client:  " + client);

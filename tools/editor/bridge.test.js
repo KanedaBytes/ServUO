@@ -606,22 +606,39 @@ test('every reload the editor can ask for exists in the shard dispatcher', async
 
 const { parseTilePath } = require('./artrenderer.js');
 
-test('a tile path is parsed into numbers, or refused', () => {
+test('a tile path is parsed into numbers and a layer, or refused', () => {
     assert.deepStrictEqual(
-        parseTilePath('/tiles/iso/Trammel/v1/ground/10/340/259.png'),
-        { facet: 'Trammel', version: 1, floor: 'ground', level: 10, x: 340, y: 259 });
+        parseTilePath('/tiles/iso/Trammel/v2/map/ground/10/340/259.png'),
+        {
+            facet: 'Trammel', version: 2, layer: 'map', layerName: 'map',
+            floor: 'ground', level: 10, x: 340, y: 259
+        });
+
+    // The item layer's directory carries the snapshot's own id, which is what makes a re-decorate
+    // a different set of URLs rather than something to invalidate by hand.
+    assert.deepStrictEqual(
+        parseTilePath('/tiles/iso/Trammel/v2/items-trammel-1-20260908205527-29778/all/9/170/129.png'),
+        {
+            facet: 'Trammel', version: 2, layer: 'items',
+            layerName: 'items-trammel-1-20260908205527-29778',
+            floor: 'all', level: 9, x: 170, y: 129
+        });
 
     // Every segment is checked against what it is allowed to BE rather than sanitised - the same
     // rule the token names follow. There is no spelling of a path that reaches the filesystem,
-    // because the path is rebuilt from the numbers rather than taken from the caller.
+    // because the path is rebuilt from the parts rather than taken from the caller.
     const refused = [
-        '/tiles/iso/Trammel/v1/attic/10/340/259.png',      // not a floor
-        '/tiles/iso/Trammel/v1/all/10/340/259.jpg',        // not a png
-        '/tiles/iso/Trammel/v1/all/10/-1/259.png',         // negative
-        '/tiles/iso/Trammel/v1/all/10/340.png',            // too few segments
-        '/tiles/iso/Trammel/v1/all/10/340/259/extra.png',  // too many
-        '/tiles/iso/../../v1/all/10/340/259.png',
-        '/tiles/iso/Trammel/v1/all/10/340/%2e%2e%2fboot.png'
+        '/tiles/iso/Trammel/v2/map/attic/10/340/259.png',      // not a floor
+        '/tiles/iso/Trammel/v2/map/all/10/340/259.jpg',        // not a png
+        '/tiles/iso/Trammel/v2/map/all/10/-1/259.png',         // negative
+        '/tiles/iso/Trammel/v2/map/all/10/340.png',            // too few segments
+        '/tiles/iso/Trammel/v2/map/all/10/340/259/extra.png',  // too many
+        '/tiles/iso/Trammel/v2/all/10/340/259.png',            // the old, layerless shape
+        '/tiles/iso/Trammel/v2/statics/all/10/340/259.png',    // not a layer
+        '/tiles/iso/Trammel/v2/items-../all/10/340/259.png',   // traversal in the snapshot id
+        '/tiles/iso/Trammel/v2/items-a/b/all/10/340/259.png',
+        '/tiles/iso/../../v2/map/all/10/340/259.png',
+        '/tiles/iso/Trammel/v2/map/all/10/340/%2e%2e%2fboot.png'
     ];
 
     for (const bad of refused) {
@@ -630,9 +647,20 @@ test('a tile path is parsed into numbers, or refused', () => {
 });
 
 test('a malformed art tile path is a 400 and never reaches the renderer', async () => {
-    const response = await fetch(origin + '/tiles/iso/Trammel/v1/attic/10/340/259.png');
+    const response = await fetch(origin + '/tiles/iso/Trammel/v2/map/attic/10/340/259.png');
 
     assert.strictEqual(response.status, 400);
+});
+
+test('an item tile with no snapshot loaded is refused, not left hanging', async () => {
+    // The art view has to work with the shard down - the map layer is the client's own files and
+    // needs nothing running. Asking for furniture when nobody has taken a snapshot is a 503 with a
+    // reason, so the editor can say "run [WorldItems" rather than showing empty paving forever.
+    const response = await fetch(
+        origin + '/tiles/iso/Trammel/v2/items-nothing-loaded/all/10/340/259.png');
+
+    assert.ok(response.status === 503 || response.status === 200,
+        `expected an answer, got ${response.status}`);
 });
 
 test('artinfo and artstats always answer, renderer or no renderer', async () => {

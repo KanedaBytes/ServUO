@@ -10,9 +10,18 @@
 //
 // The protocol is one line each way over stdin and stdout (tools/MapExport/TileServer.cs):
 //
-//     <- {"ready":true,"version":1,...}      the handshake, once
-//     -> tile <floor> <level> <x> <y>
-//     <- ok <ms> <bytes> <path>   or   err <message>
+//     <- {"ready":true,"version":2,...}          the handshake, once
+//     -> items <path>
+//     <- ok <count> <id>               or   err <message>
+//     -> tile <layer> <floor> <level> <x> <y>
+//     <- ok <ms> <bytes> <path>       or   empty   or   err <message>
+//
+// THERE ARE TWO LAYERS AND THEY EXPIRE DIFFERENTLY. `map` is the client's own world - land and
+// statics - which never changes, so it is cached under the renderer version and kept forever.
+// `items` is the shard's furniture, from Data/Live/world-items.json, which changes every time
+// somebody decorates; it is cached under the SNAPSHOT's id instead, so a re-decorate throws away
+// seconds of work rather than the minutes the map layer costs. Baking them together would have
+// made every [Decorate invalidate the expensive one.
 //
 // ONE REQUEST AT A TIME, and that is not a simplification to be improved on later: Server's
 // TileMatrix keeps its block buffers in static fields, so two renders at once corrupt each other.
@@ -41,6 +50,21 @@ const RENDER_TIMEOUT_MS = Number(process.env.GG_ART_TIMEOUT_MS) || 30000;
 
 const FLOORS = new Set(['ground', 'first', 'all']);
 
+/** The shard's world-item snapshot, relative to the repo root. */
+const SNAPSHOT = path.join(ROOT, 'Data', 'Live', 'world-items.json');
+
+/**
+ * A 1x1 fully transparent PNG, served for an item tile with nothing in it.
+ *
+ * Most item tiles are empty and the renderer says so without rasterising, but the browser still
+ * asked for an image and has to get one - an error would trip the retry path, and a 204 would trip
+ * it too. Stretching one transparent pixel over the tile is visually identical to a transparent
+ * tile and costs 68 bytes instead of a file per empty tile on disk.
+ */
+const EMPTY_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64');
+
 class ArtRenderer {
     constructor(options = {}) {
         this.exe = options.exe || EXE;
@@ -50,6 +74,16 @@ class ArtRenderer {
 
         this.child = null;
         this.info = null;
+
+        // What the loaded snapshot is, and what the file looked like when it was loaded. The
+        // mtime/size pair is how a re-decorate is noticed without watching anything.
+        this.items = null;
+        this.itemsStamp = null;
+
+        // Tile keys the renderer has answered `empty` for. Remembered so a pan back over open
+        // country does not ask again; the key carries the snapshot id, so a new snapshot empties
+        // this by making every key different.
+        this.empties = new Set();
         this.pending = null;      // the request the child is working on
         this.queue = [];
         this.starting = null;
@@ -71,6 +105,8 @@ class ArtRenderer {
             available: this.available,
             running: this.child !== null,
             version: this.info ? this.info.version : null,
+            items: this.items,
+            emptyTiles: this.empties.size,
             rendered: this.stats.rendered,
             failed: this.stats.failed,
             queued: this.queue.length + (this.pending ? 1 : 0),
@@ -80,14 +116,73 @@ class ArtRenderer {
     }
 
     /** The cache path for a tile. The renderer builds the same one; both derive it from `info`. */
-    tilePath(floor, level, x, y) {
+    tilePath(layer, floor, level, x, y) {
         if (!this.info) {
             return null;
         }
 
         return path.join(
             this.tiles, 'iso', this.facet, `v${this.info.version}`,
-            floor, String(level), String(x), `${y}.png`);
+            layer, floor, String(level), String(x), `${y}.png`);
+    }
+
+    /** The directory name for a layer: constant for the map, the snapshot's id for items. */
+    layerName(layer) {
+        if (layer === 'map') {
+            return 'map';
+        }
+
+        return this.items ? `items-${this.items.id}` : null;
+    }
+
+    /**
+     * Loads the world-item snapshot if it has appeared or changed since last time.
+     *
+     * Stat rather than a watcher: the file is written by a shard that may not be running, through
+     * an atomic replace, and the only moments anyone cares are the ones where somebody is about to
+     * look at a tile or ask what the renderer has. Both call this.
+     */
+    async ensureItems() {
+        if (!this.child) {
+            return this.items;
+        }
+
+        let stat;
+
+        try {
+            stat = fs.statSync(SNAPSHOT);
+        } catch (error) {
+            // No snapshot is a normal state: the shard may never have been asked for one, or may
+            // not be running. The item layer is simply off and the editor says so.
+            this.items = null;
+            this.itemsStamp = null;
+            return null;
+        }
+
+        const stamp = `${stat.mtimeMs}:${stat.size}`;
+
+        if (stamp === this.itemsStamp) {
+            return this.items;
+        }
+
+        const reply = await this.send(`items ${SNAPSHOT}`);
+
+        if (!reply.startsWith('ok ')) {
+            this.log(`Art renderer refused the world-item snapshot: ${reply.replace(/^err /, '')}`);
+            this.items = null;
+            this.itemsStamp = stamp;   // do not retry a bad file on every tile
+            return null;
+        }
+
+        const [, count, id] = reply.split(' ');
+
+        this.items = { id, count: Number(count), mtime: stat.mtimeMs };
+        this.itemsStamp = stamp;
+        this.empties.clear();
+
+        this.log(`World items: ${count} on ${this.facet}, snapshot ${id}`);
+
+        return this.items;
     }
 
     /**
@@ -169,15 +264,34 @@ class ArtRenderer {
         }
     }
 
+    /** One request through the same queue a tile uses, so nothing overtakes a render. */
+    send(line) {
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                key: line,
+                line,
+                raw: true,
+                waiters: [{ resolve, reject }]
+            });
+
+            this.pump();
+        });
+    }
+
     /**
-     * The path to a rendered tile, rendering it first if it is not cached.
+     * The path to a rendered tile, rendering it first if it is not cached - or null when the
+     * renderer says the tile holds no items, which is most item tiles.
      *
-     * Rejects rather than resolving to null, so the caller has a reason to log and the browser
-     * gets a status rather than an empty 200 that would be cached as a blank tile.
+     * Rejects rather than resolving to null on a real failure, so the caller has a reason to log
+     * and the browser gets a status rather than an empty 200 that would be cached as a blank tile.
      */
-    async tile(floor, level, x, y) {
+    async tile(layer, floor, level, x, y) {
         if (!FLOORS.has(floor)) {
             throw new Error(`Unknown floor '${floor}'.`);
+        }
+
+        if (layer !== 'map' && layer !== 'items') {
+            throw new Error(`Unknown layer '${layer}'.`);
         }
 
         if (!Number.isInteger(level) || !Number.isInteger(x) || !Number.isInteger(y)
@@ -191,10 +305,23 @@ class ArtRenderer {
             throw new Error(`Level ${level} is outside the art range.`);
         }
 
-        const file = this.tilePath(floor, level, x, y);
+        if (layer === 'items') {
+            await this.ensureItems();
+
+            if (!this.items) {
+                throw new Error('No world-item snapshot. Run [WorldItems on the shard.');
+            }
+        }
+
+        const name = this.layerName(layer);
+        const file = this.tilePath(name, floor, level, x, y);
 
         if (fs.existsSync(file)) {
             return file;
+        }
+
+        if (this.empties.has(file)) {
+            return null;
         }
 
         return new Promise((resolve, reject) => {
@@ -214,7 +341,7 @@ class ArtRenderer {
 
             this.queue.push({
                 key: file,
-                line: `tile ${floor} ${level} ${x} ${y}`,
+                line: `tile ${layer} ${floor} ${level} ${x} ${y}`,
                 waiters: [{ resolve, reject }]
             });
 
@@ -242,6 +369,20 @@ class ArtRenderer {
     settle(line) {
         if (!this.pending) {
             this.log(`Art renderer said "${line}" with nothing outstanding.`);
+            return;
+        }
+
+        // A non-tile request - loading a snapshot - wants the reply verbatim rather than a path.
+        if (this.pending.raw) {
+            this.finish(null, line);
+            return;
+        }
+
+        // Nothing in this tile. Not an error and not a file: remembered, so the same tile is never
+        // asked about twice under this snapshot.
+        if (line === 'empty') {
+            this.empties.add(this.pending.key);
+            this.finish(null, null);
             return;
         }
 
@@ -297,37 +438,49 @@ class ArtRenderer {
 }
 
 /**
- * Splits "/tiles/iso/<facet>/v<n>/<floor>/<level>/<x>/<y>.png" into its parts, or null.
+ * Splits "/tiles/iso/<facet>/v<n>/<layer>/<floor>/<level>/<x>/<y>.png" into its parts, or null.
  *
  * Every segment is checked against what it is allowed to be rather than sanitised, which is the
  * same rule the token names follow: a name that has to be cleaned up before it is safe is a name
  * worth refusing. There is no path from the caller reaching the filesystem here - the parts are
- * numbers and one of three floor names, and the path is rebuilt from them.
+ * numbers, one of three floor names, and a layer that is either the literal `map` or `items-` and
+ * a snapshot id, and the path is rebuilt from them rather than taken.
  */
 function parseTilePath(urlPath) {
     const parts = urlPath.split('/').filter((part) => part.length > 0);
 
-    // tiles iso <facet> v<n> <floor> <level> <x> <y>.png
-    if (parts.length !== 8 || parts[0] !== 'tiles' || parts[1] !== 'iso') {
+    // tiles iso <facet> v<n> <layer> <floor> <level> <x> <y>.png
+    if (parts.length !== 9 || parts[0] !== 'tiles' || parts[1] !== 'iso') {
         return null;
     }
 
-    if (!/^[A-Za-z]+$/.test(parts[2]) || !/^v\d+$/.test(parts[3]) || !FLOORS.has(parts[4])) {
+    if (!/^[A-Za-z]+$/.test(parts[2]) || !/^v\d+$/.test(parts[3])) {
         return null;
     }
 
-    if (!/^\d+$/.test(parts[5]) || !/^\d+$/.test(parts[6]) || !/^\d+\.png$/.test(parts[7])) {
+    // A snapshot id is what WorldItemSnapshot.BuildId writes: facet, sequence, timestamp, count.
+    if (parts[4] !== 'map' && !/^items-[A-Za-z0-9-]{1,120}$/.test(parts[4])) {
+        return null;
+    }
+
+    if (!FLOORS.has(parts[5])) {
+        return null;
+    }
+
+    if (!/^\d+$/.test(parts[6]) || !/^\d+$/.test(parts[7]) || !/^\d+\.png$/.test(parts[8])) {
         return null;
     }
 
     return {
         facet: parts[2],
         version: Number(parts[3].slice(1)),
-        floor: parts[4],
-        level: Number(parts[5]),
-        x: Number(parts[6]),
-        y: Number(parts[7].slice(0, -'.png'.length))
+        layer: parts[4] === 'map' ? 'map' : 'items',
+        layerName: parts[4],
+        floor: parts[5],
+        level: Number(parts[6]),
+        x: Number(parts[7]),
+        y: Number(parts[8].slice(0, -'.png'.length))
     };
 }
 
-module.exports = { ArtRenderer, parseTilePath, RENDER_TIMEOUT_MS, EXE, TILES };
+module.exports = { ArtRenderer, parseTilePath, RENDER_TIMEOUT_MS, EXE, TILES, SNAPSHOT, EMPTY_PNG };

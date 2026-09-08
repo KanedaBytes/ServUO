@@ -528,6 +528,80 @@ and draw what is underneath. That is a different feature from the floor slider �
 through the world rather than a storey of a building — and it is worth doing on its own terms rather
 than bolting onto this one.
 
+### World items
+
+The renderer draws the world as it *shipped*. Everything `[Decorate` places — forges, anvils, signs,
+doors, benches, bookcases — is a runtime item in the shard's own save, in none of the client files,
+so the smithy yard at `brit-forge` rendered as empty paving with the nav markers floating on it.
+
+```
+[WorldItems                     # in game; or the `world-items` request token
+```
+
+`Scripts/Custom/Core/Bridge/WorldItemSnapshot.cs` writes `Data/Live/world-items.json`; the bridge
+notices it and hands the path to the renderer. **The art view works without one** — the map layer is
+the client's own files and needs nothing running — it just has no furniture, and the sidebar's art
+line says `no world items - run [WorldItems` rather than leaving you to wonder.
+
+#### What counts as a world item
+
+```
+item.Parent  == null      on the ground, not in a pack and not on a mobile
+item.Map     == the facet and not Map.Internal
+item.Movable == false     decoration, doors, signs, addon components, benches
+item.Visible == true
+item.Spawner == null      not spawner output
+item.ItemID  > 1          an addon HOST is ItemID 1 and invisible
+```
+
+A shape, not a list of types — an allowlist is a thing to maintain, and anything the shard adds
+later would be silently missing until somebody noticed a hole in a render. Measured: the world holds
+**217,129 items**, 80,356 of which are on a facet at all, and **29,778** pass on Trammel — 1.37 MB of
+JSON. In the Britain box that is 2,947 items, of which 2,830 draw; the 117 excluded are 90
+`XmlSpawner`s and the invisible addon hosts, and exactly one item in the box is movable.
+
+**Addons need no special handling.** `BaseAddon.AddComponent` calls
+`c.MoveToWorld(new Point3D(X + x, Y + y, Z + z), Map)`, so every component is already an `Item` at
+real world coordinates with its own `ItemID` and `Hue`. A plain walk sees them all.
+
+There *is* a persisted decoration marker — `WeakEntityCollection` keyed `deco`/`door`/`sign`, 53,791
+entries — and it is deliberately unused: it would miss the 143 items in the Britain box that belong
+to no collection, including hand-placed ones.
+
+**On an explicit request only, never a timer.** Finding items means walking `World.Items`, which
+this shard reserves for explicit commands (CLAUDE.md §15). It does not need to be a timer either:
+decoration does not move, so a snapshot is good until somebody decorates again.
+
+#### Occlusion is exact, and that is why items are a full render
+
+An item layer drawn on its own would put a forge on top of the wall in front of it — nothing in a
+transparent overlay knows what is between the furniture and the viewer. So an item tile paints the
+**whole** column, land and statics and items together in one sorted pass, records which pixels the
+items ended up owning, and emits only those. A bench in the tavern is then behind the tavern's wall,
+exactly as a static bench would be.
+
+The cost is that an item tile that holds anything costs what a map tile costs. One that holds
+nothing costs a dictionary lookup per column and is answered `empty` — **never written to disk**,
+because tens of thousands of identical transparent PNGs is not a cache but litter. The bridge serves
+a single 68-byte transparent pixel for those and remembers the key.
+
+Items sort into the column by the same key the statics use and **the floor rules apply to them
+unchanged** — a world item is a static as far as drawing goes, same art, same tiledata, same
+`TileFlag.Roof`.
+
+#### The item layer expires separately
+
+```
+tools/editor/tiles/iso/<Facet>/v<N>/map/<floor>/<level>/<x>/<y>.png
+tools/editor/tiles/iso/<Facet>/v<N>/items-<snapshot id>/<floor>/<level>/<x>/<y>.png
+```
+
+The map layer is the client's world and never changes, so it is kept forever under the renderer
+version. The item layer carries the **snapshot's own id**, so a re-decorate is a whole new set of
+URLs — nothing to invalidate by hand, and the browser's cache turns over with it. Baking the two
+together would have meant every `[Decorate` threw away a map cache that costs minutes to rebuild,
+for furniture that costs seconds. Stale `items-*` trees are swept when a new snapshot loads.
+
 ### The cache key carries the renderer version
 
 ```
@@ -588,11 +662,9 @@ job.
 
 ### What the art does not show
 
-- **Dynamic items.** The renderer reads the client's map and statics files, so anything the shard
-  places at runtime is absent — including `[Decorate`'s work. The forge and anvil at `brit-forge`
-  are `SmallForgeAddon` and `AnvilEastAddon` from `Data/Decoration/Britannia/britain.cfg`, so the
-  smithy yard draws as empty paving with the nav markers on it. Live entities still draw, from
-  `entities.json`, as they do in radar.
+- **World items, without a snapshot.** The renderer reads the client's files, so the shard's own
+  furniture only appears once somebody has run `[WorldItems` — see **World items** below. Until
+  then the smithy yard is empty paving, and the art line in the sidebar says so.
 - **A cave passage as a trench.** See **Stretched terrain** — the floor slider filters statics,
   and a mountain is land, so there is no stop at which you can see into a cave mouth.
 - **A zone rect at its true height.** Zones carry no Z in the schema, so they project on the ground
@@ -974,6 +1046,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `livemap-on` / `livemap-off` | The entity snapshot; the body carries `<seconds> [custom|all] [zoneId]` |
 | `nav-export-golden` | Writes the golden fixtures |
 | `health` | Writes `health.json` now rather than waiting for the timer |
+| `world-items` | `WorldItemSnapshot.TryWrite`; the body is an optional facet name. The art view's furniture |
 | `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
 | `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`; answers to `Data/Live/nav-hop.json` |
 | `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |

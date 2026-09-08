@@ -19,6 +19,14 @@
 // RADAR IS ALWAYS DRAWN UNDER ART. A tile that has not been rendered yet, one off the edge of the
 // map, and one the renderer refused all look the same to this file: nothing is drawn and the radar
 // shows through. That is why there is no placeholder protocol here.
+//
+// ART IS TWO LAYERS. `map` is the client's own world - land and statics - which never changes.
+// `items` is the shard's furniture: forges, anvils, signs, doors, benches, every [Decorate addon,
+// none of which exist in the client files at all. They are separate because they expire at
+// different rates - a re-decorate must not invalidate a map cache that costs minutes to rebuild -
+// and the item tiles are transparent everywhere the furniture is not, including everywhere the
+// furniture is hidden behind something. The renderer works that out; this just draws one over the
+// other.
 
 import * as iso from './iso.js';
 
@@ -63,6 +71,11 @@ export class View {
         this.floor = 'all';
         this.art = null;
 
+        // What the shard's world-item snapshot is, or null when there is none. Null is a normal
+        // state - the shard may not be running, or may never have been asked - and the art view
+        // works without it, just without furniture.
+        this.items = null;
+
         // Art tiles are rendered on request, so a failure can be a timeout rather than a fact.
         // Radar's onerror deliberately caches the miss forever; art's has to be able to try again,
         // or one slow tile is blank for the rest of the session. Bounded, so a tile the renderer
@@ -87,10 +100,16 @@ export class View {
     /** What the renderer told the bridge about itself, or null if there is no renderer. */
     setArtInfo(info) {
         this.art = info && info.version ? info : null;
+        this.items = (info && info.items) || null;
 
         if (!this.art && this.projection === 'art') {
             this.projection = 'radar';
         }
+    }
+
+    /** A new world-item snapshot, which is a new layer id and so a whole new set of tile URLs. */
+    setItems(items) {
+        this.items = items || null;
     }
 
     setProjection(projection) {
@@ -311,7 +330,13 @@ export class View {
         this.drawRadarMap();
 
         if (this.isArt && this.artAvailable) {
-            this.drawArtMap();
+            this.drawArtMap('map');
+
+            // The shard's furniture, over the client's world. Skipped entirely without a snapshot
+            // rather than drawn as a layer of empty tiles.
+            if (this.items) {
+                this.drawArtMap('items');
+            }
         }
     }
 
@@ -376,7 +401,7 @@ export class View {
     }
 
     /** The isometric art, in canvas-pixel space rather than world space. */
-    drawArtMap() {
+    drawArtMap(layer) {
         const ctx = this.ctx;
         const width = this.canvas.clientWidth;
         const height = this.canvas.clientHeight;
@@ -402,7 +427,7 @@ export class View {
 
         for (let tx = firstX; tx <= lastX; tx++) {
             for (let ty = firstY; ty <= lastY; ty++) {
-                const image = this.artTile(level, floor, tx, ty);
+                const image = this.artTile(layer, level, floor, tx, ty);
 
                 if (!image || !image.complete || image.naturalWidth === 0) {
                     continue;
@@ -462,8 +487,11 @@ export class View {
      * An art tile. The request may take a second: the bridge renders a miss before it answers, so
      * the browser's own connection cap is what throttles the queue.
      */
-    artTile(level, floor, tx, ty) {
-        const key = `iso/${this.facet.name}/v${this.art.version}/${floor}/${level}/${tx}/${ty}`;
+    artTile(layer, level, floor, tx, ty) {
+        // The item layer's directory carries the snapshot's id, so a re-decorate changes every URL
+        // and the browser's own cache turns over with it - there is nothing to invalidate by hand.
+        const name = layer === 'map' ? 'map' : `items-${this.items.id}`;
+        const key = `iso/${this.facet.name}/v${this.art.version}/${name}/${floor}/${level}/${tx}/${ty}`;
         const cached = this.images.get(key);
 
         if (cached) {

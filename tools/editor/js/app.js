@@ -150,7 +150,8 @@ async function boot() {
         liveStatus: $('live-status'), bots: $('bots'), botFilter: $('bot-filter'),
         botDetail: $('bot-detail'),
         basemap: $('basemap'), basemapArt: $('basemap-art'),
-        floorRow: $('floor-row'), floor: $('floor'), floorLabel: $('floor-label')
+        floorRow: $('floor-row'), floor: $('floor'), floorLabel: $('floor-label'),
+        artStatus: $('art-status')
     });
 
     initTools();
@@ -249,6 +250,13 @@ async function wireBaseMap() {
     }
 
     view.setArtInfo(info);
+    updateArtStatus(info);
+
+    // The snapshot can appear or change while the editor is open - somebody runs [WorldItems, or
+    // decorates and runs it again - and the layer id is part of every item tile's URL, so noticing
+    // is what makes the furniture refresh. Polled rather than watched: the bridge is the only thing
+    // that can see the file, and this is the same cadence the rest of the panel runs at.
+    pollArt();
 
     // /api/artinfo starts the renderer, which takes a second or so on a cold TileMatrix, and the
     // radio is live the whole time. Somebody who clicked Art while it was in flight got radar and
@@ -258,6 +266,61 @@ async function wireBaseMap() {
         updateFloorRow();
         requestRender();
     }
+}
+
+/**
+ * The art line: what the renderer is, how long its last tile took, and what the item snapshot holds.
+ *
+ * `/api/artstats` shipped in session 1 with nothing calling it - the endpoint was real and the line
+ * that was supposed to read it never got wired, so the README described a status nobody could see.
+ * The item snapshot needs the poll anyway, so it is wired here.
+ */
+async function pollArt() {
+    try {
+        const stats = await api.artStats();
+
+        if (stats.items && (!view.items || view.items.id !== stats.items.id)) {
+            view.setItems(stats.items);
+            requestRender();
+        } else if (!stats.items && view.items) {
+            view.setItems(null);
+            requestRender();
+        }
+
+        updateArtStatus(stats);
+    } catch (error) {
+        // The bridge answering nothing is the Live panel's problem to report, not this line's.
+    }
+
+    setTimeout(pollArt, ART_POLL_MS);
+}
+
+const ART_POLL_MS = 5000;
+
+function updateArtStatus(stats) {
+    if (!dom.artStatus) {
+        return;
+    }
+
+    if (!stats || stats.available === false) {
+        dom.artStatus.textContent = stats && stats.reason ? stats.reason : 'no art renderer';
+        return;
+    }
+
+    const parts = [];
+
+    if (typeof stats.rendered === 'number') {
+        parts.push(`${stats.rendered} tile(s), last ${stats.lastMs}ms`);
+    }
+
+    // "no world items" is a real state worth naming rather than an absence worth hiding: the art
+    // view without a snapshot draws empty paving where the forges are, and somebody looking at
+    // that deserves to know why rather than conclude the map is wrong.
+    parts.push(stats.items
+        ? `${stats.items.count} world item(s)`
+        : 'no world items - run [WorldItems');
+
+    dom.artStatus.textContent = parts.join(', ');
 }
 
 /** Keeps the floor row's visibility, label and active state in step with the view. */

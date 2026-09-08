@@ -1,7 +1,23 @@
 using System;
+using System.Collections.Generic;
 
 namespace Server.Custom.MapExport
 {
+    /// <summary>
+    /// Which of the two tile layers is being drawn.
+    ///
+    /// Map is the client's world - land and statics - and never changes, so it is cached under the
+    /// renderer version and kept forever. Items is the shard's own furniture, which changes every
+    /// time somebody decorates, so it is cached under the SNAPSHOT's identity instead and thrown
+    /// away wholesale when a new one arrives. Baking the two together would mean a re-decorate
+    /// invalidated a map cache that costs minutes to rebuild, for furniture that costs seconds.
+    /// </summary>
+    internal enum Layer
+    {
+        Map,
+        Items
+    }
+
     /// <summary>Which storeys a render keeps. The editor's floor slider, one value per stop.</summary>
     internal enum Floor
     {
@@ -123,6 +139,29 @@ namespace Server.Custom.MapExport
 
         private int[] _order = new int[64];
 
+        /// <summary>
+        /// Who wrote each pixel, while an Items layer is being drawn.
+        ///
+        /// THIS IS HOW OCCLUSION STAYS EXACT. An item layer drawn on its own would put a forge on
+        /// top of the wall in front of it, because nothing in a transparent overlay knows what is
+        /// between the furniture and the viewer. So an item tile paints the WHOLE column - land,
+        /// statics and items together, in one sorted pass - and records which pixels the items
+        /// ended up owning. Only those are emitted. A bench in the tavern is then behind the
+        /// tavern's wall, exactly as a static bench would be, and the map layer underneath shows
+        /// through everywhere else.
+        /// </summary>
+        private byte[] _owner;
+
+        private const byte OwnerNone = 0;
+        private const byte OwnerWorld = 1;
+        private const byte OwnerItem = 2;
+
+        private WorldItems _items = null;
+
+        private int[] _staticKeys = new int[64];
+        private int[] _itemOrder = new int[8];
+        private int[] _itemKeys = new int[8];
+
         // What --terrain-report counts. Cheap enough to keep always, so the report is a mode rather
         // than a build.
         private int _stretched;
@@ -153,6 +192,14 @@ namespace Server.Custom.MapExport
             _facetHeight = facetHeight;
             _tileSize = tileSize;
             _maxLevel = IsoTransform.MaxLevel(facetWidth, facetHeight, tileSize);
+            _items = WorldItems.None(facetHeight);
+        }
+
+        /// <summary>The world-item snapshot in force. Swapped when the shard writes a new one.</summary>
+        public WorldItems Items
+        {
+            get { return _items; }
+            set { _items = value ?? WorldItems.None(_facetHeight); }
         }
 
         public int MaxLevel { get { return _maxLevel; } }
@@ -161,6 +208,17 @@ namespace Server.Custom.MapExport
 
         /// <summary>RGBA bytes for one tile, tileSize square. Never null.</summary>
         public byte[] Render(int level, int tileX, int tileY, Floor floor)
+        {
+            return Render(Layer.Map, level, tileX, tileY, floor);
+        }
+
+        /// <summary>
+        /// RGBA bytes for one tile, tileSize square - or null for an Items layer with nothing in
+        /// it, which is most of them. Null rather than a transparent buffer so the caller can skip
+        /// writing a file at all: an empty item tile that reached disk would be tens of thousands
+        /// of identical 70-byte PNGs.
+        /// </summary>
+        public byte[] Render(Layer layer, int level, int tileX, int tileY, Floor floor)
         {
             if (level < 0 || level > _maxLevel)
             {
@@ -173,9 +231,28 @@ namespace Server.Custom.MapExport
             int canvasX = tileX * span;
             int canvasY = tileY * span;
 
+            if (layer == Layer.Items && !HasItems(canvasX, canvasY, span))
+            {
+                return null;
+            }
+
             var scratch = new byte[span * span * BytesPerPixel];
 
-            Paint(scratch, span, canvasX, canvasY, floor);
+            _owner = layer == Layer.Items ? new byte[span * span] : null;
+
+            try
+            {
+                Paint(scratch, span, canvasX, canvasY, floor, layer);
+
+                if (layer == Layer.Items)
+                {
+                    KeepItemsOnly(scratch, span);
+                }
+            }
+            finally
+            {
+                _owner = null;
+            }
 
             while (divisor > 1)
             {
@@ -187,7 +264,74 @@ namespace Server.Custom.MapExport
             return scratch;
         }
 
-        private void Paint(byte[] target, int span, int canvasX, int canvasY, Floor floor)
+        /// <summary>
+        /// Whether any item could reach this tile, before a pixel is touched.
+        ///
+        /// It walks the same footprint the render walks, so a tall sprite anchored outside the tile
+        /// still counts - which is the whole reason the footprint is wider than the tile. Cheap: a
+        /// dictionary lookup per column against a snapshot where nearly every column is empty.
+        /// </summary>
+        private bool HasItems(int canvasX, int canvasY, int span)
+        {
+            if (!_items.Any)
+            {
+                return false;
+            }
+
+            int dMin, dMax, eMin, eMax;
+
+            IsoTransform.Footprint(
+                canvasX, canvasY, span, _facetWidth, _facetHeight, out dMin, out dMax, out eMin, out eMax);
+
+            for (int d = dMin; d <= dMax; d++)
+            {
+                int e = eMin;
+
+                if (((d + e) & 1) != 0)
+                {
+                    e++;
+                }
+
+                for (; e <= eMax; e += 2)
+                {
+                    int x = (d + e) / 2;
+                    int y = (d - e) / 2;
+
+                    if (x < 0 || y < 0 || x >= _facetWidth || y >= _facetHeight)
+                    {
+                        continue;
+                    }
+
+                    if (_items.At(x, y) != null)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Blanks every pixel the items did not end up owning.</summary>
+        private void KeepItemsOnly(byte[] target, int span)
+        {
+            for (int i = 0; i < _owner.Length; i++)
+            {
+                if (_owner[i] == OwnerItem)
+                {
+                    continue;
+                }
+
+                int at = i * BytesPerPixel;
+
+                target[at] = 0;
+                target[at + 1] = 0;
+                target[at + 2] = 0;
+                target[at + 3] = 0;
+            }
+        }
+
+        private void Paint(byte[] target, int span, int canvasX, int canvasY, Floor floor, Layer layer)
         {
             int originX = IsoTransform.OriginX(_facetHeight);
             int originY = IsoTransform.OriginY();
@@ -224,12 +368,13 @@ namespace Server.Custom.MapExport
                         continue;
                     }
 
-                    PaintColumn(target, span, isoX0, isoY0, x, y, floor);
+                    PaintColumn(target, span, isoX0, isoY0, x, y, floor, layer);
                 }
             }
         }
 
-        private void PaintColumn(byte[] target, int span, int isoX0, int isoY0, int x, int y, Floor floor)
+        private void PaintColumn(
+            byte[] target, int span, int isoX0, int isoY0, int x, int y, Floor floor, Layer layer)
         {
             int anchorX = IsoTransform.IsoX(x, y) - isoX0;
 
@@ -239,26 +384,105 @@ namespace Server.Custom.MapExport
             PaintLand(target, span, isoX0, isoY0, x, y, land, anchorX);
 
             StaticTile[] column = _tiles.GetStaticTiles(x, y);
+            List<WorldItem> items = layer == Layer.Items ? _items.At(x, y) : null;
 
-            if (column == null || column.Length == 0)
+            int statics = Sort(column, landZ, floor);
+            int shardItems = SortItems(items, landZ, floor);
+
+            // ONE MERGED PASS, not statics then items. They interleave by the same key - a bench in
+            // front of a wall has to be drawn after it and behind the wall on the near side - and
+            // two passes would put every item in front of every static regardless of where it
+            // stands. This is the same merge a client does; the two sources just happen to be a
+            // .mul file and the shard's save.
+            int si = 0;
+            int ii = 0;
+
+            while (si < statics || ii < shardItems)
             {
-                return;
+                bool takeItem;
+
+                if (si >= statics)
+                {
+                    takeItem = true;
+                }
+                else if (ii >= shardItems)
+                {
+                    takeItem = false;
+                }
+                else
+                {
+                    takeItem = _itemKeys[ii] <= _staticKeys[si];
+                }
+
+                if (takeItem)
+                {
+                    WorldItem item = items[_itemOrder[ii++]];
+                    Sprite sprite = _art.Static(item.ID, item.Hue);
+
+                    if (sprite != null)
+                    {
+                        Blit(target, span, sprite,
+                            anchorX, IsoTransform.IsoY(x, y, item.Z) - isoY0, OwnerItem);
+                    }
+
+                    continue;
+                }
+
+                StaticTile tile = column[_order[si++]];
+                Sprite staticSprite = _art.Static(tile.ID, tile.Hue);
+
+                if (staticSprite != null)
+                {
+                    Blit(target, span, staticSprite,
+                        anchorX, IsoTransform.IsoY(x, y, tile.Z) - isoY0, OwnerWorld);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The items this floor keeps on one column, in draw order, by the same key the statics
+        /// use. A world item IS a static as far as drawing goes - same art, same tiledata, same
+        /// flags - so it sorts by the same rule and the floor rules apply to it unchanged.
+        /// </summary>
+        private int SortItems(List<WorldItem> items, int landZ, Floor floor)
+        {
+            if (items == null || items.Count == 0)
+            {
+                return 0;
             }
 
-            int count = Sort(column, landZ, floor);
-
-            for (int i = 0; i < count; i++)
+            if (_itemOrder.Length < items.Count)
             {
-                StaticTile tile = column[_order[i]];
-                Sprite sprite = _art.Static(tile.ID, tile.Hue);
+                _itemOrder = new int[items.Count];
+                _itemKeys = new int[items.Count];
+            }
 
-                if (sprite == null)
+            int count = 0;
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                ItemData data = TileData.ItemTable[items[i].ID & TileData.MaxItemValue];
+
+                if (!_rules.Keeps(floor, items[i].Z, landZ, (data.Flags & TileFlag.Roof) != 0))
                 {
                     continue;
                 }
 
-                Blit(target, span, sprite, anchorX, IsoTransform.IsoY(x, y, tile.Z) - isoY0);
+                int key = Key(items[i].Z, data);
+                int at = count++;
+
+                while (at > 0 && _itemKeys[at - 1] > key)
+                {
+                    _itemOrder[at] = _itemOrder[at - 1];
+                    _itemKeys[at] = _itemKeys[at - 1];
+                    at--;
+                }
+
+                _itemOrder[at] = i;
+                _itemKeys[at] = key;
             }
+
+            return count;
         }
 
         /// <summary>
@@ -375,25 +599,25 @@ namespace Server.Custom.MapExport
         /// follow the world's. If a directional texture - a path, a road - runs visibly the wrong
         /// way, this assignment is the thing to transpose.
         /// </summary>
-        private static void BlitQuad(
+        private void BlitQuad(
             byte[] target, int span, Sprite texture,
             int nx, int ny, int ex, int ey, int sx, int sy, int wx, int wy)
         {
             int size = texture.Width;
 
-            Triangle(target, span, texture,
+            Triangle(target, span, texture, _owner,
                 nx, ny, 0, 0,
                 ex, ey, size, 0,
                 sx, sy, size, size);
 
-            Triangle(target, span, texture,
+            Triangle(target, span, texture, _owner,
                 nx, ny, 0, 0,
                 sx, sy, size, size,
                 wx, wy, 0, size);
         }
 
         private static void Triangle(
-            byte[] target, int span, Sprite texture,
+            byte[] target, int span, Sprite texture, byte[] owner,
             int ax, int ay, int au, int av,
             int bx, int by, int bu, int bv,
             int cx, int cy, int cu, int cv)
@@ -455,6 +679,11 @@ namespace Server.Custom.MapExport
                     target[destination + 1] = (byte)((g << 3) | (g >> 2));
                     target[destination + 2] = (byte)((b << 3) | (b >> 2));
                     target[destination + 3] = 255;
+
+                    if (owner != null)
+                    {
+                        owner[(py * span) + px] = OwnerWorld;
+                    }
                 }
             }
         }
@@ -469,9 +698,15 @@ namespace Server.Custom.MapExport
         /// </summary>
         private int Sort(StaticTile[] column, int landZ, Floor floor)
         {
+            if (column == null || column.Length == 0)
+            {
+                return 0;
+            }
+
             if (_order.Length < column.Length)
             {
                 _order = new int[column.Length];
+                _staticKeys = new int[column.Length];
             }
 
             int count = 0;
@@ -485,30 +720,27 @@ namespace Server.Custom.MapExport
                     continue;
                 }
 
-                int key = Key(column[i], data);
+                int key = Key(column[i].Z, data);
                 int at = count++;
 
-                while (at > 0)
+                // The key is carried alongside the index rather than recomputed per comparison -
+                // the merge below needs it anyway, and the old form looked up tiledata twice per
+                // step of the insertion.
+                while (at > 0 && _staticKeys[at - 1] > key)
                 {
-                    int previous = _order[at - 1];
-                    ItemData other = TileData.ItemTable[column[previous].ID & TileData.MaxItemValue];
-
-                    if (Key(column[previous], other) <= key)
-                    {
-                        break;
-                    }
-
-                    _order[at] = previous;
+                    _order[at] = _order[at - 1];
+                    _staticKeys[at] = _staticKeys[at - 1];
                     at--;
                 }
 
                 _order[at] = i;
+                _staticKeys[at] = key;
             }
 
             return count;
         }
 
-        private static int Key(StaticTile tile, ItemData data)
+        private static int Key(int z, ItemData data)
         {
             int threshold = 0;
 
@@ -525,14 +757,19 @@ namespace Server.Custom.MapExport
 
             // Z plus threshold is the primary term and threshold breaks its ties, so packing them
             // into one int keeps the comparison a single subtraction, as the original's does.
-            return ((tile.Z + threshold) << 2) | threshold;
+            return ((z + threshold) << 2) | threshold;
         }
 
         /// <summary>
         /// A sprite's bottom centre goes on the anchor - the rule from Ultima/Multis.cs:505-507.
         /// Source-over with a 1-bit alpha, because that is all ARGB1555 art carries.
         /// </summary>
-        private static void Blit(byte[] target, int span, Sprite sprite, int anchorX, int anchorY)
+        private void Blit(byte[] target, int span, Sprite sprite, int anchorX, int anchorY)
+        {
+            Blit(target, span, sprite, anchorX, anchorY, OwnerWorld);
+        }
+
+        private void Blit(byte[] target, int span, Sprite sprite, int anchorX, int anchorY, byte owner)
         {
             int left = anchorX - (sprite.Width / 2);
             int top = anchorY - sprite.Height;
@@ -568,6 +805,11 @@ namespace Server.Custom.MapExport
                         target[destination + 1] = (byte)((g << 3) | (g >> 2));
                         target[destination + 2] = (byte)((b << 3) | (b >> 2));
                         target[destination + 3] = 255;
+
+                        if (_owner != null)
+                        {
+                            _owner[destination / BytesPerPixel] = owner;
+                        }
                     }
 
                     destination += BytesPerPixel;

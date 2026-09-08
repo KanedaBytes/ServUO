@@ -211,6 +211,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
+| `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
 
 ## Custom spawns
 
@@ -448,9 +449,17 @@ is land, so `1263,1251` is byte-identical at every stop. Seeing into a cave need
 apply to land too - a section through the world rather than a storey of a building - which is its
 own feature.
 
-Also absent, and for a different reason: **anything the shard places at runtime**, `[Decorate`
-included. The forge and anvil at `brit-forge` are decoration addons, so the smithy yard draws as
-empty paving with the nav markers on it. Live entities still draw, from `entities.json`.
+**The shard's own furniture is drawn too, from a snapshot it writes on request.** `[WorldItems`
+(or the `world-items` token) walks the world for loose, immovable, visible items - decoration,
+doors, signs, every `[Decorate` addon component - and writes `Data/Live/world-items.json`: 29,778
+items on Trammel, 1.37 MB. The renderer draws them exactly as it draws statics, in a second
+transparent tile layer keyed by the snapshot's id, so a re-decorate throws away seconds of item
+tiles rather than the minutes the map layer costs. Occlusion is exact: an item tile paints the whole
+column and emits only the pixels the items ended up owning, so a bench indoors is behind the wall
+in front of it. The floor stops apply to items exactly as they do to statics.
+
+**The art view works with the shard down** - the map layer is the client's own files. Without a
+snapshot there is simply no furniture, and the editor's art line says so.
 
 A reload ack now carries the shard's validator strings themselves (`errors` and `warnings`), not
 just a count of them, so the editor can say which problem to fix rather than that there are three.

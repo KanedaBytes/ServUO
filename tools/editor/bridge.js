@@ -24,7 +24,7 @@ const { project, unproject } = require('./project.js');
 const spawners = require('./spawners.js');
 const reference = require('./reference.js');
 const whitelist = require('./whitelist.js');
-const { ArtRenderer, parseTilePath } = require('./artrenderer.js');
+const { ArtRenderer, parseTilePath, EMPTY_PNG } = require('./artrenderer.js');
 
 const DEFAULT_PORT = 8081;
 const HOST = '127.0.0.1';
@@ -295,9 +295,16 @@ const ROUTES = {
 
         // Started lazily so a bridge nobody switches to art never launches a renderer, but
         // /api/artinfo is asked once at boot, and the answer needs the handshake.
-        art.start().then(
-            (info) => sendJson(response, 200, Object.assign({ available: true }, info)),
-            (error) => sendJson(response, 200, { available: false, reason: error.message }));
+        art.start()
+            // The world-item snapshot is checked here rather than watched: this is asked at boot
+            // and whenever the editor polls, which is every moment anybody cares whether the
+            // furniture has changed.
+            .then(() => art.ensureItems())
+            .then(
+                () => sendJson(response, 200, Object.assign({ available: true }, art.describe(), {
+                    items: art.items
+                })),
+                (error) => sendJson(response, 200, { available: false, reason: error.message }));
     },
 
     /** Cached and rendered counts, and how long the last tile took. */
@@ -559,8 +566,22 @@ function serveArtTile(pathname, response) {
         return;
     }
 
-    art.tile(parts.floor, parts.level, parts.x, parts.y).then(
+    art.tile(parts.layer, parts.floor, parts.level, parts.x, parts.y).then(
         (file) => {
+            if (file === null) {
+                // No items in this tile. One transparent pixel, stretched - see EMPTY_PNG. It is
+                // cached for a day like any other tile, so an empty stretch of country costs one
+                // request and then nothing.
+                response.writeHead(200, {
+                    'Content-Type': 'image/png',
+                    'Content-Length': EMPTY_PNG.length,
+                    'Cache-Control': 'public, max-age=86400'
+                });
+
+                response.end(EMPTY_PNG);
+                return;
+            }
+
             fs.readFile(file, (error, data) => {
                 if (error) {
                     sendError(response, 500, 'The tile was rendered but could not be read.');

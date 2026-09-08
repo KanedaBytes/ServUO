@@ -273,6 +273,17 @@ namespace Server.Custom
                     message = "live map stopped";
                     return true;
 
+                case "world-items":
+                    // The art view's furniture. The body is an optional facet name; empty means
+                    // the shard's primary facet. It walks World.Items, which is why it is a
+                    // request rather than a timer - see the note at the top of WorldItemSnapshot.
+                    if (!WorldItemSnapshot.TryWrite(body.Length == 0 ? null : FirstWord(body), out message))
+                    {
+                        return false;
+                    }
+
+                    return true;
+
                 case "health":
                     HealthSnapshot.Write();
                     message = "health snapshot written";
@@ -694,6 +705,25 @@ namespace Server.Custom
         /// empty list only read alike in JavaScript if every reader remembers to guard, and one of
         /// them will not.
         /// </summary>
+        /// <summary>
+        /// The first space-delimited word of a body, skipping the bridge's `#nonce`. Bodies that
+        /// take one optional argument all want this and nothing more.
+        /// </summary>
+        private static string FirstWord(string body)
+        {
+            string[] parts = body.Split(new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (!parts[i].StartsWith("#", StringComparison.Ordinal))
+                {
+                    return parts[i];
+                }
+            }
+
+            return null;
+        }
+
         private static void WriteAck(
             string name, string token, bool ok, string message,
             IList<string> errors, IList<string> warnings)
