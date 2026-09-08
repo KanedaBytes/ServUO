@@ -225,6 +225,18 @@ namespace Server.Custom
 
                         BotTickManager.NoteAbandoned();
                         Release(bot);
+
+                        // A walk that ended short still ends where it ended. uo-offline's
+                        // DeliverMaterials runs from the arrival handoff after a drift that
+                        // stalled or timed out, and finds its buyer within twelve tiles of
+                        // wherever the gatherer stands (BotEconomy.cs:298); a laden miner whose
+                        // last step was refused is standing in the smithy with the ore on its
+                        // back, and walking off to roll another destination with it would be
+                        // the one thing no player ever did. Only within the buyer's reach of
+                        // the destination, though: a walk abandoned half a map away has not
+                        // arrived anywhere, and banking the load there would be a lie.
+                        DeliverIfWithinReach(bot);
+
                         _state = TravelState.Choosing;
 
                         return;
@@ -548,6 +560,33 @@ namespace Server.Custom
             if (bot != null)
             {
                 bot.Commuting = false;
+            }
+        }
+
+        /// <summary>
+        /// Hand over a haul from a walk that ended short, when the destination is a delivery
+        /// point within the buyer's reach of where the bot stands. See the abandon branch.
+        /// </summary>
+        private void DeliverIfWithinReach(PlayerBot bot)
+        {
+            if (bot == null || !bot.HaulPending || _destinationId == null)
+            {
+                return;
+            }
+
+            NavDestination destination = Nav.Destination(_destinationId);
+
+            if (destination == null || destination.Map != bot.Map
+                || !bot.InRange(destination.Location, BotWorkDelivery.BuyerRange))
+            {
+                return;
+            }
+
+            if (BotWorkDelivery.TryDeliver(bot, destination))
+            {
+                BotLog.Note(bot, BotLogKind.Arrive,
+                    "delivered at '{0}' from {1},{2}, short of the arrival tile",
+                    _destinationId, bot.X, bot.Y);
             }
         }
 

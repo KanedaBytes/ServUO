@@ -186,30 +186,158 @@ namespace Server.Custom
                            : bot.TradeClass == BotClass.Carpenter ? CarpenterChat
                            : CraftChat;
 
-            // A Crafter reached by the arrival handoff is already standing on a validated arrival
-            // tile. One attached by hand - [BotBehavior Crafter - is standing wherever it happened
-            // to be, which for a Smith means "inside the shop, four tiles from the anvil, unable
-            // to work and unable to say why". So: find the station, and walk to it.
+            // A Crafter reached by the arrival handoff is standing within its arrival's range of
+            // the station. One attached by hand - [BotBehavior Crafter - is standing wherever it
+            // happened to be, which for a Smith means "inside the shop, four tiles from the anvil,
+            // unable to work and unable to say why". So: find the station, walk to it if it is
+            // far, and then choose the tile to stand on for what this trade needs in reach.
             if (String.IsNullOrEmpty(DestinationId))
             {
                 DestinationId = FindStation(bot);
             }
 
-            if (!AtStation(bot))
+            if (String.IsNullOrEmpty(DestinationId))
+            {
+                Blocked = CrafterProfiles.For(bot) == null
+                    ? BotClassHelper.DisplayName(bot.Class) + " has no crafting station"
+                    : "there is no " + BotClassHelper.StationFor(bot) + " on this facet";
+
+                Settle(bot);
+                return;
+            }
+
+            if (!NearStation(bot))
             {
                 if (BeginWalkToStation(bot))
                 {
                     return;
                 }
 
-                Blocked = DestinationId != null
-                    ? "it cannot reach its station"
-                    : CrafterProfiles.For(bot) == null
-                        ? BotClassHelper.DisplayName(bot.Class) + " has no crafting station"
-                        : "there is no " + BotClassHelper.StationFor(bot) + " on this facet";
+                Blocked = "it cannot reach its station";
+                Settle(bot);
+                return;
             }
 
-            Settle(bot);
+            TakeUpStation(bot);
+        }
+
+        /// <summary>
+        /// The tile this crafter chose to stand on, and the ones it has already been refused at.
+        /// Transient, per attachment.
+        /// </summary>
+        private Point3D? _standTile;
+        private readonly HashSet<Point2D> _refusedTiles = new HashSet<Point2D>();
+
+        /// <summary>Within reach of the station: inside some arrival's range plus a step of slack.</summary>
+        private bool NearStation(PlayerBot bot)
+        {
+            NavDestination station = Nav.Destination(DestinationId);
+
+            if (station == null || station.ArrivalList == null)
+            {
+                return false;
+            }
+
+            foreach (NavArrival arrival in station.ArrivalList)
+            {
+                if (bot.InRange(arrival.Location, arrival.Range + 1))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Choose where to stand and go there. The rule is BotWorkSites.TryPickStandTile's:
+        /// a free tile with the fixtures in reach, nearest first; an occupied one when the apron
+        /// is full; another station of this kind in the same town only when reach holds no
+        /// standable tile at all. Never a waiting state.
+        /// </summary>
+        private void TakeUpStation(PlayerBot bot)
+        {
+            NavDestination station = Nav.Destination(DestinationId);
+            Point3D tile;
+            bool free;
+
+            if (!BotWorkSites.TryPickStandTile(
+                    bot.Map, station, bot, BotWorkSites.ReachFor(bot.TradeClass), _refusedTiles,
+                    out tile, out free))
+            {
+                NavDestination elsewhere = BotWorkSites.AnotherStationInTown(
+                    bot.Map, BotClassHelper.StationFor(bot), station);
+
+                if (elsewhere != null)
+                {
+                    BotLog.Note(bot, BotLogKind.Route,
+                        "no standable tile in reach at '{0}'; going to '{1}' instead",
+                        DestinationId, elsewhere.Id);
+
+                    DestinationId = elsewhere.Id;
+                    _refusedTiles.Clear();
+
+                    if (BeginWalkToStation(bot))
+                    {
+                        return;
+                    }
+                }
+
+                Blocked = "no standable tile within reach at " + DestinationId;
+                Settle(bot);
+                return;
+            }
+
+            _standTile = tile;
+
+            BotLog.Note(bot, BotLogKind.Route,
+                "stand tile {0},{1} at '{2}' ({3})",
+                tile.X, tile.Y, DestinationId, free ? "free" : "occupied - sharing it");
+
+            if (bot.X == tile.X && bot.Y == tile.Y)
+            {
+                Blocked = null;
+                Settle(bot);
+                return;
+            }
+
+            WalkToStandTile(bot, tile);
+        }
+
+        /// <summary>
+        /// The last few steps onto the chosen tile: a one-step route at range 0, through the same
+        /// walker, so it gets the ladder and the shove like any other walk.
+        /// </summary>
+        private void WalkToStandTile(PlayerBot bot, Point3D tile)
+        {
+            var steps = new List<NavStep>();
+            steps.Add(new NavStep(tile, bot.Map, null, NavStepKind.Arrival, 0));
+
+            if (_walker == null)
+            {
+                _walker = new NavWalker(bot);
+                _walker.Arrived = OnReachedStation;
+                LogWalker(bot, _walker);
+            }
+
+            bot.Commuting = true;
+            _walkingToStation = true;
+            _walker.Follow(new NavRoute(steps, 0.0));
+        }
+
+        /// <summary>
+        /// The engine refused this tile (1044267): it is not beside both fixtures after all - the
+        /// sweep has no line of sight and the engine does. Refuse it for good and choose again.
+        /// </summary>
+        private void Replace(PlayerBot bot)
+        {
+            _refusedTiles.Add(new Point2D(bot.X, bot.Y));
+
+            BotLog.Note(bot, BotLogKind.Route,
+                "the craft system refused {0},{1} at '{2}'; choosing another tile",
+                bot.X, bot.Y, DestinationId);
+
+            TakeUpStation(bot);
         }
 
         /// <summary>The station this bot's trade works, as a destination id, or null.</summary>
@@ -233,27 +361,6 @@ namespace Server.Custom
             }
 
             return best == null ? null : best.Id;
-        }
-
-        /// <summary>Is the bot standing on one of its station's authored arrival tiles?</summary>
-        private bool AtStation(PlayerBot bot)
-        {
-            NavDestination station = DestinationId == null ? null : Nav.Destination(DestinationId);
-
-            if (station == null || station.ArrivalList == null)
-            {
-                return false;
-            }
-
-            foreach (NavArrival arrival in station.ArrivalList)
-            {
-                if (bot.Location == arrival.Location)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private bool BeginWalkToStation(PlayerBot bot)
@@ -298,7 +405,16 @@ namespace Server.Custom
             bot.Commuting = false;
             _walkingToStation = false;
 
-            Settle(bot);
+            // Arrived within the station's range, or on the tile it chose. Either way, the
+            // stand tile is decided here, for the fixtures, not by where the walk happened to end.
+            if (_standTile.HasValue && bot.X == _standTile.Value.X && bot.Y == _standTile.Value.Y)
+            {
+                Blocked = null;
+                Settle(bot);
+                return;
+            }
+
+            TakeUpStation(bot);
         }
 
         /// <summary>
@@ -427,7 +543,17 @@ namespace Server.Custom
                     BotTickManager.NoteAbandoned();
                     bot.Commuting = false;
                     _walkingToStation = false;
-                    Settle(bot);
+
+                    // Near enough to choose a tile properly; otherwise settle where it stands
+                    // and let the engine's refusal say why.
+                    if (NearStation(bot))
+                    {
+                        TakeUpStation(bot);
+                    }
+                    else
+                    {
+                        Settle(bot);
+                    }
                 }
 
                 return;
@@ -572,6 +698,14 @@ namespace Server.Custom
             if (refusal != 0)
             {
                 Blocked = DescribeRefusal(refusal);
+
+                // Not beside both fixtures: the tile was wrong, not the trade. Choose another
+                // rather than standing Blocked on it for the rest of the visit.
+                if (refusal == 1044267)
+                {
+                    Replace(bot);
+                }
+
                 return;
             }
 

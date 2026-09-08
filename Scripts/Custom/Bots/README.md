@@ -247,6 +247,68 @@ Door recoveries in the walk probe.
 
 Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
 
+### Bots walk through crowds, and yield to players and stock NPCs
+
+Upstream's rule is `PlayerBot.CheckShove => true` (`PlayerBot.cs:504-512`), with its reason in the
+same comment: the engine's full-stamina shove rule "bounced every road-weary bot off the permanent
+bank-plaza crowds forever - 500+ pacing events per soak". Ours is the same line. A real player
+shoving a bot still pays the player rule - full stamina, minus ten (`Server/Mobile.cs:3516-3550`).
+
+The seam is that a `BaseCreature` is never asked. `BaseCreature.OnMoveOver`
+(`BaseCreature.cs:4546-4554`) and `PlayerMobile.OnMoveOver` (`PlayerMobile.cs:3487-3494`) both refuse
+an uncontrolled creature before the mover's `CheckShove` is consulted, which is why Adelyn the
+miner stood one tile from the forge for the whole work probe with Elara on the station tile. So
+the **shoved** side consents: every bot and every daily-life actor routes a bot mover through
+`BotShove.OnMoveOver`, and there it is the free pass.
+
+**What a bot cannot push**: a real player, or a stock NPC - a vendor, a guard, an animal - because
+those two overrides are upstream files and stay as they are. Upstream's bots push both. A walker
+wedged behind one has the blocker named in its rung log (`blocked by <name> (<type>) at x,y`), so
+the case can be revisited with evidence.
+
+### A station is a place, and the stand tile is chosen on arrival
+
+Upstream's arrival is `DriftArriveRange` 2 (`TravelerBehavior.cs:218`): the Traveler drifts toward
+a random arrival spot and counts itself arrived within two tiles, or when the drift stalls, and
+the smith becomes a Crafter wherever it stands (`:2561-2577`, `CrafterBehavior.cs:124-128`). That
+works for them because their production is an illusion (`CrafterProduction.cs:2-4`); ours runs
+the real craft system, and `DefBlacksmithy.CanCraft` refuses anything not within two tiles of both
+an anvil and a forge with line of sight.
+
+So the two halves are split the way the data now says. An arrival carries a **range**
+(`NavArrival.Range`; the forge arrivals author 2, everything else the tile), the walker accepts
+arrival from inside it, and `BotWorkSites.TryPickStandTile` then chooses the tile for what the
+bot came to do: every standable tile inside the arrivals' ranges with the trade's fixtures in
+crafting reach - a smith needs the anvil and the forge, a miner only the forge - ranked **free
+first, nearest second**. Nothing free, and the bot takes an occupied tile: the shove makes the
+step legal, and two smiths on one tile is what a packed forge looked like. Only a reach with **no
+standable tile at all** sends the bot to another station of its kind in the same town. There is no
+waiting state. A `CanCraft` refusal (1044267) refuses that tile for the visit and chooses again,
+because the sweep has no line of sight and the engine does.
+
+Delivery follows the same logic. Upstream's `DeliverMaterials` runs from the arrival handoff even
+after a drift that stalled, and finds its buyer within twelve tiles of wherever the gatherer stands
+(`BotEconomy.cs:298`). Ours fires on arrival, and now also when a laden Traveler's walk **ends
+short** within the buyer's reach of the destination - a miner whose last step was refused is
+standing in the smithy with the ore on its back, and rolling another destination with it was the
+one thing no player ever did. The work probe's expectation is the packed forge: the first smith on
+the station tile, the miner delivering to whichever smith is at the bench, and a second smith
+arriving from town to settle on a free tile of its own and make something from it.
+
+### The walker has uo-offline's frozen watchdog
+
+`NavWalker`'s ladder resets on progress, and a `SkipWaypoint` that succeeds is progress: it aims at
+the next waypoint and the "closer than ever" test starts over. A bot that cannot take a single step
+therefore walks its whole route with its index - Repath, Sidestep, Door, Skip, Repath, Sidestep,
+Door, Skip - and never reaches Teleport. A miner rooted at the mine face after its shift did exactly
+that for the length of a work probe, at a tile the engine could path out of when asked directly.
+
+uo-offline's answer is `CheckFrozenWatchdog` (`TravelerBehavior.cs:2963-3033`): a bot that has not
+moved `FrozenMoveTiles` (2) in `FrozenLimit` (60 s) is rooted whatever the plan says, and the spot
+itself is the problem. Ours is the same clock on the walker: a minute within two tiles of one spot
+goes straight to the top rung, which keeps its own rule about players watching. Their two stages
+(repick, then rescue) collapse to one here because the ladder's first rung is already a re-plan.
+
 ### A home is a town tag, not a `City` column
 
 Upstream gives every destination a `City` field and every bot a `HomeCity`, rolled at creation and

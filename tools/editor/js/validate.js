@@ -46,7 +46,7 @@ export const KEYS = {
     waypoints: ['id', 'name', 'map', 'x', 'y', 'z', 'refZ', 'arrivalRange', 'tags', 'note', 'source'],
     edges: ['from', 'to', 'kind', 'tags', 'note', 'source'],
     destinations: ['id', 'name', 'type', 'map', 'x', 'y', 'z', 'tags', 'waypoints', 'note', 'source'],
-    arrivals: ['destination', 'x', 'y', 'z', 'refZ', 'exclusive', 'exact', 'waypoints', 'note', 'source'],
+    arrivals: ['destination', 'x', 'y', 'z', 'refZ', 'exclusive', 'exact', 'range', 'waypoints', 'note', 'source'],
     zones: ['id', 'map', 'x', 'y', 'width', 'height', 'shape', 'points', 'tags', 'note'],
     routes: ['id', 'map', 'mode', 'waypoints', 'note'],
     selfTests: ['from', 'to'],

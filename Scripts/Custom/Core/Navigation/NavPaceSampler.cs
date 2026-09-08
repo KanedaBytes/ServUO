@@ -33,6 +33,20 @@ namespace Server.Custom
         private int _speedMs = -1;
         private long _nextMoveDelta;
 
+        // Per moved step: the delay the engine used and whether the bit was set. The bit is
+        // decided from the delay (BaseAI.DoMoveImpl), so "0 of 8 running" is only a finding when
+        // the 8 were at run pace; at walk pace it is correct. The first version of this sampler
+        // kept only the last delay it saw, and could not tell those apart afterwards.
+        private int _runPaceSteps;
+        private int _runPaceRunning;
+        private int _walkPaceSteps;
+        private int _walkPaceRunning;
+
+        // Recovery steps: the ladder's Sidestep moves with Mobile.Move directly, outside
+        // DoMoveImpl, so they carry no bit and no pace. Counted apart so a wedged bot's handful
+        // of moves are labelled for what they were.
+        private int _sidesteps;
+
         /// <summary>The walker's timer delivered a tick to this walker.</summary>
         public void TickSeen()
         {
@@ -69,6 +83,36 @@ namespace Server.Custom
             {
                 _running++;
             }
+
+            // Run pace is a delay under the engine's walk delay for the body in question -
+            // DoMoveImpl's own test - and the mobile's mount state is not known here, so a delay
+            // under WalkFoot counts as run pace for either: 100 and 200 are runs, 400 is a walk.
+            bool runPace = delayMs >= 0 && delayMs < Mobile.WalkFoot;
+
+            if (runPace)
+            {
+                _runPaceSteps++;
+
+                if (running)
+                {
+                    _runPaceRunning++;
+                }
+            }
+            else
+            {
+                _walkPaceSteps++;
+
+                if (running)
+                {
+                    _walkPaceRunning++;
+                }
+            }
+        }
+
+        /// <summary>The ladder's Sidestep moved the mobile one tile, outside the pace clock.</summary>
+        public void Sidestepped()
+        {
+            _sidesteps++;
         }
 
         /// <summary>The report, one fact per line, for the caller, the console and the bot's log.</summary>
@@ -129,6 +173,22 @@ namespace Server.Custom
                 _running,
                 _moves.Count,
                 _moves.Count == 0 ? 0 : _running * 100 / _moves.Count));
+
+            lines.Add(String.Format(
+                "of those, {0} at run pace ({1} with the bit) and {2} at walk pace ({3} with the bit); "
+                + "{4} sidestep(s) by the recovery ladder, outside the pace clock",
+                _runPaceSteps,
+                _runPaceRunning,
+                _walkPaceSteps,
+                _walkPaceRunning,
+                _sidesteps));
+
+            if (_runPaceSteps > 0 && _runPaceRunning < _runPaceSteps)
+            {
+                lines.Add(String.Format(
+                    "FINDING: {0} run-pace step(s) moved without the running bit",
+                    _runPaceSteps - _runPaceRunning));
+            }
 
             if (_delayMs >= 0 && _speedMs >= 0)
             {

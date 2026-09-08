@@ -83,6 +83,11 @@ namespace Server.Custom
         /// </summary>
         private static GathererBehavior _walkIn;
 
+        /// <summary>The second smith's brain and the two smiths themselves, for the packed-forge assertion.</summary>
+        private static CrafterBehavior _second;
+        private static PlayerBot _secondBot;
+        private static PlayerBot _firstBot;
+
         private static string _clockInNote;
 
         /// <summary>
@@ -132,6 +137,9 @@ namespace Server.Custom
                 // otherwise assert against the previous run's walking miner and pass on its
                 // swings.
                 _walkIn = null;
+                _second = null;
+                _secondBot = null;
+                _firstBot = null;
 
                 NavDestination site = FirstUsable(map, new BotStation("mine", null));
 
@@ -242,6 +250,24 @@ namespace Server.Custom
                 _walkIn.DestinationId = site.Id;
                 _walkIn.VisitExpiresAt = CustomTime.Now + Window;
                 walker.SetBehavior(_walkIn, "probe setup");
+
+                // A SECOND SMITH, sent to the same forge from town, which is the packed-forge
+                // case: it has to arrive within the station's range with the first smith on the
+                // station tile, choose a free tile of its own with the anvil and the forge in
+                // reach, and work from there. It keeps its starter ingots so that "it can work
+                // from its own spot" is proven by what it makes, whichever smith the miner's ore
+                // reaches. It fails the probe if it teleports, shares the first smith's tile, or
+                // leaves for another station.
+                var second = new PlayerBot(BotClass.Smith, BotSkillTier.Grandmaster);
+                bots.Add(second);
+                second.MoveToWorld(start, map);
+
+                _second = new CrafterBehavior();
+                _second.DestinationId = forge.Id;
+                _second.VisitExpiresAt = CustomTime.Now + Window + TimeSpan.FromMinutes(2.0);
+                second.SetBehavior(_second, "probe setup");
+                _secondBot = second;
+                _firstBot = smith;
 
                 Log.Info(
                     "Work probe: a Miner at '{0}', a Miner walking there from {1},{2}, and a Smith at '{3}', {4:0}s window.",
@@ -367,8 +393,10 @@ namespace Server.Custom
                 && BotWorkSites.Mined > minedBefore
                 && !miner.HaulPending
                 && crafter != null
-                && crafter.Received > 0
+                && OreReachedASmith(crafter)
                 && crafter.Made > madeBefore
+                // The packed forge: the second smith is at its own tile and has made something.
+                && SecondSmithWorking()
                 // The walking miner is part of the bar, not a bonus. Without it here the probe
                 // exits the moment the face-spawned miner finishes its cycle - about two minutes
                 // in - and the bot that is still walking out of town is never looked at.
@@ -418,6 +446,32 @@ namespace Server.Custom
                 miner.Location,
                 inZone ? "yes" : "NO",
                 gatherer.IsWorking ? "yes" : "NO");
+        }
+
+        /// <summary>
+        /// Did the ore reach a smith at the forge? Either of them: FindBuyer takes the first
+        /// crafter of the trade within twelve tiles, and with two at the bench which one is a
+        /// coin toss that says nothing about the hand-over.
+        /// </summary>
+        private static bool OreReachedASmith(CrafterBehavior first)
+        {
+            return (first != null && first.Received > 0) || (_second != null && _second.Received > 0);
+        }
+
+        /// <summary>
+        /// The second smith has settled at a tile of its own, is not blocked, and has made
+        /// something from where it stands.
+        /// </summary>
+        private static bool SecondSmithWorking()
+        {
+            if (_second == null || _secondBot == null || _secondBot.Deleted || _firstBot == null)
+            {
+                return false;
+            }
+
+            return _second.IsAtStation
+                && _second.Made > 0
+                && (_secondBot.X != _firstBot.X || _secondBot.Y != _firstBot.Y);
         }
 
         private static NavDestination FirstUsable(Map map, BotStation station)
@@ -572,28 +626,96 @@ namespace Server.Custom
                     }
                     else
                     {
-                        // THE HAND-OVER IS TO THIS SMITH, not to anybody. "A delivery happened"
-                        // was true of a load banked at an empty Trinsic forge, and with three
-                        // unstaffed forges on the graph that is where one haul in three went.
-                        // The rule under test is that a laden miner goes to the bench with
-                        // somebody at it; the proof is that this bench's stock rose.
-                        if (crafter.Received <= 0)
+                        // THE HAND-OVER IS TO A SMITH AT THIS FORGE, not to anybody. "A delivery
+                        // happened" was true of a load banked at an empty Trinsic forge, and
+                        // with three unstaffed forges on the graph that is where one haul in
+                        // three went. The rule under test is that a laden miner goes to the
+                        // bench with somebody at it; the proof is that a bench's stock rose.
+                        // Either smith: FindBuyer takes the first of the trade within twelve
+                        // tiles, and with two at the forge which one is a coin toss.
+                        if (!OreReachedASmith(crafter))
                         {
                             problems.Add(BotWorkSites.Deliveries == 0
                                 ? "no load was delivered anywhere"
                                 : String.Format(
-                                    "the ore never reached the smith at '{0}' - {1} load(s) went "
+                                    "the ore never reached a smith at '{0}' - {1} load(s) went "
                                     + "somewhere else (an empty bench or the bank)",
                                     crafter.DestinationId,
                                     BotWorkSites.Deliveries));
                         }
                         else
                         {
+                            CrafterBehavior taker = crafter.Received > 0 ? crafter : _second;
+
                             notes.Add(String.Format(
-                                "the smith at '{0}' took {1} unit(s) over {2} hand-over(s)",
-                                crafter.DestinationId,
-                                crafter.Received,
-                                crafter.Deliveries));
+                                "the {0} smith at '{1}' took {2} unit(s) over {3} hand-over(s)",
+                                taker == crafter ? "first" : "second",
+                                taker.DestinationId,
+                                taker.Received,
+                                taker.Deliveries));
+                        }
+
+                        // THE PACKED FORGE. The second smith arrived with the first on the
+                        // station tile, and has to be working from a tile of its own.
+                        if (_second == null || _secondBot == null || _secondBot.Deleted)
+                        {
+                            problems.Add("the second smith did not survive the window");
+                        }
+                        else if (!(_secondBot.Behavior is CrafterBehavior))
+                        {
+                            problems.Add("the second smith stopped being a Crafter mid-probe (it is a "
+                                + _secondBot.Behavior.SerializableName + ")");
+                        }
+                        else
+                        {
+                            NavWalker secondWalker = _second.Walker;
+
+                            if (secondWalker != null && secondWalker.RungsFired(StuckRung.Teleport) > 0)
+                            {
+                                problems.Add("the second smith teleported to reach the forge");
+                            }
+
+                            if (!Insensitive.Equals(_second.DestinationId, crafter.DestinationId))
+                            {
+                                problems.Add(String.Format(
+                                    "the second smith left for '{0}' instead of sharing '{1}'",
+                                    _second.DestinationId,
+                                    crafter.DestinationId));
+                            }
+                            else if (_second.Blocked != null)
+                            {
+                                problems.Add("the second smith could not work: " + _second.Blocked);
+                            }
+                            else if (_firstBot != null && _secondBot.X == _firstBot.X && _secondBot.Y == _firstBot.Y)
+                            {
+                                problems.Add(String.Format(
+                                    "the second smith is standing on the first smith's tile ({0},{1}) "
+                                    + "with the apron not full",
+                                    _secondBot.X,
+                                    _secondBot.Y));
+                            }
+                            else if (!_second.IsAtStation)
+                            {
+                                problems.Add("the second smith never settled at the forge");
+                            }
+                            else if (_second.Made <= 0)
+                            {
+                                problems.Add(String.Format(
+                                    "the second smith made nothing from its tile {0},{1} ({2} attempt(s))",
+                                    _secondBot.X,
+                                    _secondBot.Y,
+                                    _second.Attempts));
+                            }
+                            else
+                            {
+                                notes.Add(String.Format(
+                                    "the second smith settled at {0},{1} beside the first at {2},{3} and made {4} item(s)",
+                                    _secondBot.X,
+                                    _secondBot.Y,
+                                    _firstBot.X,
+                                    _firstBot.Y,
+                                    _second.Made));
+                            }
                         }
 
                         if (crafter.Blocked != null)
@@ -664,6 +786,12 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// Is the bot standing where a smith can work at this station: inside some arrival's
+        /// range of it, with an anvil and a forge in crafting reach? The authored tiles used to be
+        /// the test; now the stand tile is chosen on arrival for the fixtures, and this asks the
+        /// same question the chooser did.
+        /// </summary>
         private static bool OnStationArrival(PlayerBot bot, string destinationId)
         {
             if (bot == null || destinationId == null || BotWorkSites.IsExcluded(destinationId))
@@ -678,15 +806,19 @@ namespace Server.Custom
                 return false;
             }
 
+            bool inRange = false;
+
             foreach (NavArrival arrival in station.ArrivalList)
             {
-                if (bot.X == arrival.X && bot.Y == arrival.Y)
+                if (bot.InRange(arrival.Location, arrival.Range))
                 {
-                    return true;
+                    inRange = true;
+                    break;
                 }
             }
 
-            return false;
+            return inRange
+                && BotWorkSites.InReach(bot.Map, bot.Location, BotWorkSites.StationReach.AnvilAndForge);
         }
 
         private static PlayerBot Find(List<PlayerBot> bots, BotClass cls)

@@ -232,8 +232,9 @@ namespace Server.Custom
             }
 
             Point3D spot;
+            int range;
 
-            if (!Nav.TryPickArrival(_destinationId, bot, out spot))
+            if (!Nav.TryPickArrival(_destinationId, bot, out spot, out range))
             {
                 Pause();
                 return;
@@ -248,7 +249,7 @@ namespace Server.Custom
             }
 
             var steps = new List<NavStep>();
-            steps.Add(new NavStep(spot, destination.Map, null, NavStepKind.Arrival));
+            steps.Add(new NavStep(spot, destination.Map, null, NavStepKind.Arrival, range));
 
             var route = new NavRoute(steps, 0.0);
 

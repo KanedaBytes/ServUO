@@ -23,11 +23,17 @@ namespace Server.Custom
     public sealed class NavStep
     {
         public NavStep(Point3D point, Map map, string waypointId, NavStepKind kind)
+            : this(point, map, waypointId, kind, 0)
+        {
+        }
+
+        public NavStep(Point3D point, Map map, string waypointId, NavStepKind kind, int range)
         {
             Point = point;
             Map = map;
             WaypointId = waypointId;
             Kind = kind;
+            Range = range;
         }
 
         public Point3D Point { get; private set; }
@@ -38,6 +44,13 @@ namespace Server.Custom
         public string WaypointId { get; private set; }
 
         public NavStepKind Kind { get; private set; }
+
+        /// <summary>
+        /// For an Arrival step, how close counts as arrived - the picked arrival's own range
+        /// (NavArrival.Range). Zero is the tile itself. Ignored for a walk hop, whose tolerance is
+        /// the waypoint's (NavWalker.ArrivalRangeFor).
+        /// </summary>
+        public int Range { get; private set; }
 
         public override string ToString()
         {

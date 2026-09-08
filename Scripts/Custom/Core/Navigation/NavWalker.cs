@@ -246,6 +246,8 @@ namespace Server.Custom
             _index = 0;
             _rung = StuckRung.None;
             _watchedCycles = 0;
+            _frozenAnchor = _mobile.Location;
+            _frozenAt = Core.TickCount;
 
             Unregister(this);
         }
@@ -388,6 +390,19 @@ namespace Server.Custom
                 range = ArrivalRangeFor(step);
             }
 
+            // The frozen watchdog sits above the ladder. A mobile that has not moved two tiles
+            // in a minute is rooted whatever the rungs say, and the rungs can say quite a lot:
+            // a SkipWaypoint that "succeeds" aims at the next waypoint, which resets the ladder,
+            // so a bot that cannot take a single step walks the whole route with its index and
+            // never reaches the top rung. A miner rooted at the mine face did that for five
+            // minutes. This is uo-offline's CheckFrozenWatchdog (TravelerBehavior.cs:2963-3033,
+            // FrozenLimit 60 s, FrozenMoveTiles 2), with the same conclusion: the spot itself is
+            // the problem, so go straight to the rescue.
+            if (CheckFrozen(step))
+            {
+                return;
+            }
+
             // Real progress resets the ladder, and "closer than ever" is the test rather than
             // "moved at all" - a mobile shuffling around a lightpost does the second all day.
             int distance = Chebyshev(_mobile.Location, step.Point);
@@ -503,6 +518,57 @@ namespace Server.Custom
         /// steps around a corner. While watched the recoverable rungs are cycled up to
         /// WatchedCycles times, and only then does it move in view.
         /// </summary>
+        /// <summary>uo-offline's FrozenLimit and FrozenMoveTiles (TravelerBehavior.cs:2943-2944).</summary>
+        private static readonly TimeSpan FrozenLimit = TimeSpan.FromSeconds(60.0);
+
+        private const int FrozenMoveTiles = 2;
+
+        private Point3D _frozenAnchor;
+        private long _frozenAt;
+
+        /// <summary>
+        /// Rooted for FrozenLimit within FrozenMoveTiles of one spot? Then skip the rungs that
+        /// have already had their minute and go to the top of the ladder, which keeps its own
+        /// rule about players watching. Returns true when it acted.
+        /// </summary>
+        private bool CheckFrozen(NavStep step)
+        {
+            int moved = Chebyshev(_mobile.Location, _frozenAnchor);
+
+            if (moved > FrozenMoveTiles)
+            {
+                _frozenAnchor = _mobile.Location;
+                _frozenAt = Core.TickCount;
+                return false;
+            }
+
+            if (Core.TickCount - (_frozenAt + (long)FrozenLimit.TotalMilliseconds) < 0)
+            {
+                return false;
+            }
+
+            Log.Debug(
+                "{0} frozen for {1:0}s within {2} tile(s) of {3},{4} on {5}; going to the top rung{6}.",
+                Who(),
+                FrozenLimit.TotalSeconds,
+                FrozenMoveTiles,
+                _frozenAnchor.X,
+                _frozenAnchor.Y,
+                DescribeHop(step),
+                DescribeBlocker(step));
+
+            // A fresh window either way: a rescue that is refused (a player watching) cycles the
+            // ladder again, and this must not fire on every tick after it.
+            _frozenAnchor = _mobile.Location;
+            _frozenAt = Core.TickCount;
+
+            // The rung after SkipWaypoint is the top one.
+            _rung = StuckRung.SkipWaypoint;
+            HandleStuck(step);
+
+            return true;
+        }
+
         private void HandleStuck(NavStep step)
         {
             _rung = NextRung(_rung);
@@ -620,6 +686,13 @@ namespace Server.Custom
         /// <summary>One Debug line per rung entered, never per tick.</summary>
         private void LogRung(NavStep step, string what)
         {
+            // The body on the goal tile, when there is one. A bot walks through other bots and
+            // the daily-life actors (BotShove), so a rung that fires against a mobile is one it
+            // cannot push - a real player, a vendor, a guard, an animal - and that is the case
+            // the deviation was named for. Naming the blocker is what turns "wedged at 1450,1683"
+            // into evidence.
+            what += DescribeBlocker(step);
+
             Log.Debug(
                 "{0} stuck on {1} [{2}] - {3}.",
                 Who(),
@@ -653,6 +726,51 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// ", blocked by Perrin (DailyLifeTownsfolk) at 1450,1683" when a live mobile other than
+        /// this one stands on the step's tile; empty otherwise. A player is named as such rather
+        /// than by class, because that is the one blocker a bot is meant to yield to.
+        /// </summary>
+        private string DescribeBlocker(NavStep step)
+        {
+            Map map = _mobile.Map;
+
+            if (map == null || map == Map.Internal)
+            {
+                return String.Empty;
+            }
+
+            IPooledEnumerable eable = map.GetMobilesInRange(step.Point, 0);
+
+            try
+            {
+                foreach (Mobile other in eable)
+                {
+                    if (other == _mobile || other.Deleted || !other.Alive)
+                    {
+                        continue;
+                    }
+
+                    string kind = other.Player && !(other is BaseCreature)
+                        ? "player"
+                        : other.GetType().Name;
+
+                    return String.Format(
+                        ", blocked by {0} ({1}) at {2},{3}",
+                        other.Name ?? kind,
+                        kind,
+                        step.Point.X,
+                        step.Point.Y);
+                }
+            }
+            finally
+            {
+                eable.Free();
+            }
+
+            return String.Empty;
+        }
+
+        /// <summary>
         /// Step off the tile the mobile is wedged on, so the next repath starts somewhere else.
         ///
         /// Translated from uo-offline-server's NudgeAway. Directions are shuffled so a walker
@@ -682,10 +800,19 @@ namespace Server.Custom
 
             for (int i = 0; i < directions.Length; i++)
             {
+                Point3D before = _mobile.Location;
+
                 if (_mobile.Move(directions[i]))
                 {
                     taken = directions[i];
                     moved = true;
+
+                    // Move returns true for a turn as well as a step; only a step is a sidestep.
+                    if (Sampler != null && _mobile.Location != before)
+                    {
+                        Sampler.Sidestepped();
+                    }
+
                     break;
                 }
             }
@@ -697,9 +824,16 @@ namespace Server.Custom
 
             for (int step = 1; step < SidestepTiles; step++)
             {
+                Point3D before = _mobile.Location;
+
                 if (!_mobile.Move(taken))
                 {
                     break;
+                }
+
+                if (Sampler != null && _mobile.Location != before)
+                {
+                    Sampler.Sidestepped();
                 }
             }
 
@@ -845,7 +979,11 @@ namespace Server.Custom
         {
             if (step.Kind == NavStepKind.Arrival)
             {
-                return 0;
+                // The picked arrival's own range: 0 for a tile (a bank counter, a guard post),
+                // 2 for a place (a forge, where the arriving behaviour picks its stand tile).
+                // It was a hard 0 for every arrival, which is why a bot one tile short of an
+                // occupied station tile was never "arrived" and never delivered.
+                return step.Range;
             }
 
             NavWaypoint waypoint = Nav.Waypoint(step.WaypointId);

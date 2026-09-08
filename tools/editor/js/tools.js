@@ -154,6 +154,7 @@ export const TOOLS = {
         title: 'New arrival point',
         fields: [
             { key: 'exclusive', label: 'Exclusive (a guard post - nobody else stands here)', checkbox: true },
+            { key: 'range', label: 'Arrival range (0 = the tile; a forge apron is 2)', value: '0' },
             { key: 'waypoints', label: 'Approach waypoints', list: 'waypoint-list' }
         ]
     },

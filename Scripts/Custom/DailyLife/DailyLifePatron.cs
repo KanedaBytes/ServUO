@@ -70,6 +70,12 @@ namespace Server.Custom
         /// <summary>Always false - a patron is never steered by a NavWalker.</summary>
         public bool Commuting { get; set; }
 
+        /// <summary>A bot walks through a patron as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         public override bool IsInvulnerable
         {
             get { return true; }

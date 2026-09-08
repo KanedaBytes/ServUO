@@ -138,12 +138,15 @@ function projectNavigation(nav) {
                 id: `arr:${dest.id}#${index}`,
                 kind: 'point',
                 map: dest.map,
-                label: `${dest.id} arrival${arrival.exclusive ? ' (exclusive)' : arrival.exact ? ' (exact)' : ''}`,
+                label: `${dest.id} arrival${arrival.exclusive ? ' (exclusive)' : arrival.exact ? ' (exact)' : ''}${arrival.range ? ` (range ${arrival.range})` : ''}`,
                 points: [[arrival.x, arrival.y, arrival.z]],
                 props: { destination: dest.id, ...extraProps(arrival, MODELLED.arrival) },
                 fields: [
                     { key: 'exclusive', label: 'Exclusive', type: 'string' },
                     { key: 'exact', label: 'Exact (no scatter)', type: 'string' },
+                    // How close counts as arrived. 0 is the tile itself; a station authors 2, and
+                    // the behaviour that arrives picks its own stand tile inside that circle.
+                    { key: 'range', label: 'Arrival range (0 = the tile)', type: 'int' },
                     { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
                 ]
             });
@@ -426,10 +429,13 @@ const TEMPLATES = {
     },
     arrival: {
         // No 'map': an arrival belongs to its destination, which has one.
-        keys: ['destination', 'x', 'y', 'z', 'refZ', 'exclusive', 'exact', 'waypoints', 'note', 'source'],
+        // `range` is Ignore-on-default like `exact`, for an int: absent means 0, the tile
+        // itself, and only a place - a forge apron - writes it.
+        keys: ['destination', 'x', 'y', 'z', 'refZ', 'exclusive', 'exact', 'range', 'waypoints', 'note', 'source'],
         geometry: ['x', 'y', 'z'],
         defaults: { exclusive: false, waypoints: '' },
         omitWhenFalse: ['exact'],
+        omitWhenZero: ['range'],
         omitWhenBlank: ['note', 'source', 'refZ']
     },
     zone: {
@@ -699,6 +705,14 @@ function isTrue(value) {
     return value === true || value === 'true' || value === 'True';
 }
 
+/**
+ * DefaultValueHandling.Ignore for an int: 0, an unset field, or the blank the form hands back for
+ * one all mean "absent". NavArrival.Range is the one such field so far.
+ */
+function isZero(value) {
+    return value === undefined || value === null || value === '' || Number(value) === 0;
+}
+
 /** Where a key belongs when it is not in the record yet: before the next template key that is. */
 function anchorFor(node, template, key) {
     const after = template.keys.slice(template.keys.indexOf(key) + 1);
@@ -712,6 +726,11 @@ function writeField(node, template, key, value) {
     }
 
     if ((template.omitWhenFalse || []).includes(key) && !isTrue(value)) {
+        compact.remove(node, key);
+        return;
+    }
+
+    if ((template.omitWhenZero || []).includes(key) && isZero(value)) {
         compact.remove(node, key);
         return;
     }
@@ -817,6 +836,10 @@ function createShape(root, file, shape) {
         }
 
         if ((template.omitWhenFalse || []).includes(key) && !isTrue(value)) {
+            continue;
+        }
+
+        if ((template.omitWhenZero || []).includes(key) && isZero(value)) {
             continue;
         }
 

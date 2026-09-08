@@ -876,13 +876,28 @@ namespace Server.Custom
 
         private static bool HasAnvilAndForge(Map map, Point3D at, int range)
         {
+            return HasFixtures(map, at, range, true, true);
+        }
+
+        /// <summary>
+        /// Are the fixtures a trade needs within range of a tile? The engine's own sweep
+        /// (DefBlacksmithy.CheckAnvilAndForge) minus line of sight - see the note above
+        /// ForgeIsWorkable for why that is deliberately optimistic.
+        /// </summary>
+        private static bool HasFixtures(Map map, Point3D at, int range, bool needAnvil, bool needForge)
+        {
             if (map == null || map == Map.Internal)
             {
                 return false;
             }
 
-            bool anvil = false;
-            bool forge = false;
+            bool anvil = !needAnvil;
+            bool forge = !needForge;
+
+            if (anvil && forge)
+            {
+                return true;
+            }
 
             IPooledEnumerable eable = map.GetItemsInRange(at, range);
 
@@ -934,6 +949,221 @@ namespace Server.Custom
             }
 
             return false;
+        }
+
+        // ---- the stand tile, chosen live at arrival ----
+
+        /// <summary>
+        /// What a bot needs within crafting reach of where it stands, for what it came to do.
+        /// A smith needs the anvil and the forge (DefBlacksmithy.CanCraft's rule); a miner
+        /// delivering or smelting needs only the forge; everyone else has no fixture to reach.
+        /// </summary>
+        public enum StationReach
+        {
+            None,
+            AnvilAndForge,
+            Forge
+        }
+
+        /// <summary>The crafting reach the engine enforces, in tiles (DefBlacksmithy.cs:205).</summary>
+        public const int CraftingReach = 2;
+
+        public static StationReach ReachFor(BotClass trade)
+        {
+            if (trade == BotClass.Smith)
+            {
+                return StationReach.AnvilAndForge;
+            }
+
+            if (trade == BotClass.Miner)
+            {
+                return StationReach.Forge;
+            }
+
+            return StationReach.None;
+        }
+
+        /// <summary>
+        /// Where to stand at a station, decided when the bot gets there rather than authored.
+        ///
+        /// In old UO a forge was packed and each smith found a spot within reach; that is the
+        /// target. The candidates are every tile within each arrival's own range of it (the
+        /// authored tiles themselves when the range is 0), standable at the Z a mobile would
+        /// stand at there, with the trade's fixtures inside CraftingReach. They are ranked FREE
+        /// first - no live mobile on the tile - then nearest the bot, so a second smith takes the
+        /// next spot along rather than the first smith's. When nothing in reach is free, the
+        /// nearest occupied tile is returned with <paramref name="free"/> false: the bot stands
+        /// there anyway, which BotShove makes a legal step and which is exactly the piling-on
+        /// players did. Only when reach holds NO standable tile at all does this answer false,
+        /// and the caller should look for another station of its kind.
+        ///
+        /// uo-offline never needed this: its production is an illusion (CrafterProduction.cs:2-4),
+        /// so a smith settles wherever its drift ended and "works" from there. Ours runs the real
+        /// craft system, which refuses anything not beside both fixtures, so the spot has to be
+        /// chosen for the fixtures rather than for the arrival.
+        /// </summary>
+        public static bool TryPickStandTile(
+            Map map, NavDestination station, Mobile self, StationReach reach,
+            HashSet<Point2D> excluded, out Point3D tile, out bool free)
+        {
+            tile = Point3D.Zero;
+            free = false;
+
+            if (map == null || map == Map.Internal || station == null || station.ArrivalList == null)
+            {
+                return false;
+            }
+
+            Point3D from = self != null ? self.Location : station.Location;
+
+            var seen = new HashSet<Point2D>();
+
+            Point3D bestFree = Point3D.Zero;
+            int bestFreeDistance = Int32.MaxValue;
+            Point3D bestTaken = Point3D.Zero;
+            int bestTakenDistance = Int32.MaxValue;
+
+            foreach (NavArrival arrival in station.ArrivalList)
+            {
+                int range = arrival.Range < 0 ? 0 : arrival.Range;
+
+                for (int dx = -range; dx <= range; dx++)
+                {
+                    for (int dy = -range; dy <= range; dy++)
+                    {
+                        var key = new Point2D(arrival.X + dx, arrival.Y + dy);
+
+                        if (!seen.Add(key) || (excluded != null && excluded.Contains(key)))
+                        {
+                            continue;
+                        }
+
+                        int z = NavWalker.ResolveZ(map, new Point3D(key.X, key.Y, arrival.Z));
+                        var at = new Point3D(key.X, key.Y, z);
+
+                        // Standable, mobiles NOT counted here: whether somebody is on it is the
+                        // ranking, not the filter.
+                        if (!map.CanFit(key.X, key.Y, z, 16, false, false, true))
+                        {
+                            continue;
+                        }
+
+                        if (!InReach(map, at, reach))
+                        {
+                            continue;
+                        }
+
+                        int distance = NavGraph.Chebyshev(at, from);
+                        bool occupied = IsOccupied(map, at, self);
+
+                        if (!occupied && distance < bestFreeDistance)
+                        {
+                            bestFreeDistance = distance;
+                            bestFree = at;
+                        }
+                        else if (occupied && distance < bestTakenDistance)
+                        {
+                            bestTakenDistance = distance;
+                            bestTaken = at;
+                        }
+                    }
+                }
+            }
+
+            if (bestFreeDistance != Int32.MaxValue)
+            {
+                tile = bestFree;
+                free = true;
+                return true;
+            }
+
+            if (bestTakenDistance != Int32.MaxValue)
+            {
+                tile = bestTaken;
+                free = false;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Does this tile satisfy a trade's reach? None is always satisfied.</summary>
+        public static bool InReach(Map map, Point3D at, StationReach reach)
+        {
+            switch (reach)
+            {
+                case StationReach.AnvilAndForge:
+                    return HasFixtures(map, at, CraftingReach, true, true);
+
+                case StationReach.Forge:
+                    return HasFixtures(map, at, CraftingReach, false, true);
+
+                default:
+                    return true;
+            }
+        }
+
+        /// <summary>Is a live mobile other than <paramref name="self"/> standing on this tile?</summary>
+        private static bool IsOccupied(Map map, Point3D at, Mobile self)
+        {
+            IPooledEnumerable eable = map.GetMobilesInRange(at, 0);
+
+            try
+            {
+                foreach (Mobile other in eable)
+                {
+                    if (other != self && !other.Deleted && other.Alive)
+                    {
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                eable.Free();
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Another usable station of the same shape in the same town, nearest first, or null.
+        /// The fallback for a station whose reach holds no standable tile at all.
+        /// </summary>
+        public static NavDestination AnotherStationInTown(Map map, BotStation station, NavDestination current)
+        {
+            if (current == null)
+            {
+                return null;
+            }
+
+            string town = BotHomeTowns.TownOf(current);
+
+            NavDestination best = null;
+            int bestDistance = Int32.MaxValue;
+
+            foreach (NavDestination candidate in Available(map, station))
+            {
+                if (Insensitive.Equals(candidate.Id, current.Id))
+                {
+                    continue;
+                }
+
+                if (town != null && !candidate.HasTag(town))
+                {
+                    continue;
+                }
+
+                int distance = NavGraph.Chebyshev(candidate.Location, current.Location);
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>Every usable destination of a station's shape, excluding the ones that failed validation.</summary>

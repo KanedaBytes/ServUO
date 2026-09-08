@@ -366,6 +366,11 @@ namespace Server.Custom
                     errors.Add("{0} has an invalid destination id '{1}'", where, record.DestinationId);
                 }
 
+                if (record.Range < 0)
+                {
+                    errors.Add("{0} range must not be negative (found {1})", where, record.Range);
+                }
+
                 ValidateTags(errors, where, record.WaypointIds);
             }
         }
@@ -964,6 +969,26 @@ namespace Server.Custom
         /// </remarks>
         [JsonProperty("exact", DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool Exact { get; set; }
+
+        /// <summary>
+        /// How close to this tile counts as having arrived, in tiles. Optional; default 0, the
+        /// tile itself.
+        ///
+        /// This is the difference between an arrival that is a TILE and one that is a PLACE.
+        /// The walker's last step was always exact: one tile short of the authored spot was not
+        /// arrived, and a laden miner stood one tile from the forge for a whole work probe
+        /// because the smith was standing on the spot. uo-offline's Traveler never asked for the
+        /// tile - its drift ends within DriftArriveRange, 2, of the arrival point
+        /// (TravelerBehavior.cs:218, :2076-2080) and the bot settles where it stands. A station
+        /// authors 2 here for the same reason and lets the behaviour that arrives choose its
+        /// stand tile inside that circle (BotWorkSites.PickStandTile). A bank, a shop counter,
+        /// a guard post keep 0: those are tiles.
+        ///
+        /// Ignore-on-default, as `exact` is, so the sixty-odd arrivals that mean the tile do not
+        /// gain a key on the next save.
+        /// </summary>
+        [JsonProperty("range", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int Range { get; set; }
 
         [JsonProperty("waypoints")]
         public string WaypointIds { get; set; }

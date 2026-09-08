@@ -70,6 +70,16 @@ namespace Server.Custom
 
         public bool Commuting { get; set; }
 
+        /// <summary>
+        /// A bot walks through this actor, as a player would. Without it the courier on his round
+        /// is a wall to every bot behind him on a one-tile road - four of five walk-probe bots
+        /// wedged at 1450,1683 that way. See BotShove for the rule and what a bot still yields to.
+        /// </summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         public override bool IsInvulnerable
         {
             get { return true; }

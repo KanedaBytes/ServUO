@@ -441,6 +441,27 @@ namespace Server.Custom
             get { return false; }
         }
 
+        /// <summary>
+        /// A bot walks through crowds - uo-offline PlayerBot.cs:512, and its reason: the engine's
+        /// full-stamina shove rule jammed their bank plazas. This is the MOVER's half; the shoved
+        /// side has to consent first, because a BaseCreature is refused before this is ever
+        /// asked. See BotShove for the seam and for what a bot still yields to.
+        /// </summary>
+        public override bool CheckShove(Mobile shoved)
+        {
+            return true;
+        }
+
+        /// <summary>
+        /// The shoved half: another bot may walk through this one. Anything else - a player, a
+        /// stock NPC, a pet - gets BaseCreature's own answer, which for a player is the stamina
+        /// rule and for an uncontrolled creature is a refusal.
+        /// </summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         /// <summary>The paperdoll title is the class and tier; a click-title would double it up.</summary>
         public override bool ClickTitle
         {

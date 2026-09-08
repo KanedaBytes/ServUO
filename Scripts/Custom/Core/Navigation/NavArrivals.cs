@@ -26,7 +26,19 @@ namespace Server.Custom
 
         public static bool TryPick(NavDestination destination, Mobile forMobile, out Point3D spot)
         {
+            int range;
+
+            return TryPick(destination, forMobile, out spot, out range);
+        }
+
+        /// <summary>
+        /// As above, and also how close to the spot counts as arrived - the chosen arrival's
+        /// Range, or 0 when the spot is the destination's centre because nothing was eligible.
+        /// </summary>
+        public static bool TryPick(NavDestination destination, Mobile forMobile, out Point3D spot, out int range)
+        {
             spot = Point3D.Zero;
+            range = 0;
 
             if (destination == null)
             {
@@ -47,6 +59,8 @@ namespace Server.Custom
             if (candidates.Count > 0)
             {
                 NavArrival chosen = candidates[Utility.Random(candidates.Count)];
+
+                range = chosen.Range;
 
                 // Two different reasons to take the tile exactly, and they are independent.
                 // `exclusive` reserves it (a guard post: one guard, precisely there). `exact` only

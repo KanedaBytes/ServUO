@@ -291,14 +291,18 @@ namespace Server.Custom
             }
 
             Point3D spot;
+            int range;
 
-            if (forMobile == null || !NavArrivals.TryPick(destination, forMobile, out spot))
+            if (forMobile == null || !NavArrivals.TryPick(destination, forMobile, out spot, out range))
             {
                 spot = destination.Location;
+                range = 0;
             }
 
+            // The arrival's own range rides on the step, so the walker can say "arrived" from a
+            // tile short of the spot when the data says a place, not a tile.
             var steps = new List<NavStep>(route.Steps);
-            steps.Add(new NavStep(spot, destination.Map, null, NavStepKind.Arrival));
+            steps.Add(new NavStep(spot, destination.Map, null, NavStepKind.Arrival, range));
 
             return new NavRoute(steps, route.Cost);
         }
@@ -433,11 +437,20 @@ namespace Server.Custom
         /// </summary>
         public static bool TryPickArrival(string destinationId, Mobile forMobile, out Point3D spot)
         {
+            int range;
+
+            return TryPickArrival(destinationId, forMobile, out spot, out range);
+        }
+
+        /// <summary>As above, with the chosen arrival's range - how close counts as arrived.</summary>
+        public static bool TryPickArrival(string destinationId, Mobile forMobile, out Point3D spot, out int range)
+        {
             spot = Point3D.Zero;
+            range = 0;
 
             NavDestination destination = NavigationSystem.Destination(destinationId);
 
-            return destination != null && NavArrivals.TryPick(destination, forMobile, out spot);
+            return destination != null && NavArrivals.TryPick(destination, forMobile, out spot, out range);
         }
     }
 }

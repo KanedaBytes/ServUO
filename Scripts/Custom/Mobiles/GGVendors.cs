@@ -78,6 +78,12 @@ namespace Server.Custom
 
         public bool Commuting { get; set; }
 
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
@@ -127,6 +133,12 @@ namespace Server.Custom
         protected override BaseAI ForcedAI { get { return new DailyLifeAI(this); } }
 
         public bool Commuting { get; set; }
+
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
 
         public override bool CheckVendorAccess(Mobile from)
         {
@@ -178,6 +190,12 @@ namespace Server.Custom
 
         public bool Commuting { get; set; }
 
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
@@ -227,6 +245,12 @@ namespace Server.Custom
         protected override BaseAI ForcedAI { get { return new DailyLifeAI(this); } }
 
         public bool Commuting { get; set; }
+
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
 
         public override bool CheckVendorAccess(Mobile from)
         {
@@ -278,6 +302,12 @@ namespace Server.Custom
 
         public bool Commuting { get; set; }
 
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
+
         public override bool CheckVendorAccess(Mobile from)
         {
             return DailyLifeVendor.CheckAccess(this, from) && base.CheckVendorAccess(from);
@@ -327,6 +357,12 @@ namespace Server.Custom
         protected override BaseAI ForcedAI { get { return new DailyLifeAI(this); } }
 
         public bool Commuting { get; set; }
+
+        /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
+        public override bool OnMoveOver(Mobile m)
+        {
+            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+        }
 
         public override bool CheckVendorAccess(Mobile from)
         {
