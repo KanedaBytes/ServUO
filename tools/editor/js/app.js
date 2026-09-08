@@ -99,6 +99,9 @@ const state = {
     /** Edges the last adopt could not walk. Drawn red; never proposed. */
     adoptFailures: [],
 
+    /** Why Save is refused, or null. Set by an adopt that would leave an island. */
+    adoptBlocked: null,
+
     selected: null,
     hovered: null,
     filter: '',
@@ -2064,6 +2067,7 @@ async function confirmReplaceProposal() {
     if (live.length === 0) {
         state.proposal = null;
     state.adoptFailures = [];
+    state.adoptBlocked = null;
         return true;
     }
 
@@ -2085,6 +2089,7 @@ async function confirmReplaceProposal() {
 
     state.proposal = null;
     state.adoptFailures = [];
+    state.adoptBlocked = null;
     syncDerived(state.shapes);
 
     return true;
@@ -2322,6 +2327,12 @@ function showAdoptProposal(proposal) {
 
     state.proposal = new Set(created.map((shape) => shape.id));
     state.adoptFailures = proposal.failures || [];
+
+    // Save is BLOCKED while any proposed waypoint cannot reach the graph we already have. Not a
+    // warning: an island is the one fault that looks perfect from inside the editor - every edge
+    // pathed, every record valid - and only shows up as a bot that stands still for ever. The way
+    // out is Discard and a region that overlaps ground already saved, so there is no override.
+    state.adoptBlocked = (proposal.islands || []).length > 0 ? proposal.islands : null;
 
     syncDerived(state.shapes);
     updateCounts();
@@ -3158,6 +3169,21 @@ function filesWithEdits() {
 
 async function save() {
     if (!hasEdits()) {
+        return;
+    }
+
+    // An adopt that would leave an island is refused outright, before validation, and there is no
+    // override. Every record in it is individually valid - that is what makes an island the one
+    // fault the editor cannot show you. It looks like a road right up until a bot stands on it
+    // for ever, and Britain shipped exactly that once already.
+    if (state.adoptBlocked) {
+        showBanner(
+            'This adopt cannot be saved.\n\n'
+            + state.adoptBlocked.join('\n\n')
+            + '\n\nDiscard it and adopt a region that overlaps ground you have already saved,'
+            + ' so its edges have something to join onto.',
+            'warn');
+        setStatus('Save refused: the proposal would leave records nothing can reach.', 'error');
         return;
     }
 
