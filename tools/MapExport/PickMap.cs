@@ -63,12 +63,16 @@ namespace Server.Custom.MapExport
     internal sealed class PickMap
     {
         /// <summary>
-        /// The sidecar's own format, independent of TileServer.Version.
+        /// The sidecar's own format, so a reader refuses a file it does not understand rather than
+        /// decoding it wrongly - which would be a pick three hundred tiles away rather than an
+        /// error.
         ///
-        /// The cache path carries the RENDERER version, which orphans a .pick whenever the art
-        /// changes - but this format could change while no pixel does, and a file cached under a
-        /// version that is still current would then be stale forever. So the bridge reads this byte
-        /// out of a cache hit and re-renders when it is not the one the handshake advertised.
+        /// IT IS NOT A SECOND CACHE KEY, and deliberately. The whole file is gzipped, so this byte
+        /// is not readable without decompressing, and probing every cache hit to find it would cost
+        /// more than it saves. CHANGING THIS FORMAT MEANS BUMPING TileServer.Version, which orphans
+        /// the sidecars along with the tiles they sit beside - the mechanism that already exists for
+        /// exactly this. The handshake advertises the number so the editor can compare and say
+        /// plainly that its cache is stale, rather than going quiet.
         /// </summary>
         public const byte Format = 1;
 

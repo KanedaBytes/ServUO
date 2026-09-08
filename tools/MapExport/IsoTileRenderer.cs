@@ -241,6 +241,28 @@ namespace Server.Custom.MapExport
 
         public int TileSize { get { return _tileSize; } }
 
+        /// <summary>
+        /// The Z a mobile stands at on a tile.
+        ///
+        /// The ONE place this tool asks that question, so the pick map and the `landz` query the
+        /// editor draws zones with cannot give different answers for the same tile. It is the
+        /// shard's own map.GetAverageZ (Server/Map.cs:543-592) rather than a copy of it, for the
+        /// same reason the tiles come from Server.TileMatrix.
+        ///
+        /// Clamped to the facet because a caller can legitimately ask about a rectangle's far
+        /// corner, which is one past the last tile - and off the facet TileMatrix hands back a
+        /// zeroed block, so an unclamped query would answer a confident z 0 in the sea.
+        /// </summary>
+        public int StandingZ(int x, int y)
+        {
+            if (x < 0) { x = 0; }
+            if (y < 0) { y = 0; }
+            if (x >= _facetWidth) { x = _facetWidth - 1; }
+            if (y >= _facetHeight) { y = _facetHeight - 1; }
+
+            return _map.GetAverageZ(x, y);
+        }
+
         /// <summary>RGBA bytes for one tile, tileSize square. Never null.</summary>
         public byte[] Render(int level, int tileX, int tileY, Floor floor)
         {
@@ -624,7 +646,7 @@ namespace Server.Custom.MapExport
             // records. map.GetAverageZ is the shard's own answer and the one the client shows.
             PickCell cell = _pick == null
                 ? default(PickCell)
-                : new PickCell(x, y, _map.GetAverageZ(x, y), PickMap.KindLand);
+                : new PickCell(x, y, StandingZ(x, y), PickMap.KindLand);
 
             if (!level)
             {

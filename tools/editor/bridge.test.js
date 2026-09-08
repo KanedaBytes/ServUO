@@ -611,7 +611,16 @@ test('a tile path is parsed into numbers and a layer, or refused', () => {
         parseTilePath('/tiles/iso/Trammel/v2/map/ground/10/340/259.png'),
         {
             facet: 'Trammel', version: 2, layer: 'map', layerName: 'map',
-            floor: 'ground', level: 10, x: 340, y: 259
+            floor: 'ground', level: 10, x: 340, y: 259, extension: 'png'
+        });
+
+    // The pick sidecar sits beside the tile it answers for and is addressed the same way, so this
+    // stays one function rather than two that have to agree about what a layer is.
+    assert.deepStrictEqual(
+        parseTilePath('/tiles/iso/Trammel/v2/map/ground/10/340/259.pick'),
+        {
+            facet: 'Trammel', version: 2, layer: 'map', layerName: 'map',
+            floor: 'ground', level: 10, x: 340, y: 259, extension: 'pick'
         });
 
     // The item layer's directory carries the snapshot's own id, which is what makes a re-decorate
@@ -621,7 +630,7 @@ test('a tile path is parsed into numbers and a layer, or refused', () => {
         {
             facet: 'Trammel', version: 2, layer: 'items',
             layerName: 'items-trammel-1-20260908205527-29778',
-            floor: 'all', level: 9, x: 170, y: 129
+            floor: 'all', level: 9, x: 170, y: 129, extension: 'png'
         });
 
     // Every segment is checked against what it is allowed to BE rather than sanitised - the same
@@ -629,7 +638,9 @@ test('a tile path is parsed into numbers and a layer, or refused', () => {
     // because the path is rebuilt from the parts rather than taken from the caller.
     const refused = [
         '/tiles/iso/Trammel/v2/map/attic/10/340/259.png',      // not a floor
-        '/tiles/iso/Trammel/v2/map/all/10/340/259.jpg',        // not a png
+        '/tiles/iso/Trammel/v2/map/all/10/340/259.jpg',        // not one of the two extensions
+        '/tiles/iso/Trammel/v2/map/all/10/340/259.pick.png',   // nor is a second one appended
+        '/tiles/iso/Trammel/v2/map/all/10/340/259.PICK',       // and the set is exact, not case-folded
         '/tiles/iso/Trammel/v2/map/all/10/-1/259.png',         // negative
         '/tiles/iso/Trammel/v2/map/all/10/340.png',            // too few segments
         '/tiles/iso/Trammel/v2/map/all/10/340/259/extra.png',  // too many
@@ -682,6 +693,65 @@ test('artinfo and artstats always answer, renderer or no renderer', async () => 
     for (const key of ['available', 'running', 'rendered', 'failed', 'queued', 'lastMs', 'avgMs']) {
         assert.ok(key in stats, 'artstats is missing ' + key);
     }
+});
+
+test('a pick sidecar is served as bytes, still compressed', async () => {
+    // The sidecar is gzipped on disk and goes out with Content-Encoding: gzip, so the browser
+    // inflates it natively and fetch().arrayBuffer() hands over the EXACT bytes. That exactness is
+    // the whole reason it is not a PNG: a picture would have to come back through a canvas, which
+    // premultiplies alpha and applies colour management, and a pick map that is nearly right is a
+    // waypoint three tiles from where it was clicked.
+    //
+    // 503 is a legitimate answer here - MapExport.exe may not have been built - so this asserts the
+    // shape of a success rather than that there is one, exactly as the item-tile test above does.
+    const response = await fetch(origin + '/tiles/iso/Trammel/v2/map/all/10/340/259.pick');
+
+    assert.ok(response.status === 200 || response.status === 503,
+        `expected an answer, got ${response.status}`);
+
+    if (response.status !== 200) {
+        return;
+    }
+
+    assert.strictEqual(response.headers.get('content-type'), 'application/octet-stream');
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+
+    // fetch() has already inflated it, so what arrives is the header this file's format begins
+    // with - "GGPK" and the format byte - rather than gzip's own 1f 8b.
+    assert.deepStrictEqual(
+        Array.from(bytes.slice(0, 4)), [0x47, 0x47, 0x50, 0x4B], 'not a GGPK pick map');
+    assert.strictEqual(bytes[4], 1, 'unexpected pick format');
+});
+
+test('landz validates its tile list before it reaches the renderer', async () => {
+    const refused = [
+        '',                       // absent
+        'nonsense',               // not a pair
+        '1424,1557,30',           // three
+        '1424.5,1557',            // not integers
+        Array.from({ length: 257 }, () => '1,1').join(';')   // over the cap
+    ];
+
+    for (const tiles of refused) {
+        const response = await fetch(origin + '/api/landz?tiles=' + encodeURIComponent(tiles));
+
+        assert.strictEqual(response.status, 400, JSON.stringify(tiles) + ' was accepted');
+    }
+});
+
+test('landz answers 200 with a reason rather than failing when there is no renderer', async () => {
+    // A zone still has to draw and a radar placement still has to succeed when MapExport has not
+    // been built, so `z: null` with a reason is the answer and never a 4xx or a 5xx.
+    const body = await (await fetch(origin + '/api/landz?tiles=1424,1557;1475,1645')).json();
+
+    if (body.z === null) {
+        assert.ok(body.reason, 'a null answer has to say why');
+        return;
+    }
+
+    assert.strictEqual(body.z.length, 2);
+    assert.ok(body.z.every((z) => Number.isInteger(z)), 'every Z is an integer');
 });
 
 test('the art cache is not writable through the save path', () => {

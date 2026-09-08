@@ -10,11 +10,15 @@
 //
 // The protocol is one line each way over stdin and stdout (tools/MapExport/TileServer.cs):
 //
-//     <- {"ready":true,"version":2,...}          the handshake, once
+//     <- {"ready":true,"version":3,...}          the handshake, once
 //     -> items <path>
 //     <- ok <count> <id>               or   err <message>
 //     -> tile <layer> <floor> <level> <x> <y>
 //     <- ok <ms> <bytes> <path>       or   empty   or   err <message>
+//     -> pick <layer> <floor> <level> <x> <y>
+//     <- ok <ms> <bytes> <path>       or   empty   or   err <message>
+//     -> landz <x>,<y> <x>,<y> ...
+//     <- ok <z> <z> ...               or   err <message>
 //
 // THERE ARE TWO LAYERS AND THEY EXPIRE DIFFERENTLY. `map` is the client's own world - land and
 // statics - which never changes, so it is cached under the renderer version and kept forever.
@@ -35,6 +39,13 @@
 // A MISS BLOCKS THE HTTP REQUEST until the tile is rendered. That is the whole placeholder
 // protocol: there isn't one. The editor draws radar underneath the art layer, so a tile that has
 // not arrived shows radar rather than a hole, and the browser's Image simply takes a moment.
+//
+// THE PICK MAP IS ASKED FOR SEPARATELY, and lazily. It is a sidecar beside the tile - which world
+// tile and standing Z each pixel belongs to, so the editor can invert a projection that has no
+// inverse - and it is only wanted for tiles somebody actually puts the cursor on, which is a small
+// fraction of what gets drawn. Rendering it with every PNG would have meant bumping the renderer
+// version and throwing away every tile already cached, for a file that changes no pixel. The cost
+// is one extra paint pass, about 13 ms, the first time a tile is hovered, ever.
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -183,15 +194,18 @@ class ArtRenderer {
         };
     }
 
-    /** The cache path for a tile. The renderer builds the same one; both derive it from `info`. */
-    tilePath(layer, floor, level, x, y) {
+    /**
+     * The cache path for a tile, or for the pick sidecar beside it. The renderer builds the same
+     * one; both derive it from `info`.
+     */
+    tilePath(layer, floor, level, x, y, extension = 'png') {
         if (!this.info) {
             return null;
         }
 
         return path.join(
             this.tiles, 'iso', this.facet, `v${this.info.version}`,
-            layer, floor, String(level), String(x), `${y}.png`);
+            layer, floor, String(level), String(x), `${y}.${extension}`);
     }
 
     /** The directory name for a layer: constant for the map, the snapshot's id for items. */
@@ -354,6 +368,74 @@ class ArtRenderer {
      * and the browser gets a status rather than an empty 200 that would be cached as a blank tile.
      */
     async tile(layer, floor, level, x, y) {
+        await this.prepare(layer, floor, level, x, y);
+
+        if (level > this.info.maxLevel || level < this.info.maxLevel - (this.info.artLevelDepth - 1)) {
+            throw new Error(`Level ${level} is outside the art range.`);
+        }
+
+        return this.render('tile', layer, floor, level, x, y, 'png');
+    }
+
+    /**
+     * The pick sidecar for a tile: which world tile and standing Z each of its pixels belongs to.
+     *
+     * It takes no level. There is only ever one - the deepest - because a pick map is read by
+     * turning a screen point into a facet-global canvas pixel, which is the same number at every
+     * zoom, so the 1:1 sidecar answers 1:2 and 1:8 exactly as well. See PickMap.cs.
+     *
+     * An items tile with no items in it composes to precisely the map layer's pick, so the renderer
+     * answers `empty` and the MAP LAYER'S FILE IS THE ANSWER rather than a second identical copy of
+     * it on disk. That is why this resolves a path from a different layer than it was asked about,
+     * and why the caller never has to know.
+     */
+    async pick(layer, floor, x, y) {
+        await this.start();
+
+        const level = this.info.pickLevel;
+        const own = await this.sidecar(layer, floor, level, x, y);
+
+        return own === null && layer !== 'map' ? this.sidecar('map', floor, level, x, y) : own;
+    }
+
+    async sidecar(layer, floor, level, x, y) {
+        await this.prepare(layer, floor, level, x, y);
+
+        return this.render('pick', layer, floor, level, x, y, 'pick');
+    }
+
+    /**
+     * The Z a mobile stands at on each of a list of `[x, y]` tiles, as an array of numbers.
+     *
+     * The editor draws zone rects with it: a zone is a rectangle of ground with no Z in its schema,
+     * and none is being added, because where the ground is happens to be a question with an answer.
+     * It is the same `map.GetAverageZ` the pick map records for land, from the same accessor, so a
+     * zone corner and a waypoint on the same tile cannot disagree.
+     */
+    async landz(tiles) {
+        if (!Array.isArray(tiles) || tiles.length === 0) {
+            return [];
+        }
+
+        for (const [x, y] of tiles) {
+            if (!Number.isInteger(x) || !Number.isInteger(y)) {
+                throw new Error('Tiles must be pairs of integers.');
+            }
+        }
+
+        await this.start();
+
+        const reply = await this.send(`landz ${tiles.map(([x, y]) => `${x},${y}`).join(' ')}`);
+
+        if (!reply.startsWith('ok')) {
+            throw new Error(reply.replace(/^err /, ''));
+        }
+
+        return reply.split(' ').slice(1).map(Number);
+    }
+
+    /** The checks `tile` and `pick` share, and the snapshot the items layer needs. */
+    async prepare(layer, floor, level, x, y) {
         if (!FLOORS.has(floor)) {
             throw new Error(`Unknown floor '${floor}'.`);
         }
@@ -369,10 +451,6 @@ class ArtRenderer {
 
         await this.start();
 
-        if (level > this.info.maxLevel || level < this.info.maxLevel - (this.info.artLevelDepth - 1)) {
-            throw new Error(`Level ${level} is outside the art range.`);
-        }
-
         if (layer === 'items') {
             await this.ensureItems();
 
@@ -380,16 +458,25 @@ class ArtRenderer {
                 throw new Error('No world-item snapshot. Run [WorldItems on the shard.');
             }
         }
+    }
 
-        const name = this.layerName(layer);
-        const file = this.tilePath(name, floor, level, x, y);
+    /**
+     * A cache hit, or a place in the queue behind one render of it.
+     *
+     * The key is the file path, which is what makes the dedupe work across callers - and what makes
+     * a .png job and a .pick job for the same tile two different jobs. They are, deliberately: they
+     * are asked for at different moments, and sharing a key would make a hover wait behind a render
+     * it does not need.
+     */
+    render(verb, layer, floor, level, x, y, extension) {
+        const file = this.tilePath(this.layerName(layer), floor, level, x, y, extension);
 
         if (fs.existsSync(file)) {
-            return file;
+            return Promise.resolve(file);
         }
 
         if (this.empties.has(file)) {
-            return null;
+            return Promise.resolve(null);
         }
 
         return new Promise((resolve, reject) => {
@@ -409,7 +496,7 @@ class ArtRenderer {
 
             this.queue.push({
                 key: file,
-                line: `tile ${layer} ${floor} ${level} ${x} ${y}`,
+                line: `${verb} ${layer} ${floor} ${level} ${x} ${y}`,
                 waiters: [{ resolve, reject }]
             });
 
@@ -462,7 +549,7 @@ class ArtRenderer {
             this.stats.lastMs = elapsed;
             this.stats.totalMs += elapsed;
 
-            this.log(`  art ${this.pending.line.slice('tile '.length)} rendered in ${elapsed} ms`);
+            this.log(`  art ${this.pending.line} rendered in ${elapsed} ms`);
             this.finish(null, this.pending.key);
             return;
         }
@@ -506,7 +593,12 @@ class ArtRenderer {
 }
 
 /**
- * Splits "/tiles/iso/<facet>/v<n>/<layer>/<floor>/<level>/<x>/<y>.png" into its parts, or null.
+ * Splits "/tiles/iso/<facet>/v<n>/<layer>/<floor>/<level>/<x>/<y>.<ext>" into its parts, or null.
+ *
+ * `ext` is a CLOSED SET - `png` for the picture, `pick` for the sidecar beside it - rather than a
+ * pattern. A `\w+` here would be the same mistake as sanitising a name instead of refusing it: the
+ * whole safety of this route is that every segment is checked against what it is allowed to BE and
+ * the path is then rebuilt from the result.
  *
  * Every segment is checked against what it is allowed to be rather than sanitised, which is the
  * same rule the token names follow: a name that has to be cleaned up before it is safe is a name
@@ -535,7 +627,13 @@ function parseTilePath(urlPath) {
         return null;
     }
 
-    if (!/^\d+$/.test(parts[6]) || !/^\d+$/.test(parts[7]) || !/^\d+\.png$/.test(parts[8])) {
+    if (!/^\d+$/.test(parts[6]) || !/^\d+$/.test(parts[7])) {
+        return null;
+    }
+
+    const leaf = /^(\d+)\.(png|pick)$/.exec(parts[8]);
+
+    if (!leaf) {
         return null;
     }
 
@@ -547,7 +645,8 @@ function parseTilePath(urlPath) {
         floor: parts[5],
         level: Number(parts[6]),
         x: Number(parts[7]),
-        y: Number(parts[8].slice(0, -'.png'.length))
+        y: Number(leaf[1]),
+        extension: leaf[2]
     };
 }
 

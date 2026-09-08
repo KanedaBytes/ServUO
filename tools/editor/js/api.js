@@ -79,6 +79,15 @@ export const api = {
     artStats: () => request('GET', '/api/artstats'),
 
     /**
+     * The Z a mobile stands at on each of a list of [x, y] tiles, in the order asked.
+     *
+     * Answers `{ z: null, reason }` rather than failing when there is no renderer - a zone still
+     * has to draw and a placement still has to succeed without one.
+     */
+    landZ: (tiles) => request(
+        'GET', `/api/landz?tiles=${tiles.map(([x, y]) => `${x},${y}`).join(';')}`),
+
+    /**
      * Asks the shard to do something by dropping a request token.
      *
      * This returns as soon as the token is written, not when the shard has acted - the shard

@@ -52,6 +52,11 @@ const NONCED = new Set([
 // radar never launches it. See artrenderer.js.
 const art = new ArtRenderer({ log: (line) => console.log(line) });
 
+// The same cap TileServer.LandZ enforces. A facet is 29 million tiles and a query string is not the
+// place to ask about all of them; the editor batches its zone corners, and this is what stops a
+// batch turning into a sweep.
+const MAX_LANDZ_TILES = 256;
+
 // validate.js is a browser ES module and this file is CommonJS, so it arrives as a promise. That
 // is fine: every place it is awaited is already async, and awaiting a settled promise is free.
 // One copy of the rules, shared by the preview in the browser and the dry run here.
@@ -134,6 +139,39 @@ function parseBbox(text) {
     const [x, y, width, height] = parts;
 
     return width > 0 && height > 0 ? { x, y, width, height } : null;
+}
+
+/**
+ * "x,y;x,y;..." into [[x, y], ...], or null if any of it is not a pair of integers.
+ *
+ * Capped here as well as in the renderer, and at the same number, so an over-long list is refused
+ * by whichever end sees it first rather than by whichever end happens to be reached.
+ */
+function parseTileList(text) {
+    if (!text) {
+        return null;
+    }
+
+    const tiles = [];
+
+    for (const token of text.split(';')) {
+        const pair = token.split(',');
+
+        if (pair.length !== 2) {
+            return null;
+        }
+
+        const x = Number(pair[0]);
+        const y = Number(pair[1]);
+
+        if (!Number.isInteger(x) || !Number.isInteger(y)) {
+            return null;
+        }
+
+        tiles.push([x, y]);
+    }
+
+    return tiles.length > 0 && tiles.length <= MAX_LANDZ_TILES ? tiles : null;
 }
 
 /**
@@ -310,6 +348,36 @@ const ROUTES = {
     /** Cached and rendered counts, and how long the last tile took. */
     '/api/artstats': (request, response) => {
         sendJson(response, 200, art.counters());
+    },
+
+    /**
+     * The Z a mobile stands at on each of `?tiles=x,y;x,y;...`, in the order asked.
+     *
+     * What the editor draws zone rects with. A zone is a rectangle of ground and carries no Z in
+     * its schema - none is being added, because where the ground is is a question with an answer,
+     * so it is asked rather than stored. Same accessor as the pick map's land Z, so a zone corner
+     * and a waypoint on the same tile agree by construction.
+     *
+     * It answers 200 with `z: null` rather than an error when there is no renderer: a zone still
+     * has to draw, and a radar placement still has to succeed, when MapExport has not been built.
+     */
+    '/api/landz': (request, response) => {
+        const url = new URL(request.url, `http://${HOST}`);
+        const tiles = parseTileList(url.searchParams.get('tiles'));
+
+        if (tiles === null) {
+            sendError(response, 400, 'tiles must be "x,y;x,y;..." of integers.');
+            return;
+        }
+
+        if (!art.available) {
+            sendJson(response, 200, { z: null, reason: 'MapExport.exe has not been built.' });
+            return;
+        }
+
+        art.landz(tiles).then(
+            (z) => sendJson(response, 200, { z }),
+            (error) => sendJson(response, 200, { z: null, reason: error.message }));
     },
 
     '/api/shapes': (request, response) => {
@@ -566,6 +634,11 @@ function serveArtTile(pathname, response) {
         return;
     }
 
+    if (parts.extension === 'pick') {
+        serveArtPick(parts, response);
+        return;
+    }
+
     art.tile(parts.layer, parts.floor, parts.level, parts.x, parts.y).then(
         (file) => {
             if (file === null) {
@@ -593,6 +666,43 @@ function serveArtTile(pathname, response) {
                     'Content-Length': data.length,
                     // Immutable: the renderer version is in the path, so a change of pixels is a
                     // change of URL and there is nothing to invalidate.
+                    'Cache-Control': 'public, max-age=86400'
+                });
+
+                response.end(data);
+            });
+        },
+        (error) => sendError(response, 503, error.message));
+}
+
+/**
+ * Serves one pick sidecar: which world tile and standing Z each pixel of a tile belongs to.
+ *
+ * SENT STILL COMPRESSED. The file is gzipped on disk and goes out with Content-Encoding: gzip, so
+ * the browser inflates it natively and fetch().arrayBuffer() hands over the exact bytes. That
+ * exactness is the whole point of not making this a PNG: a picture would have to come back through
+ * a canvas, which premultiplies alpha and applies colour management, and a pick map that is nearly
+ * right is a waypoint three tiles from where it was clicked.
+ *
+ * There is no empty answer to serve here. An items tile with nothing in it composes to exactly the
+ * map layer's pick, and art.pick() resolves the map layer's file for it rather than inventing a
+ * placeholder - so by the time this runs there is always a real file.
+ */
+function serveArtPick(parts, response) {
+    art.pick(parts.layer, parts.floor, parts.x, parts.y).then(
+        (file) => {
+            fs.readFile(file, (error, data) => {
+                if (error) {
+                    sendError(response, 500, 'The pick map was rendered but could not be read.');
+                    return;
+                }
+
+                response.writeHead(200, {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Encoding': 'gzip',
+                    'Content-Length': data.length,
+                    // Immutable for the same reason the tiles are: the renderer version is in the
+                    // path, so a change of content is a change of URL.
                     'Cache-Control': 'public, max-age=86400'
                 });
 

@@ -23,11 +23,21 @@ namespace Server.Custom.MapExport
     ///     &lt;- ok &lt;count&gt; &lt;id&gt;               or   err &lt;message&gt;
     ///     -&gt; tile &lt;layer&gt; &lt;floor&gt; &lt;level&gt; &lt;x&gt; &lt;y&gt;
     ///     &lt;- ok &lt;ms&gt; &lt;bytes&gt; &lt;path&gt;       or   empty   or   err &lt;message&gt;
+    ///     -&gt; pick &lt;layer&gt; &lt;floor&gt; &lt;level&gt; &lt;x&gt; &lt;y&gt;
+    ///     &lt;- ok &lt;ms&gt; &lt;bytes&gt; &lt;path&gt;       or   empty   or   err &lt;message&gt;
+    ///     -&gt; landz &lt;x&gt;,&lt;y&gt; &lt;x&gt;,&lt;y&gt; ...
+    ///     &lt;- ok &lt;z&gt; &lt;z&gt; ...               or   err &lt;message&gt;
     ///
     /// `layer` is `map` - the client's land and statics, cached under the renderer version and kept
     /// forever - or `items`, the shard's own furniture, cached under the SNAPSHOT's identity so a
     /// re-decorate throws away seconds of work rather than minutes. `empty` is the answer for an
     /// item tile with nothing in it, which is most of them, and nothing is written to disk for it.
+    ///
+    /// `pick` takes the same five arguments as `tile` and answers for the same tile, but writes the
+    /// .pick sidecar instead of the .png: which world tile and standing Z each pixel belongs to, so
+    /// the editor can invert the projection. It exists only at the deepest level and says so at any
+    /// other; `empty` there means the same thing it does for `tile` and the caller serves the map
+    /// layer's sidecar, which is identical by construction. See PickMap.
     ///
     /// Requests are answered in order and one at a time, which is not a simplification: Server's
     /// TileMatrix keeps its block buffers in static fields, so two renders at once corrupt each
@@ -179,7 +189,17 @@ namespace Server.Custom.MapExport
                 return LoadItems(renderer, tilesRoot, facet, facetHeight, parts[1]);
             }
 
-            if (parts.Length != 6 || parts[0] != "tile")
+            if (parts.Length >= 2 && parts[0] == "landz")
+            {
+                return LandZ(renderer, parts);
+            }
+
+            // `pick` takes exactly the same five arguments as `tile` and answers for the same tile,
+            // so they are parsed together rather than twice. What differs is only what comes out:
+            // pixels, or the record of which world tile each of those pixels belongs to.
+            bool wantsPick = parts[0] == "pick";
+
+            if (parts.Length != 6 || (parts[0] != "tile" && !wantsPick))
             {
                 return "err bad request: " + line;
             }
@@ -222,6 +242,45 @@ namespace Server.Custom.MapExport
             try
             {
                 var watch = Stopwatch.StartNew();
+
+                if (wantsPick)
+                {
+                    // One resolution, and it answers every zoom - see PickMap. Refused rather than
+                    // silently rendered at the level asked for, because a pick map at 1:2 would
+                    // have to decimate world coordinates, and there is no honest way to do that.
+                    if (level != renderer.MaxLevel)
+                    {
+                        return String.Format(
+                            CultureInfo.InvariantCulture,
+                            "err a pick map exists only at level {0} (asked for {1})",
+                            renderer.MaxLevel,
+                            level);
+                    }
+
+                    PickMap picked = renderer.RenderPick(layer, x, y, floor);
+
+                    if (picked == null)
+                    {
+                        // No item reaches this tile, so an items pick would be the map layer's pick
+                        // exactly. Answered rather than written twice; the bridge serves the map
+                        // layer's file for it.
+                        return "empty";
+                    }
+
+                    string pickFile = PickPath(
+                        tilesRoot, facet, LayerName(layer, renderer.Items), floor, level, x, y);
+
+                    long pickBytes = picked.Write(pickFile);
+                    watch.Stop();
+
+                    return String.Format(
+                        CultureInfo.InvariantCulture,
+                        "ok {0} {1} {2}",
+                        watch.ElapsedMilliseconds,
+                        pickBytes,
+                        pickFile);
+                }
+
                 byte[] pixels = renderer.Render(layer, level, x, y, floor);
 
                 if (pixels == null)
@@ -251,6 +310,51 @@ namespace Server.Custom.MapExport
                 Console.Error.WriteLine(ex);
                 return "err " + ex.Message.Replace('\n', ' ').Replace('\r', ' ');
             }
+        }
+
+        /// <summary>
+        /// The Z a mobile stands at on each of a list of tiles: `landz x,y x,y ...` -> `ok z z ...`.
+        ///
+        /// The editor draws zone rects with it. A zone has no Z in its schema and none is being
+        /// added - it is a rectangle of ground, and where the ground is happens to be a question
+        /// with an answer, so it is asked rather than stored. Zones are also large and usually
+        /// nowhere near a rendered tile, which is why this is a query and not a read of the pick
+        /// map.
+        ///
+        /// CAPPED, because a facet is 29 million tiles and one line of stdin is not the place to
+        /// ask about all of them. The editor batches its corners; the cap is what stops a batch
+        /// becoming a sweep.
+        /// </summary>
+        private static string LandZ(IsoTileRenderer renderer, string[] parts)
+        {
+            const int MaxTiles = 256;
+
+            if (parts.Length - 1 > MaxTiles)
+            {
+                return String.Format(
+                    CultureInfo.InvariantCulture,
+                    "err landz takes at most {0} tiles (got {1})", MaxTiles, parts.Length - 1);
+            }
+
+            var answer = new StringBuilder("ok");
+
+            for (int i = 1; i < parts.Length; i++)
+            {
+                string[] pair = parts[i].Split(',');
+                int x, y;
+
+                if (pair.Length != 2
+                    || !Int32.TryParse(pair[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out x)
+                    || !Int32.TryParse(pair[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out y))
+                {
+                    return "err bad tile: " + parts[i];
+                }
+
+                answer.Append(' ').Append(
+                    renderer.StandingZ(x, y).ToString(CultureInfo.InvariantCulture));
+            }
+
+            return answer.ToString();
         }
 
         private static string LoadItems(
@@ -287,6 +391,10 @@ namespace Server.Custom.MapExport
             text.Append(",\"maxLevel\":").Append(renderer.MaxLevel);
             text.Append(",\"artLevelDepth\":").Append(IsoTransform.ArtLevelDepth);
             text.Append(",\"floorLevelDepth\":").Append(IsoTransform.FloorLevelDepth);
+            // The pick map's own level and format, so the editor holds no second copy of either and
+            // can say plainly that a sidecar it cannot read is a stale cache rather than a bug.
+            text.Append(",\"pickLevel\":").Append(renderer.MaxLevel);
+            text.Append(",\"pickFormat\":").Append(PickMap.Format);
             text.Append(",\"halfWidth\":").Append(IsoTransform.HalfWidth);
             text.Append(",\"halfHeight\":").Append(IsoTransform.HalfHeight);
             text.Append(",\"zStep\":").Append(IsoTransform.ZStep);
@@ -317,7 +425,6 @@ namespace Server.Custom.MapExport
         /// </summary>
         public static int PickReport(
             IsoTileRenderer renderer,
-            Map map,
             string tilesRoot,
             string facet,
             int facetHeight,
@@ -327,7 +434,7 @@ namespace Server.Custom.MapExport
         {
             int level = renderer.MaxLevel;
             int size = renderer.TileSize;
-            int standZ = map.GetAverageZ(x, y);
+            int standZ = renderer.StandingZ(x, y);
 
             int canvasX = IsoTransform.IsoX(x, y) - IsoTransform.OriginX(facetHeight);
             int canvasY = IsoTransform.IsoY(x, y, standZ) - IsoTransform.OriginY()

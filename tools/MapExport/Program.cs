@@ -238,7 +238,7 @@ namespace Server.Custom.MapExport
                     ParsePoint(pickAt, out pickX, out pickY);
 
                     return TileServer.PickReport(
-                        renderer, map, output, name, height, pickX, pickY, log);
+                        renderer, output, name, height, pickX, pickY, log);
                 }
 
                 TileServer.Prerender(renderer, output, name, width, height, ParseBounds(prerender), log);
