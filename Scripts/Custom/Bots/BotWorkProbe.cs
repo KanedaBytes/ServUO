@@ -83,6 +83,9 @@ namespace Server.Custom
         /// </summary>
         private static GathererBehavior _walkIn;
 
+        /// <summary>Bank deliveries before the run, so the probe measures its own window.</summary>
+        private static int _bankDeliveriesBefore;
+
         /// <summary>
         /// The forge under test, and what its whole bench had already received and made when the
         /// probe started. Baselines, because the population's own fixed-role Smith stands at this
@@ -178,6 +181,7 @@ namespace Server.Custom
                 // Baseline the whole bench before anything of ours stands at it. A fixed-role
                 // Smith is already there and already counting.
                 _forgeId = forge.Id;
+                _bankDeliveriesBefore = BotWorkSites.BankDeliveries;
                 _forgeReceivedBefore = ReceivedAtForge();
                 _forgeMadeBefore = MadeAtForge();
 
@@ -416,7 +420,15 @@ namespace Server.Custom
                 // exits the moment the face-spawned miner finishes its cycle - about two minutes
                 // in - and the bot that is still walking out of town is never looked at.
                 && _walkIn != null
-                && _walkIn.Swings > 0;
+                && _walkIn.Swings > 0
+                // AND NOTHING WENT TO A BANK ON THE WAY. The walking miner starts in town and its
+                // road to the mine runs past shops, homes and the bank itself; with a smith
+                // standing at a staffed forge, a load that ends in a bank box is a load that was
+                // handed over somewhere the bot was only passing. That became possible when
+                // arrivals became places - "arrived" now begins two tiles out, and the short-walk
+                // delivery path was always a bare twelve-tile radius round the destination centre.
+                // BotWorkDelivery.AtArrival is the fix; this is the assertion that it holds.
+                && BotWorkSites.BankDeliveries == _bankDeliveriesBefore;
         }
 
         /// <summary>

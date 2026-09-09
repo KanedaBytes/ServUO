@@ -124,10 +124,27 @@ namespace Server.Custom
         /// </summary>
         public static int Mined { get; private set; }
 
+        /// <summary>
+        /// Loads that ended in a bank box rather than at a bench, since boot.
+        ///
+        /// A legitimate outcome and a bad one, depending on the shard. With no crafter working
+        /// anywhere, a bank is where a load goes and BotDestinations weights it accordingly. With a
+        /// bench staffed - which the population recipe guarantees - a load reaching a bank means
+        /// the haul roll or the delivery gate sent it to the wrong place, and it is exactly the
+        /// failure the work probe cannot see from its own two smiths. Counted separately so it can
+        /// be asserted on rather than inferred from a total.
+        /// </summary>
+        public static int BankDeliveries { get; private set; }
+
         public static void NoteDelivery(int amount)
         {
             Deliveries++;
             Delivered += amount;
+        }
+
+        public static void NoteBankDelivery()
+        {
+            BankDeliveries++;
         }
 
         public static void NoteMined(int amount)

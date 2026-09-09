@@ -72,10 +72,34 @@ namespace Server.Custom
                 return false;
             }
 
+            // AND THE BOT HAS TO BE AT ONE OF ITS ARRIVALS, not merely near the place.
+            //
+            // This was implicit until arrivals became places. An arrival used to be an exact tile,
+            // so "arrived" and "standing on the delivery point" were the same fact and the caller's
+            // own arrival test was enough. With range 2 on every non-work-site arrival, a bot now
+            // counts as arrived from two tiles out - and DeliverIfWithinReach was always a bare
+            // twelve-tile radius round the destination centre, which is most of a town block.
+            //
+            // Together those meant a laden miner could hand its ore over somewhere it was only
+            // passing. The load is supposed to reach a bench somebody is working at; dropping it
+            // near the door of the right building is the same lost load as dropping it anywhere.
+            if (!AtArrival(bot, destination))
+            {
+                return false;
+            }
+
             // The flag clears whatever happens next. A bot that reached a delivery point with an
             // empty pack has finished its errand just as much as one that reached it full, and
             // leaving the flag set would keep it hauling nothing round the town for ever.
             bot.HaulPending = false;
+
+            if (Insensitive.Equals(destination.Type, "bank"))
+            {
+                // Counted, not refused. A bank is a real delivery point when nothing is staffed -
+                // that is what the 2.0 weight in BotDestinations.HaulWeightFor is for. It is only
+                // a fault when a bench WAS available, and the work probe is the thing that knows.
+                BotWorkSites.NoteBankDelivery();
+            }
 
             int hauled = TakeYield(bot.Backpack, raw) + TakeYield(BotPackAnimals.PanniersOf(bot), raw);
 
@@ -137,6 +161,38 @@ namespace Server.Custom
         /// lumberjack's logs go to the carpenter's shop and not to the forge, which is the whole
         /// reason CrafterProfile carries RawGood.
         /// </summary>
+        /// <summary>
+        /// Is the bot standing at one of this destination's arrival points?
+        ///
+        /// Each arrival's OWN range, not a single number: a forge authors 2 because
+        /// DefBlacksmithy needs the fixtures in reach, and a bank authors 2 because a counter is a
+        /// place. Using the widest of them, or a constant, would put the loose rule back.
+        ///
+        /// A destination with no arrivals at all falls back to its own tile. That is the honest
+        /// answer for a record which has not said where to stand, and Nav.Data already warns about
+        /// it separately.
+        /// </summary>
+        private static bool AtArrival(PlayerBot bot, NavDestination destination)
+        {
+            if (destination.ArrivalList == null || destination.ArrivalList.Count == 0)
+            {
+                return bot.InRange(destination.Location, 1);
+            }
+
+            foreach (NavArrival arrival in destination.ArrivalList)
+            {
+                // Plus one, the apron: the stand-tile sweep and the walker's own free-tile shift
+                // may both settle a bot on the ring just outside the authored range, and a bot
+                // that walked all the way there should not be refused on the last tile.
+                if (bot.InRange(arrival.Location, arrival.Range + 1))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool IsDeliveryPoint(NavDestination destination, Type raw)
         {
             if (Insensitive.Equals(destination.Type, "bank"))
