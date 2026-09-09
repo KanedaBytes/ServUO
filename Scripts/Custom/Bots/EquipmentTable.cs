@@ -1030,8 +1030,18 @@ namespace Server.Custom
             // arms: swords, the halberd, the executioner's axe.
             EquipWeapon(bot, tier, new int[] { 0, 1, 2, 3, 4, 5 }); // sword/axe pool
 
-            // 35% chance of a shield (one-handed weapons benefit).
-            if (Utility.RandomDouble() < 0.35) EquipShield(bot, tier);
+            // 35% chance of a shield - and only if a hand is free, which the comment here used to
+            // claim and nothing enforced.
+            //
+            // The sword/axe pool above contains Halberd, ExecutionersAxe and BattleAxe, all
+            // Layer.TwoHanded, so a third of warriors were being handed a shield to wear on the
+            // hand already holding a poleaxe: 32 of the 107 conflicts in the log. RollArcherLook
+            // has always asked this question correctly (a bow is two-handed too); this is the same
+            // line. Mobile.HasFreeHand is exactly `FindItemOnLayer(Layer.TwoHanded) == null`.
+            if (bot.HasFreeHand() && Utility.RandomDouble() < 0.35)
+            {
+                EquipShield(bot, tier);
+            }
         }
 
         private static void RollMageLook(PlayerBot bot, BotSkillTier tier)
@@ -1245,8 +1255,7 @@ namespace Server.Custom
                 // A gutting apron, sometimes.
                 if (Utility.RandomDouble() < 0.30)
                 {
-                    Item apron = Utility.RandomBool() ? (Item)new FullApron() : new HalfApron();
-                    Add(bot, apron, DrabHue());
+                    AddApron(bot, DrabHue());
                 }
 
                 // Varied headgear — not everyone in the same straw hat.
@@ -1273,9 +1282,7 @@ namespace Server.Custom
             // Apron — defining accessory
             if (Utility.RandomDouble() < 0.7)
             {
-                Item apron = Utility.RandomBool() ? (Item)new FullApron() : new HalfApron();
-                int hue = IsHighTier(tier) ? RichHue() : DrabHue();
-                Add(bot, apron, hue);
+                AddApron(bot, IsHighTier(tier) ? RichHue() : DrabHue());
             }
 
             // Equip the subtype's hand tool. Smiths get a hammer; tailors
@@ -1576,7 +1583,11 @@ namespace Server.Custom
                 MaybeEnchantArmor(armor, tier);
             }
             if (hue != 0) item.Hue = hue;
-            bot.AddItem(item);
+
+            // Through the same door as everything else - see Add. Armour is where the shield
+            // collisions came from: BaseShield is BaseArmor, and a shield and a halberd are both
+            // literally Layer.TwoHanded.
+            bot.SetWearable(item);
         }
 
         // -------------------------------------------------------------------
@@ -1839,11 +1850,22 @@ namespace Server.Custom
                 Add(bot, new BodySash(), hue);
             }
 
-            // -- HALF-APRON (kitchen-y look, secondary chance for non-artisans;
-            //    artisans already get their apron in RollCrafterLook) --
-            if (cls != BotClass.Crafter && !BotClassHelper.IsArtisan(cls) &&
-                bot.FindItemOnLayer(Layer.OuterTorso) == null &&
-                Utility.RandomDouble() < 0.05)
+            // -- HALF-APRON (kitchen-y look, secondary chance for anyone who has not already
+            //    been given one) --
+            //
+            // TWO BUGS LIVED IN THIS CONDITION, and they stacked into five HalfApron-over-HalfApron
+            // conflicts in the log - the same item type twice on one bot.
+            //
+            // It tested Layer.OuterTorso for a Layer.Waist item (Waist.cs:14), so the guard could
+            // never fire; and it gated on IsArtisan, which is Smith|Tailor|Fisherman|Carpenter
+            // (BotClass.cs:178-181) and EXCLUDES Lumberjack and Miner - who are exactly the classes
+            // RollGathererLook has already given an apron to. The sash guard eight lines above is
+            // the correct version of the same idiom and tests the layer its own item uses.
+            //
+            // Now it asks the only question that matters: is the waist free? Which is true of a
+            // gatherer that missed its 40% roll and false of one that took it, without this having
+            // to know which classes get an apron somewhere else.
+            if (bot.FindItemOnLayer(Layer.Waist) == null && Utility.RandomDouble() < 0.05)
             {
                 Add(bot, new HalfApron(), PaletteHue());
             }
@@ -2067,10 +2089,73 @@ namespace Server.Custom
         private static Item TryNewItem(string typeName, int hueArg) =>
             BotItemFactory.Create(typeName, hueArg);
 
+        /// <summary>
+        /// Equip one item, and put it in the pack rather than on top of another one.
+        ///
+        /// THE ENGINE DOES NOT REFUSE A DOUBLE-EQUIP, which is the whole reason this exists.
+        /// Mobile.AddItem (Server/Mobile.cs:6779) notices a layer clash, writes LayerConflict.log
+        /// and a red console line - and then falls straight through to `m_Items.Add(item)` at
+        /// :6807. Nothing is dropped. Both items sit on the layer, FindItemOnLayer returns
+        /// whichever is first in list order, and the other is an invisible ghost that still carries
+        /// weight and resistances and still drops on the corpse. (DailyLifeWatchman.cs:26 says the
+        /// engine "drops one"; it does not.)
+        ///
+        /// SetWearable is BaseCreature's own answer (Scripts/Mobiles/Normal/BaseCreature.cs:5706)
+        /// and PlayerBot inherits it: it runs CheckEquip/OnEquip and PackItems the loser instead of
+        /// ghosting it. Stock BaseVendor.InitOutfit dresses every vendor through it.
+        ///
+        /// It catches more than same-layer collisions. CheckEquip routes through
+        /// BaseWeapon.CheckConflictingLayer (BaseWeapon.cs:998), which is what knows that a
+        /// two-handed weapon and a shield cannot share a bot - a rule no table in this file can
+        /// express, because Layer is not knowable from the Type: clothing takes it as a
+        /// constructor argument and armour and weapons read it from tiledata at
+        /// (Layer)ItemData.Quality. The item has to exist before anyone can ask.
+        ///
+        /// The rolls above still guard their own layers where they can. That is not redundancy:
+        /// this stops a conflict becoming a ghost, and they stop the outfit quietly losing the
+        /// piece it rolled. A bot that rolled an apron and a doublet should end up wearing one of
+        /// them ON PURPOSE, not whichever the engine happened to accept.
+        /// </summary>
+
+        /// <summary>
+        /// An apron that knows what the shirt did.
+        ///
+        /// FullApron is Layer.MiddleTorso and so is Doublet (MiddleTorso.cs:14), and CommonerUp
+        /// may already have put a doublet there - which made this the single largest source of
+        /// layer conflicts in the log, 55 of 107. The roll is not the problem: a crafter in an
+        /// apron is the picture. Picking the apron that FITS is the fix, and HalfApron is
+        /// Layer.Waist, so the aproned look survives a taken torso instead of being dropped.
+        /// </summary>
+        private static void AddApron(PlayerBot bot, int hue)
+        {
+            bool torsoFree = bot.FindItemOnLayer(Layer.MiddleTorso) == null;
+
+            Item apron = torsoFree && Utility.RandomBool()
+                ? (Item)new FullApron()
+                : new HalfApron();
+
+            // And the waist can be taken too - a gatherer's sash, or its own earlier apron. Then
+            // there is no apron to be had and the outfit is what it is.
+            if (apron is HalfApron && bot.FindItemOnLayer(Layer.Waist) != null)
+            {
+                apron.Delete();
+                return;
+            }
+
+            Add(bot, apron, hue);
+        }
+
         private static void Add(PlayerBot bot, Item item, int hue)
         {
+            if (item == null)
+            {
+                return;
+            }
+
             if (hue != 0) item.Hue = hue;
-            bot.AddItem(item);
+
+            // -1 would mean "leave the hue alone" to SetWearable, and the hue is already set.
+            bot.SetWearable(item);
         }
 
         // Put an item in the bot's backpack (not an equip layer). Used for

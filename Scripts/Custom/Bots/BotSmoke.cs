@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 
 using Server.Engines.PartySystem;
@@ -216,6 +217,34 @@ namespace Server.Custom
         /// Run the audit. <paramref name="from"/> may be null when run headlessly at boot; when
         /// present it also receives the report.
         /// </summary>
+        /// <summary>
+        /// How long LayerConflict.log is, so the smoke can assert that dressing a bot of every
+        /// class added nothing to it.
+        ///
+        /// The file's length is the assertion because the engine's own behaviour makes anything
+        /// cheaper unreliable: Mobile.AddItem (Server/Mobile.cs:6779) writes the log and then
+        /// EQUIPS THE ITEM ANYWAY, so a conflict leaves no trace on the bot to inspect afterwards -
+        /// both items are on the layer and FindItemOnLayer returns one of them. The log is the only
+        /// place the fault is recorded at all.
+        ///
+        /// Zero on any failure to read, which makes an unreadable file a silent pass rather than a
+        /// spurious one. That is the right way round: this is a regression guard on the outfit
+        /// tables, not a check on the filesystem.
+        /// </summary>
+        private static long LayerConflictBytes()
+        {
+            try
+            {
+                string path = Path.Combine(Core.BaseDirectory, "LayerConflict.log");
+
+                return File.Exists(path) ? new FileInfo(path).Length : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         /// <summary>Live bots, from the registry rather than World.Mobiles (CLAUDE.md section 15).</summary>
         private static int CountPopulation()
         {
@@ -244,6 +273,7 @@ namespace Server.Custom
             Point3D location = from != null ? from.Location : new Point3D(1475, 1645, 20);
 
             int populationBefore = CountPopulation();
+            long conflictsBefore = LayerConflictBytes();
 
             try
             {
@@ -327,12 +357,29 @@ namespace Server.Custom
             // that somebody would assume the curve had made. Naming the count before and after
             // turns that back into something a reader can subtract. Bots.Population's name-pool
             // check is the automated half; this is the one in front of whoever typed the command.
+            // EVERY CLASS JUST GOT DRESSED, which makes this the one place that can assert the
+            // outfit tables respect the engine's layers. A conflict is invisible on the bot itself
+            // - AddItem logs it and equips the item anyway - so the log's length is the evidence.
+            long conflictsAfter = LayerConflictBytes();
+
+            if (conflictsAfter > conflictsBefore)
+            {
+                problems.Add(String.Format(
+                    "the outfit generator equipped {0} byte(s) worth of layer conflicts into "
+                    + "LayerConflict.log - two items on one layer, or a shield with a two-handed "
+                    + "weapon. The engine does NOT refuse these: both items stay on the bot and one "
+                    + "is an invisible ghost that still carries weight and drops on the corpse",
+                    conflictsAfter - conflictsBefore));
+            }
+
             string summary = String.Format(
-                "{0} class(es) audited at Grandmaster; population {1} before, {2} after ({3} kept). {4}",
+                "{0} class(es) audited at Grandmaster; population {1} before, {2} after ({3} kept); "
+                + "{4} layer conflict(s) logged. {5}",
                 spawned.Count,
                 populationBefore,
                 CountPopulation(),
                 Config.Get("Custom.BotSmokeKeep", 0),
+                conflictsAfter > conflictsBefore ? "SOME" : "no",
                 caps.Describe());
 
             if (problems.Count > 0)
