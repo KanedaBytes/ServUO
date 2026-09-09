@@ -198,7 +198,19 @@ namespace Server.Custom
                 return mobile.GetType().Name;
             }
 
-            if (creature is IBotActor)
+            // THE ONE QUESTION THAT MATTERS: does this mobile consent to being shoved?
+            //
+            // It is IDailyLifeActor, not IBotActor. IBotActor is the BOT's own interface - only
+            // PlayerBot implements it, and PlayerBot is already answered above - so testing for it
+            // here matched nothing at all, and every daily-life townsfolk, patron and GG vendor
+            // came back as "vendor" or "npc": as something a bot cannot push, when it can.
+            //
+            // That mis-attribution ran the wrong way for the decision it feeds. It inflates the
+            // "blocked by something unshovable" bucket, which is the bucket that argues for editing
+            // two upstream files - so the fault made the expensive answer look better supported
+            // than it is. Caught by reading the names in the first run's output: they were the
+            // shopkeepers.
+            if (creature is IDailyLifeActor)
             {
                 return "daily-life";
             }
