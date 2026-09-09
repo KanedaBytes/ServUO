@@ -152,6 +152,15 @@ namespace Server.Custom
         /// </summary>
         private int _bestDistance;
 
+        /// <summary>
+        /// Whether this hop has already re-aimed at a free tile inside its arrival's range.
+        ///
+        /// Once, deliberately. Two bots each shifting onto the tile the other just left would
+        /// trade places for ever, and if the second tile is taken as well then the place really is
+        /// full and the ladder is the right answer. See TryShiftWithinArrival.
+        /// </summary>
+        private bool _shifted;
+
         public NavWalker(BaseCreature mobile)
         {
             _mobile = mobile;
@@ -580,6 +589,20 @@ namespace Server.Custom
 
         private void HandleStuck(NavStep step)
         {
+            // A TAKEN CHAIR IS NOT A BLOCKED ROAD, and the ladder is for blocked roads.
+            //
+            // If the goal is an arrival that is a PLACE rather than a tile, and the tile itself is
+            // the problem, then shuffling, repathing and door-opening are all answers to a question
+            // nobody asked - the road was fine, the seat was taken. Shift to a free tile inside the
+            // arrival's own range and start again.
+            //
+            // This has to happen before the rung advances, or the first attempt has already cost a
+            // Repath and twenty seconds.
+            if (TryShiftWithinArrival(step))
+            {
+                return;
+            }
+
             _rung = NextRung(_rung);
 
             // Counted here rather than in each branch: this is the one place a rung is entered,
@@ -692,6 +715,136 @@ namespace Server.Custom
                     return;
                 }
             }
+        }
+
+        /// <summary>
+        /// Re-aim at a free tile inside the arrival's range, once, when the goal tile is occupied.
+        ///
+        /// WHY THIS IS NECESSARY AND NOT AN OPTIMISATION. A bot cannot step onto a tile a live
+        /// mobile is standing on. Movement.CheckMovement collects the mobiles on the forward tile
+        /// and refuses the step (Movement.cs:345-356); the exemption at :411 is gated on
+        /// MoveImpl.Goal, which FastAStarAlgorithm sets for the duration of the SEARCH and resets
+        /// to Point3D.Zero before returning (:97, :104) - so by the time the mobile actually steps,
+        /// nothing is exempt. Mobile.Move calls CheckMovement at :3138 and only reaches the
+        /// OnMoveOver loop at :3216 if it passed, which means BotShove is never consulted on an
+        /// occupied tile at all.
+        ///
+        /// So "take the occupied tile, the shove makes it legal" is not available on this engine,
+        /// however willing both sides are. An occupied goal is an impossible goal, and the only
+        /// useful move is to want a different tile.
+        ///
+        /// ANY occupant counts, not only the ones a bot may not shove. The engine refuses the step
+        /// for a fellow bot exactly as it does for a vendor.
+        ///
+        /// Once per hop: _shifted stops a crowd of bots trading tiles forever, and if the second
+        /// tile is taken too the ladder is the right answer after all.
+        /// </summary>
+        private bool TryShiftWithinArrival(NavStep step)
+        {
+            if (_shifted || step == null || step.Kind != NavStepKind.Arrival || step.Range <= 0)
+            {
+                return false;
+            }
+
+            Map map = _mobile.Map;
+
+            if (map == null || map == Map.Internal)
+            {
+                return false;
+            }
+
+            if (!IsTileOccupied(map, step.Point))
+            {
+                return false;
+            }
+
+            Point3D best = Point3D.Zero;
+            int bestDistance = Int32.MaxValue;
+            bool found = false;
+
+            for (int dx = -step.Range; dx <= step.Range; dx++)
+            {
+                for (int dy = -step.Range; dy <= step.Range; dy++)
+                {
+                    if (dx == 0 && dy == 0)
+                    {
+                        continue;
+                    }
+
+                    int x = step.Point.X + dx;
+                    int y = step.Point.Y + dy;
+                    int z = ResolveZ(map, new Point3D(x, y, step.Point.Z));
+
+                    if (!map.CanFit(x, y, z, 16, false, false, true))
+                    {
+                        continue;
+                    }
+
+                    var candidate = new Point3D(x, y, z);
+
+                    if (IsTileOccupied(map, candidate))
+                    {
+                        continue;
+                    }
+
+                    // Nearest to the BOT, not to the arrival: it is standing somewhere already and
+                    // the point is to stop walking, not to get as close to the centre as possible.
+                    int distance = NavGraph.Chebyshev(candidate, _mobile.Location);
+
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        best = candidate;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+
+            Log.Debug(
+                "{0} shifted its arrival from {1},{2} to {3},{4} - the tile was taken.",
+                Who(),
+                step.Point.X,
+                step.Point.Y,
+                best.X,
+                best.Y);
+
+            step.Retarget(best);
+
+            _shifted = true;
+            _goal = null;
+            _bestDistance = Int32.MaxValue;
+            ResetHopDeadline();
+
+            return true;
+        }
+
+        private static bool IsTileOccupied(Map map, Point3D point)
+        {
+            IPooledEnumerable nearby = map.GetMobilesInRange(point, 0);
+
+            try
+            {
+                foreach (Mobile other in nearby)
+                {
+                    if (!other.Deleted && other.Alive)
+                    {
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                // A non-generic IPooledEnumerable has to be freed or the pool leaks
+                // (CLAUDE.md section 14).
+                nearby.Free();
+            }
+
+            return false;
         }
 
         private static StuckRung NextRung(StuckRung rung)
@@ -1335,6 +1488,10 @@ namespace Server.Custom
             _rung = StuckRung.None;
             _watchedCycles = 0;
             _bestDistance = Int32.MaxValue;
+
+            // Per HOP, so a route with several arrivals gets one shift each rather than one in
+            // total - and so a fresh walk to the same crowded bank is not born already spent.
+            _shifted = false;
 
             ResetHopDeadline();
         }

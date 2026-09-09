@@ -52,6 +52,24 @@ namespace Server.Custom
         /// </summary>
         public int Range { get; private set; }
 
+        /// <summary>
+        /// Move an ARRIVAL step to a different tile mid-walk.
+        ///
+        /// The one thing about a step that may change after the route is built, and only for an
+        /// arrival: a walk hop names a waypoint and moving it would be editing the graph, but an
+        /// arrival names a place and which tile of it the bot takes is the walker's business. See
+        /// NavWalker.TryShiftWithinArrival for why it has to be able to - a tile with a mobile on
+        /// it is one the engine will not let a bot step onto, so an occupied goal is an impossible
+        /// goal rather than a slow one.
+        /// </summary>
+        public void Retarget(Point3D point)
+        {
+            if (Kind == NavStepKind.Arrival)
+            {
+                Point = point;
+            }
+        }
+
         public override string ToString()
         {
             return String.Format("{0} {1} {2}", Kind, WaypointId ?? "-", Point);

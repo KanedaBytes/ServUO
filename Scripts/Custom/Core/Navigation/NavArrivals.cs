@@ -58,7 +58,7 @@ namespace Server.Custom
 
             if (candidates.Count > 0)
             {
-                NavArrival chosen = candidates[Utility.Random(candidates.Count)];
+                NavArrival chosen = Choose(candidates, map, forMobile);
 
                 range = chosen.Range;
 
@@ -85,6 +85,40 @@ namespace Server.Custom
 
             spot = Scatter(destination.Location, map);
             return true;
+        }
+
+        /// <summary>
+        /// A free arrival by preference, at random among the free ones, and at random among all of
+        /// them only when every one is taken.
+        ///
+        /// IT USED TO BE A FLAT RANDOM PICK, and occupancy was consulted only for `exclusive`
+        /// arrivals - so a bank with four arrival points routinely sent a bot to the one another
+        /// bot was already standing on. That is not a near miss on this engine, it is an
+        /// impossible walk: Movement.CheckMovement refuses an uncontrolled BaseCreature any tile
+        /// holding a live mobile (Movement.cs:345-356), and the goal-tile exemption at :411 reads
+        /// MoveImpl.Goal, which is set only INSIDE the A* search and reset to Point3D.Zero before
+        /// the mobile ever steps (FastAStarAlgorithm.cs:97, :104). So the bot cannot arrive, the
+        /// recovery ladder climbs for eighty seconds, and it is teleported onto the tile it could
+        /// not walk to.
+        ///
+        /// Preference rather than refusal: with every arrival taken, aiming at a taken one and
+        /// letting the stand-tile sweep find a neighbour is still better than standing still.
+        /// </summary>
+        private static NavArrival Choose(List<NavArrival> candidates, Map map, Mobile forMobile)
+        {
+            var free = new List<NavArrival>();
+
+            foreach (NavArrival arrival in candidates)
+            {
+                if (!IsOccupied(arrival.Location, map, forMobile))
+                {
+                    free.Add(arrival);
+                }
+            }
+
+            List<NavArrival> pool = free.Count > 0 ? free : candidates;
+
+            return pool[Utility.Random(pool.Count)];
         }
 
         private static List<NavArrival> Eligible(NavDestination destination, Map map, Mobile forMobile)
