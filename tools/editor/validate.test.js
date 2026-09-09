@@ -82,6 +82,9 @@ function check(mutate, extra) {
     return {
         fatal: result.fatal.map((p) => p.message),
         warnings: result.warnings.map((p) => p.message),
+        // The third tier, exposed here as well as the other two so a rule that lands in the wrong
+        // one fails a test rather than going quiet - which is the whole point of this file.
+        notes: (result.notes || []).map((p) => p.message),
         raw: result
     };
 }
@@ -305,6 +308,34 @@ test('a destination with no arrivals is a warning', () => {
 
     assert.deepStrictEqual(fatal, []);
     assert.match(warnings.join('|'), /destination 'd' has no arrival points/);
+});
+
+test('a destination out of reach of the graph is a warning', () => {
+    // 200 tiles from either waypoint, which is what moving a record without its road looks like.
+    const { fatal, warnings } = check((nav) => {
+        nav.destinations[0].x = 200;
+        nav.arrivals.forEach((a) => { a.x = 200; });
+    });
+
+    assert.deepStrictEqual(fatal, []);
+    assert.match(warnings.join('|'), /destination 'd' has no arrival point within 12 tiles/);
+});
+
+test('...unless it is tagged pending-road, and then it is a note', () => {
+    // THE TIER IS THE TEST. A gap the author has signed for must not sit in `warnings`, because a
+    // warning that is expected for a session or two teaches everybody to skim the list, and the
+    // real warning underneath goes with it. It must also not vanish: a gap nobody can see is a gap
+    // nobody closes. So: out of warnings, into notes, still saying the same thing.
+    const report = check((nav) => {
+        nav.destinations[0].x = 200;
+        nav.destinations[0].tags = 'pending-road';
+        nav.arrivals.forEach((a) => { a.x = 200; });
+    });
+
+    assert.deepStrictEqual(report.fatal, []);
+    assert.deepStrictEqual(report.warnings, []);
+    assert.match(report.notes.join('|'),
+        /destination 'd' has no arrival point within 12 tiles of a waypoint \(pending-road\)/);
 });
 
 test('an arrival for a destination that is not there is a warning', () => {

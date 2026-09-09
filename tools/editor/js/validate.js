@@ -5,13 +5,20 @@
 // run. A false positive in here must never be able to stop someone writing a file the shard would
 // have accepted.
 //
-// TWO TIERS, and getting them the right way round matters more than it sounds. On this shard a
+// THREE TIERS, and getting them the right way round matters more than it sounds. On this shard a
 // dangling edge id is a WARNING: the edge is dropped and the reload succeeds. So are over-cap hops
 // and destinations without arrivals. What actually refuses a reload is a duplicate id, an unknown
 // facet, a bad kind or mode, a self-edge, a route with fewer than two waypoints - and any unknown
 // JSON key, because JsonConfig sets MissingMemberHandling.Error. An editor that called a warning
 // fatal would block legal edits; one that called a fatal a warning would report "saved" over data
 // it had just broken.
+//
+// The third tier is NOTES: a gap the author has already looked at and signed for, with a
+// `pending-road` tag on the record. It exists because the warning tier was doing two jobs - a
+// warning that is expected, and stays expected while a road is authored over a session or two,
+// teaches everybody to skim the list, and a skimmed list hides the real warning underneath it. A
+// note is still printed and still counted; it just does not claim anything is wrong. Nothing but
+// the record itself can put a finding there, so a gap cannot be silenced from outside the data.
 //
 // Messages are phrased to match the shard's, so a preview line and a banner line coming back from
 // the ack are recognisably the same sentence. What we can add that the shard cannot is `shapeId`:
@@ -110,6 +117,7 @@ class Report {
     constructor() {
         this.fatal = [];
         this.warnings = [];
+        this.notes = [];
     }
 
     bad(where, message, shapeId) {
@@ -119,7 +127,38 @@ class Report {
     warn(message, shapeId) {
         this.warnings.push({ severity: 'warning', where: null, message, shapeId: shapeId || null });
     }
+
+    /**
+     * A gap somebody has already looked at and accepted, kept out of `warnings` on purpose.
+     *
+     * The third tier exists because the second one was doing two jobs. A warning is meant to be
+     * read and acted on, so a warning that is expected and will stay expected for a session or two
+     * teaches everybody to skim the list - and the moment the list is skimmed, the real warning
+     * underneath it is invisible. A note is still printed, still counted, and still in the ack; it
+     * simply does not claim anything is wrong.
+     *
+     * The only thing that puts a record here is the record itself, via a `pending-road` tag. There
+     * is no suppression list in this file, so a gap cannot be silenced from the outside.
+     */
+    note(message, shapeId) {
+        this.notes.push({ severity: 'note', where: null, message, shapeId: shapeId || null });
+    }
 }
+
+/** Whether a record's space-separated tag string carries a token. */
+function tagged(record, tag) {
+    return String((record && record.tags) || '').split(/\s+/).includes(tag);
+}
+
+/**
+ * A destination deliberately authored ahead of the road that will serve it.
+ *
+ * Moving a destination is one edit; laying the waypoints out to it is a corridor, an audit and a
+ * walk. Between the two the destination is genuinely unreachable and the checks are right to say
+ * so - but saying it as a failure means the suite is red for as long as the authoring takes, and a
+ * red suite is one nobody reads. The tag is the author's signature on the gap.
+ */
+const PENDING_ROAD = 'pending-road';
 
 /**
  * Shared per-record checks: the null, the id, the facet, the token lists, and the unknown key.
@@ -442,9 +481,14 @@ export function validateNavigation(nav, options, report) {
             [...byId.values()].some((wp) => wp.map === dest.map && chebyshev(arrival, wp) <= cap));
 
         if (!reachable) {
-            out.warn(
-                `destination '${dest.id}' has no arrival point within ${cap} tiles of a waypoint`,
-                `dest:${dest.id}`);
+            const message =
+                `destination '${dest.id}' has no arrival point within ${cap} tiles of a waypoint`;
+
+            if (tagged(dest, PENDING_ROAD)) {
+                out.note(`${message} (${PENDING_ROAD})`, `dest:${dest.id}`);
+            } else {
+                out.warn(message, `dest:${dest.id}`);
+            }
         }
     }
 
@@ -716,7 +760,7 @@ export function validate(files, options) {
     validateRestrictedZones((files && files.restrictedZones) || null, options, report);
     validateDailyLife((files && files.dailyLife) || null, nav, options, report);
 
-    return { fatal: report.fatal, warnings: report.warnings };
+    return { fatal: report.fatal, warnings: report.warnings, notes: report.notes };
 }
 
 /**
@@ -737,7 +781,7 @@ export function validateFile(file, doc, nav, options) {
         validateDailyLife(doc, nav, options, report);
     }
 
-    return { fatal: report.fatal, warnings: report.warnings };
+    return { fatal: report.fatal, warnings: report.warnings, notes: report.notes };
 }
 
 /** Sections project() emits no shapes for, so the live preview is blind to them. */

@@ -47,6 +47,24 @@ namespace Server.Custom
 
         private static readonly List<string> _dataWarnings = new List<string>();
 
+        /// <summary>
+        /// Gaps somebody has already looked at and accepted, kept out of the warnings on purpose.
+        ///
+        /// The third tier exists because the second was doing two jobs. A warning is meant to be
+        /// read and acted on, so one that is expected and stays expected for a session or two
+        /// teaches everybody to skim the list - and a skimmed list hides the real warning under it.
+        /// A note is still printed, still counted and still in the ack; it just does not claim
+        /// anything is wrong.
+        ///
+        /// The only thing that puts a record here is the record itself, through a 'pending-road'
+        /// tag. There is no suppression list, so a gap cannot be silenced from outside the data.
+        /// The editor's validate.js carries the same tier for the same reason.
+        /// </summary>
+        private static readonly List<string> _dataNotes = new List<string>();
+
+        /// <summary>The tag by which an author signs for a destination that has no road yet.</summary>
+        public const string PendingRoadTag = "pending-road";
+
         private static string _lastError;
         private static DateTime? _lastLoadUtc;
         private static bool _navLive;
@@ -302,6 +320,7 @@ namespace Server.Custom
             _zonesByMap.Clear();
             _costTags.Clear();
             _dataWarnings.Clear();
+            _dataNotes.Clear();
 
             foreach (NavCostTag tag in _store.CostTags)
             {
@@ -517,20 +536,43 @@ namespace Server.Custom
 
                 if (!reachable)
                 {
-                    _dataWarnings.Add(String.Format(
+                    // A destination authored ahead of the road that will serve it is a real gap
+                    // and is reported as one - but as a NOTE, because it is a gap its author has
+                    // signed for. See _dataNotes; the editor's validate.js does the same.
+                    string unreachable = String.Format(
                         "destination '{0}' has no arrival point within {1} tiles of a waypoint",
                         destination.Id,
-                        cap));
+                        cap);
+
+                    if (destination.HasTag(PendingRoadTag))
+                    {
+                        _dataNotes.Add(unreachable + " (" + PendingRoadTag + ")");
+                    }
+                    else
+                    {
+                        _dataWarnings.Add(unreachable);
+                    }
                 }
                 else if (stranding.Count > 0)
                 {
-                    _dataWarnings.Add(String.Format(
+                    // Same tag, same reason: a destination waiting for its road strands its
+                    // arrivals by definition, and saying so twice as a warning is noise.
+                    string stranded = String.Format(
                         "destination '{0}' has {1} arrival point(s) further than the {2}-tile hop cap "
                         + "from any waypoint, so a mobile sent to one cannot route away again: {3}",
                         destination.Id,
                         stranding.Count,
                         cap,
-                        String.Join(", ", stranding.ToArray())));
+                        String.Join(", ", stranding.ToArray()));
+
+                    if (destination.HasTag(PendingRoadTag))
+                    {
+                        _dataNotes.Add(stranded + " (" + PendingRoadTag + ")");
+                    }
+                    else
+                    {
+                        _dataWarnings.Add(stranded);
+                    }
                 }
 
                 // A guard post with nowhere for a second guard to stand is a data bug, not a
@@ -988,6 +1030,15 @@ namespace Server.Custom
                 _zones.Count,
                 _routes.Count,
                 loaded);
+
+            // Notes ride on the end of the line whatever the verdict is. They do not make the
+            // check Warn - that is the whole point of the tier - but a gap nobody can see is a gap
+            // nobody will close, so the count is always said out loud.
+            if (_dataNotes.Count > 0)
+            {
+                counts += String.Format(
+                    ". {0} known gap(s) - first: {1}", _dataNotes.Count, _dataNotes[0]);
+            }
 
             List<string> extra = RunAuditors();
 
