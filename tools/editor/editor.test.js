@@ -176,6 +176,35 @@ test('no tool creates a daily-life record, because adding one stays a JSON edit'
 
 // --- shapes.js ------------------------------------------------------------------------------------
 
+test('the z? flag never fires on a Z it has not measured', () => {
+    // THE CRY-WOLF PROPERTY, and the only half of this rule worth a test outside a browser.
+    //
+    // isStaleZ runs for every point marker on every frame, and landz answers null until its batch
+    // arrives - forever, if MapExport has not been built. If "we do not know yet" rendered as
+    // "this is wrong", every marker on the map would wear a z? until the first batch landed, and a
+    // badge that is on everything is a badge nobody reads.
+    //
+    // There is no fetch in this process, so landz can only answer null here. That makes the true
+    // case untestable from Node and this one exact.
+    const far = {
+        layer: 'nav', kind: 'point', map: 'Trammel',
+        points: [[1434, 1697, 9999]], props: {}, fields: []
+    };
+
+    assert.strictEqual(shapes.isStaleZ(far), false, 'unknown ground must not read as stale');
+
+    // And the shapes that have no Z to be stale about.
+    assert.strictEqual(shapes.isStaleZ(zone('z', 0, 0, 4, 4, '')), false, 'a rect has no z');
+    assert.strictEqual(shapes.isStaleZ({ kind: 'point' }), false, 'no points at all');
+    assert.strictEqual(shapes.isStaleZ(null), false);
+});
+
+test('one storey is the threshold, and it is the one the resample reports against', () => {
+    // Shared with NavResampleZ.LargeCorrection on the shard, which is what makes "corrections over
+    // 20" in that report and "z?" on this map the same claim about the same record.
+    assert.strictEqual(shapes.STALE_Z, 20);
+});
+
 test('every editable layer names the file it is saved to, and the request that reloads it', () => {
     for (const [name, layer] of Object.entries(shapes.LAYERS)) {
         // Layers the editor draws but never writes carry no file and no reload.

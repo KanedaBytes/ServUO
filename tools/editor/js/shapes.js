@@ -498,6 +498,65 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     ctx.arc(sx, sy, isSelected || isHovered ? 6 : 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+
+    drawZBadge(ctx, shape, sx, sy);
+}
+
+/** One storey. A record further than this from the ground under it is drawn where it is not. */
+export const STALE_Z = 20;
+
+/**
+ * The `z?` badge, and the reason it is measured against the PICK MAP rather than the walker.
+ *
+ * Two different Z questions run in this tree and they have different right answers. `NavResampleZ`
+ * asks "where would a mobile stand", through NavWalker.TryResolveZ, because that is what the record
+ * is FOR. This asks "is the marker being drawn where the record actually is", and the thing that
+ * decides that is the pick map's StandingZ - the same number landz.at() serves, from the same
+ * accessor (IsoTileRenderer.StandingZ, via TileServer's landz query).
+ *
+ * So a badge here means the marker is in the wrong PLACE ON SCREEN, which is the fault that made
+ * somebody drag a record that was never wrong: Britain's upper town stands at Z 20-30, and a
+ * record left at z 0 draws about 2.7 tiles off along the isometric diagonal.
+ *
+ * Drawn in both views for free, because view.toScreen is the only place the projections differ.
+ * In radar it is still worth showing: the marker is drawn in the right place there, but the record
+ * is still wrong and radar is where somebody is most likely to be looking at a list of them.
+ */
+function drawZBadge(ctx, shape, sx, sy) {
+    if (!isStaleZ(shape)) {
+        return;
+    }
+
+    ctx.save();
+    ctx.font = 'bold 10px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+
+    // Outlined rather than coloured: the layer already owns the colour, and a badge that competed
+    // with it would read as a different kind of record rather than as a flag on this one.
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.strokeText('z?', sx + 6, sy - 5);
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText('z?', sx + 6, sy - 5);
+    ctx.restore();
+}
+
+/**
+ * Whether a point record's stored Z disagrees with the ground under it by more than a storey.
+ *
+ * Null-safe on purpose: landz answers null until its batch arrives and forever if MapExport has
+ * not been built, and "we do not know yet" must never render as "this is wrong".
+ */
+export function isStaleZ(shape) {
+    if (!shape || shape.kind !== 'point' || !shape.points || !shape.points[0]) {
+        return false;
+    }
+
+    const [x, y, z] = shape.points[0];
+    const ground = groundAt(x, y);
+
+    return ground !== null && ground !== undefined && Math.abs((z || 0) - ground) > STALE_Z;
 }
 
 /** The shape a click would take right now - same rules as hitTest, ignoring handles. */

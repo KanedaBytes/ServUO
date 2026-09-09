@@ -27,7 +27,7 @@ import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
     READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
     hitTest, pick, entityAt, grabsOverEntity, nearSegment, geometryOf, applyGeometry, moveShape,
-    resizeRect, moveNode, syncDerived
+    resizeRect, moveNode, syncDerived, isStaleZ
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
@@ -1770,14 +1770,26 @@ function showProperties(shape) {
         return;
     }
 
+    const stale = isStaleZ(shape);
+
     if (shape.rect) {
         dom.properties.append(readonlyRow([
             ['x', shape.rect[0]], ['y', shape.rect[1]],
             ['w', shape.rect[2]], ['h', shape.rect[3]]
         ]));
     } else if (shape.points && shape.points.length === 1) {
+        // `z?` spelled the same way the cursor readout spells it, and meaning the same thing: the
+        // number is not a measurement of the ground it sits on. On the marker it is a glyph you
+        // notice; here it is the one place that says HOW far out, which is what decides whether
+        // the record wants a drag or a second look.
+        const ground = stale ? landz.peek(shape.points[0][0], shape.points[0][1]) : null;
+
         dom.properties.append(readonlyRow([
-            ['x', shape.points[0][0]], ['y', shape.points[0][1]], ['z', shape.points[0][2]]
+            ['x', shape.points[0][0]],
+            ['y', shape.points[0][1]],
+            [stale ? 'z?' : 'z', stale
+                ? `${shape.points[0][2]} (ground ${ground})`
+                : shape.points[0][2]]
         ]));
     }
 
@@ -3169,6 +3181,27 @@ function refreshReadout() {
  * and is off by about 2.7 tiles where Britain stands. `z?` means the land Z was not sampled, which
  * is what a radar placement writes as 0. Both used to be shown as if they were measurements.
  */
+/**
+ * A point dragged over ground takes that ground's Z with it.
+ *
+ * ART VIEW ONLY, and that is not a limitation to work around: radar has no Z to offer. A radar drag
+ * therefore leaves the stored Z alone rather than guessing, which is right - guessing is what wrote
+ * `z: 0` across half the file in the first place (js/build.js:22-28) - and the `z?` badge is what
+ * makes the resulting staleness visible instead of silent.
+ *
+ * Only `point` shapes: a rect has no Z in its schema, and a polyline's is derived from the
+ * waypoints it names.
+ */
+function carryTheHill(shape, index, tile) {
+    if (!view.isArt || shape.kind !== 'point' || !tile || tile.z === null || tile.z === undefined) {
+        return;
+    }
+
+    if (shape.points[index]) {
+        shape.points[index][2] = tile.z;
+    }
+}
+
 function readoutFor(tile) {
     const where = tile.exact ? `${tile.x}, ${tile.y}` : `~${tile.x}, ${tile.y}`;
 
@@ -3454,6 +3487,19 @@ function wireInput() {
             resizeRect(drag.shape, drag.index, dragX, dragY);
         } else if (drag.kind === 'node') {
             moveNode(drag.shape, drag.index, dragX, dragY);
+
+            // A node dragged up a hill carries the hill too, and for two sessions it did not.
+            //
+            // The Z write lived only on the whole-shape branch below, and which branch a drag takes
+            // is decided by hitTest: a SELECTED non-rect shape offers node handles first
+            // (shapes.js:824-831), and a one-point waypoint is non-rect. So dragging a marker you
+            // had not selected wrote the Z and dragging one you had - click, then drag, which is
+            // the normal gesture - did not. The same action, two answers, depending on a state
+            // nobody thinks about while placing a record.
+            //
+            // It cost real data: brit-home-baker and its two arrivals were moved 200 tiles and
+            // kept the Z of where they had been, which the resample then had to correct.
+            carryTheHill(drag.shape, drag.index, tile);
         } else {
             const dx = Math.round(dragX - drag.originX);
             const dy = Math.round(dragY - drag.originY);
@@ -3464,11 +3510,7 @@ function wireInput() {
 
             moveShape(drag.shape, dx, dy);
 
-            // A point dragged up a hill carries the hill. Only for `point` shapes: a rect has no Z
-            // in its schema, and a polyline's is derived from the waypoints it names.
-            if (view.isArt && drag.shape.kind === 'point' && tile.z !== null) {
-                drag.shape.points[0][2] = tile.z;
-            }
+            carryTheHill(drag.shape, 0, tile);
 
             // Re-derived on every frame of the drag, not just at the end: a hop that only caught
             // up on mouse-up would make the road look broken for the length of the gesture.
