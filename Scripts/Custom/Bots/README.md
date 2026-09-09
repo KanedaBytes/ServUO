@@ -26,7 +26,10 @@ real wood, digs or chops with ServUO's own harvest system, hauls the load back a
 Smith or Carpenter it belongs to; the artisan turns it into real goods through ServUO's own craft
 system. See [Working](#working).
 
-Population management arrives in a later session.
+Session 6 gave the world a population. A recipe read off the nav graph decides how many bots each
+town holds and what they are doing — a crowd at every bank, a smith at every forge, a shopper in
+every shop — writes it to `Spawns/Custom/trammel/GG_BotPop.xml`, and a daily curve makes the roaming
+half of it rise and fall with the hour. See [Population](#population).
 
 The full port survey is `docs-src/uo-offline-port-survey.md`.
 
@@ -140,6 +143,11 @@ declines on its way out, so the leader is not left waiting thirty seconds on som
 exists.
 
 ## Ephemerality
+
+> **Sessions 1 to 6.** This folder now covers identity, movement, life, speech, work and
+> **population**. What follows is the ephemeral rule, which the population session leans on rather
+> than changes: bots are still transient, and now so is nothing else — the spawners that make them
+> are rebuilt from a file on every import. See **Population**.
 
 **Bots never survive a restart**, and unlike upstream this shard has to do something about it.
 
@@ -361,6 +369,33 @@ engine assigns it on foot, plus the longest linger, the longest phase clamp and 
 The result line names the window and the route that set it, so an adopt that lengthens the road
 shows up in `[CoreSmoke` rather than as a slower chain nobody can explain. The work probe puts its
 smith at the forge nearest the mine by road and asserts that the ore reached **that** smith.
+
+### A fixture's home town is its station's town
+
+Upstream rolls `HomeCity` in the constructor and never touches it again — its `ReinitializeAsClass`
+re-derives a pinned crafter's class, gear and skills and deliberately leaves home alone
+(`PlayerBot.cs:447-457`). So a `Crafter:Smith` pinned at a Vesper forge may be a Yew resident who
+will never once go home, and whose 2.5× home bias pulls at a town it is not standing in.
+
+Here the generator writes the station's town onto every **fixed-role** record and `SeedHome` applies
+it, so the smith at `trinsic-forge` is a Trinsic resident. Only fixed roles: a lifecycle seed keeps
+its birth roll, because a traveller genuinely should be from somewhere else and that is what makes
+the roads busy. The visible effect is in `Bots.Population` — fixtures leave the `no station at home:`
+list, and the `byHome` census stops reading as though the staffed benches were staffed by tourists.
+
+### The population is a file, not a pile of world items
+
+The largest deviation of the population session, and it has its own section — see **Population**
+above. In one line: upstream mints `PlayerBotSpawner` Items and the world save becomes the record;
+here the recipe writes `GG_BotPop.xml` and `[GG_Reimport` turns it into spawners, so the population
+is in git, is drawn in the editor, and cannot stack.
+
+### A seed is properties on the bot, not a spawner subclass
+
+Also the population session's, also with its own section. In one line: XmlSpawner calls
+`OnAfterSpawn` **before** it applies the spawn string (`XmlSpawner2.cs:9337` then `:9344`), so
+upstream's `Spawner is FixedRoleBotSpawner` test cannot be transplanted and the role travels as a
+`[CommandProperty]` instead.
 
 ### The Z window climbs 5, not 4
 
@@ -1398,6 +1433,221 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 | `[BotTrace on\|off` | GameMaster | Target a bot; echo everything it does to the console. `[BotTrace off all` quiets every traced bot, `[BotTrace list` names them |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; sample its steps for N seconds (default 30) and report the walker tick, the pace it was given, the delay the engine used, the interval between steps and how many carried the running bit |
+| `[BotPopulationAudit` | Administrator | What the recipe would produce for each town, and whether `GG_BotPop.xml` still matches it. Spawns nothing and writes nothing (token: `botpop-audit`) |
+| `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`. Run `[GG_Reimport` afterwards (token: `botpop-gen`) |
+| `[BotPopulation` | Administrator | Live count against the curve target, the tick cost, and how many bot spawners exist |
+| `[BotPopulation <n>` | Administrator | Set the target for this session. Says out loud that it is memory only — the file is the record |
+| `[BotSessions [on\|off]` | GameMaster | The curve's status, or pin the population where it is |
+
+## Population
+
+**Sessions 1 to 5 gave one bot a life; this gives the world a population.** Until now every bot
+existed because `[SpawnBot` or a probe made it. Now the shard boots and Britain and Trinsic are
+inhabited: a crowd at every bank, a shopper in every shop, a smith at every forge, and a roaming
+remainder that rises and falls with the hour.
+
+This is uo-offline's `[GenerateBots`, `BotPopulation`, `BankFixtures` and `BotSessionManager`, with
+one large deviation and several small ones.
+
+### The recipe is derived; the file is generated; neither is written by hand
+
+Upstream's `[GenerateBots` walks a hardcoded nine-city table and **news up a `PlayerBotSpawner`
+Item at each computed point** (`GenerateBotsCommand.cs:502-534`). Those Items land in the world
+save and become the authoritative record of the population — which is why upstream needs
+`[ClearSpawners`, a `StartupCap` "runaway brake" that prints *"you likely have stacked spawners"*
+(`BotStartupManager.cs:134-138`), and a `BankFixtures` pass that tops up a spawner whose count was
+*"baked in"* on an earlier boot (`BankFixtures.cs:140-150`). Every one of those exists to mop up
+the same puddle: a **derived** thing was written somewhere that outlives the derivation.
+
+Here the recipe writes a **file** instead:
+
+```
+[BotPopulationAudit     # what it would produce, and whether the file still matches
+[BotPopulationGen       # write Spawns/Custom/trammel/GG_BotPop.xml
+[GG_Reimport            # turn it into spawners, and fill them
+```
+
+`[GG_Reimport` already exists, is already tested, and is already scoped by the `GG_` prefix. So the
+population is in git, is drawn in the editor's spawner layer beside every other `GG_` spawner, and
+**cannot stack**: a regen replaces by `<UniqueId>`, and the UniqueId is an MD5 of the slot's own
+identity rather than a fresh GUID. Nothing here needs a runaway brake because nothing can run away.
+
+Two files, and the split matters: **`GG_BotPop.xml` is generated and the generator owns it
+outright**; **`GG_Bots.xml` is hand-authored from the editor's form and the generator never touches
+it.** Every generated spawner is named `GG_BotPop_<town>_<kind>_<destination>`, and the diff refuses
+to call anything else stale.
+
+### What the recipe is
+
+Read off the same graph the bots read. There is no city column and no coordinate table: a town is a
+tag in `bots.json` `destinations.towns`, a bank is a `bank` destination carrying that tag, a station
+is whatever `CrafterProfiles` says the class works. **Author a destination in the editor and the
+recipe grows; nothing in `BotPopulation.cs` knows the name "Britain".**
+
+| Slot | Role | Rule |
+| --- | --- | --- |
+| `bank` | **Fixed** | One spawner per bank **destination**, holding `life.crowds.bank` sitters |
+| `station` | **Fixed** | One crafter per craft-station **destination**, class forced from the station |
+| `shop` | Lifecycle | One shopper per `shop` destination that is not already somebody's bench |
+| `roam` | Lifecycle | The town's remaining share, in chunks of `population.perSpawner` |
+
+**Per destination, not per arrival** — a deviation. Upstream pins one crafter per craft-station
+*arrival point* (`GenerateBotsCommand.cs:445-466`), which on this graph would put **four smiths at
+one anvil**: our forge arrivals are the four tiles within 2 of both the forge and the anvil, which
+is a capacity ceiling and not a staffing target. "Staffed by construction" needs one.
+
+**The roamer anchor is a rule over tags, not a table of town names**: `plaza` tag → `wander` type →
+`gate` type → the town's bank. Britain resolves at the first stop (`brit-square` carries `plaza`);
+Trinsic has none of the first three and lands on `trinsic-bank`. **Author a `plaza`-tagged Trinsic
+square and the recipe picks it up with no code change** — and `Bots.Recipe` prints which stop each
+town resolved at, so the day that happens it is visible rather than silent.
+
+What it produces today, on this graph:
+
+```
+target 60 on Trammel: 60 bot(s) across 37 spawner(s), 17 of them fixed.
+  britain: share 38, pinned 19 - 3 bank, 5 station, 11 shop, 19 roam. anchor brit-square (plaza tag).
+  trinsic: share 22, pinned 19 - 6 bank, 3 station, 10 shop, 3 roam.  anchor trinsic-bank (bank).
+```
+
+### 60, not 1600, and the probe hands you the number to raise it with
+
+Upstream's `TargetCount` is `1600` (`BotPopulation.cs:150`). This graph has **115 arrival points**
+in total — Britain 88, Trinsic 27 — and `bots.json`'s own rule is that a site's capacity *is* its
+authored arrival count, so 1600 is not a number to inherit unexamined. The port survey's
+instruction for it was *"start at a fraction of it and measure"*.
+
+So `BotTickManager` now times its own pass — the `LiveRegistry` sweep, every behaviour's `Tick`,
+the lifecycle pass and the session pass, which together are the entire per-tick cost of the bot
+layer — and `Bots.Recipe` and `Bots.Population` both report it beside the live count:
+
+```
+tick 0.4 ms mean / 13 ms max of 2000 ms over 200 pass(es) at 60 bot(s)
+```
+
+Sixty bots cost two hundredths of one percent of the tick budget. **Raising the target is now an
+arithmetic question rather than a nerve one**, which is the whole reason the measurement exists.
+Upstream measures nothing and ships 1600 behind a comment reading *"with <500 bots this is
+trivially cheap"* — two numbers that cannot both be opinions about the same code.
+
+Everything is config, in `bots.json`'s `population` block: `target`, `perSpawner`, `spawnerRange`,
+`respawnMinutes`, `sessionMinutes`, `curve` and `roles`. **`perTown` is deliberately empty**: with
+no entry a town's share is its share of the graph's destinations, which is *the same rule
+`BotHomeTowns.Roll` already uses* to decide where a bot is born — so a bot is born where the
+population is, and one number cannot drift from the other. Upstream writes both down separately and
+they have: its city weights bear no relation to its destination counts.
+
+### The session curve
+
+`BotSession` is `BotSessionManager`. A bot plays for one to four hours, says a `session_goodbye`
+line, and vanishes three to six seconds later; its spawner refills the slot minutes afterwards, as
+somebody else. A 24-hour curve — upstream's `HourCurve` verbatim, 0.15 at 05:00 and 1.00 at
+19:00 — scales the target, and the first pass after a boot stamps *partial* sessions so the
+standing population does not all leave in one wave three hours after every restart.
+
+**Fixtures are outside all of it.** A `BotRole.Fixed` bot never re-rolls, never logs out and never
+counts toward the target, so the bank crowds and the staffed benches are there at the 05:00 trough
+exactly as they are at the peak. That is upstream's rule — *"fixtures are furniture, not sessions"*
+— and it is also what makes the economy session's premise true at every hour rather than only at
+peak.
+
+### The seed, and why it is properties rather than a spawner subclass
+
+Upstream has two spawner classes and `FixedRoleBotSpawner` declares **no state at all**: the
+role-lock is purely a function of the spawner's *type*, read in `PlayerBot.OnAfterSpawn` as
+`Spawner is FixedRoleBotSpawner` (`PlayerBot.cs:641`).
+
+**That cannot work here, and the reason is the hinge the whole layer turns on.** This shard spawns
+through XmlSpawner2, and XmlSpawner calls `OnAfterSpawn()` at `XmlSpawner2.cs:9337` and only
+*then* applies the spawn string's property setters at `:9344`. A bot placed by an XmlSpawner
+therefore cannot learn anything from its spawner inside `OnAfterSpawn` — the seed has not been
+handed to it yet.
+
+So the seed is five `[CommandProperty]` properties on the bot, set from the spawn string:
+
+```
+PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/trinsic/SeedStation/trinsic-forge/Seed/Crafter
+```
+
+Each setter records its value and queues **one** deferred apply, so the fields are order-free —
+which matters, because the class has to be re-derived before the brain attaches (a Crafter's
+`OnAttached` reads `TradeClass` to pick its profile) and nothing should depend on an author getting
+two fields the right way round. It is also strictly more useful than a spawner subclass: it works
+from `[set`, from `[props` and from `[SpawnBot`, none of which have a spawner at all.
+
+**The separator is a slash because a colon cannot appear in an `<Objects2>` entry**: XmlSpawner
+splits on `:MX=` and its ten siblings and silently *discards* an entry containing one
+(`XmlSpawner2.cs:12701-12704`). That is why upstream's own `"Crafter:Smith"` convention could not
+be carried across.
+
+Applying a seed owes exactly what a hand switch owes — the visit window, the station and the phase
+clock, the three obligations `BotCommands.TryHandSwitch` writes out — **minus the window for a
+fixture**, because a window that lapses hands the brain back to a Traveler and would walk a smith
+off its forge three hours into the shift.
+
+### `[Constructable]` is load-bearing, and its absence is silent in both directions
+
+**Thirty-seven spawners imported cleanly, ran for eight minutes and produced no bots at all.**
+
+XmlSpawner will not construct a type whose constructor is not marked `[Constructable]`:
+`CreateObject(type, itemtypestring)` defaults `requireconstructable` to true
+(`XmlSpawner2.cs:11263-11265`) and `IsConstructable` is a bare attribute test (`:2283-2286`).
+A spawner pointed at an unmarked type sets `status_str` to `"invalid type specification"` and
+**returns `true`** — so the spawner reports success, its timer keeps rescheduling, and its count
+sits at zero for ever with nothing in any log.
+
+`PlayerBot`'s constructor now carries it. **And so does `VocabularySnapshot`'s filter**, which
+previously excluded the attribute with a comment saying it *"gates the `[Add` command, not the
+spawner"* — true of ServUO's stock `Spawner`, false of the only spawner this shard uses. The
+editor's Type dropdown was therefore offering hundreds of types a spawner would silently refuse.
+Both halves of that were the same bug from opposite ends.
+
+### Boot
+
+Upstream's `BotStartupManager` does two things: it sweeps `World.Mobiles` deleting stale bots, and
+it forces every spawner to `Respawn` *"rather than waiting up to 15 minutes"*. **Only the second
+half is ported**, at `EventSink.ServerStarted` rather than `Initialize` — the same reason
+`BotSystem` already defers `[BotSmoke`, that spawning during `Initialize` puts mobiles in the world
+before the map and the regions have settled.
+
+The first half is already done, better, and elsewhere: `PlayerBot.Deserialize` ends in
+`Timer.DelayCall(Delete)`, so every bot deletes itself on load however it got into the save. For
+upstream that sweep is a mop for orphans, because ModernUO never wrote accountless bots at all; here
+it is the mechanism, because ServUO writes every mobile in `World.Mobiles`.
+
+A `[GG_Reimport` and a per-file spawn reload fill the bot spawners too, for the same reason the boot
+does: a reimport that leaves the towns empty for a quarter of an hour reads as a reimport that did
+not work.
+
+### `Bots.Recipe`
+
+Every other bot probe **spawns** what it measures. This one measures nothing of its own, because
+the thing under test is the population itself — it is already standing there, and a probe that
+spawned its own copy would be testing a copy. So it is a plain health check with no cleanup and no
+window, which also means it runs on every `[CoreSmoke` rather than only inside the six-minute chain.
+
+Four questions, in the order they are worth asking:
+
+1. **Does `GG_BotPop.xml` still say what the recipe says?** A recipe is derived and a file is not,
+   so authoring a destination changes the recipe's mind while the file — and therefore the world —
+   goes on saying the old thing, for ever, silently. Nothing else would notice. It reports
+   **REGEN NEEDED** with what changed.
+2. **Is every staffed bench actually staffed?** Using `BotDestinations.IsStaffed`'s own predicate,
+   so the probe cannot pass while the economy's haul roll disagrees. When one is not, it says
+   **where that crafter went instead** — nine times in ten it is working at the other bench of its
+   trade in the same town, because `CrafterBehavior.TakeUpStation` moves to one when reach at the
+   authored station holds no standable tile, which means the fault is in the arrival point rather
+   than in the bot.
+3. **Did any fixture spawner quietly fail to place its bots?** XmlSpawner drops a spawn it cannot
+   position and says nothing. Lifecycle spawners are exempt: one sitting under its count whenever
+   the curve is below peak is the curve working.
+4. **Are the towns within 25% of their share, and what does a tick cost?** The share is measured
+   against the *curve's* target, not the peak, or every night would report as a fault.
+
+Its first real run found `trinsic-shop-tailor-2`: the shop stands at Z 35 and its only adopted
+arrival is at Z 15, twenty below the floor, so its tailor walks to `trinsic-shop-tailor` and works
+there instead. That is a real fault in an adopted record, located precisely, by a check that had
+existed for an afternoon.
 
 ## The event log
 
@@ -1939,9 +2189,38 @@ simply does not model a bot whose job is to stay put.
 5. **A bot only ever talks to the room.** It has no memory of a conversation, so it cannot be
    asked a follow-up: the second question gets another line from the same pool, not an answer to
    the first. That is deliberately upstream's shape too — these are passers-by, not quest NPCs.
+6. **The curve's way up costs one wasted construction per refusal.** Upstream refuses a spawn
+   *before* construction, in an override of `Spawner.Spawn`; XmlSpawner offers no such hook, and
+   nothing knows whether a spawned bot is a fixture or a session until its seed has been applied —
+   so the bot is built and then turned away. A bot spawner ticks every five to fifteen minutes, so
+   it is a handful an hour at the trough and none at the peak. It is the price of having one
+   spawner mechanism on this shard rather than two.
+7. **A hand-authored *fixed* Gatherer would still leave its site.** `GathererBehavior` stamps its
+   own visit window if it finds none (`GathererBehavior.cs:217-219`), and `CheckVisitExpired` now
+   refuses for an exempt bot — so the invariant holds. But nothing pins a gatherer in the recipe
+   (a gatherer's site is a place it travels *to*, and pinning one there would break the haul loop),
+   so that path has never actually run.
+8. **`[BotWhere` and `[BotGoals` were not ported.** Upstream's two population-inspection commands
+   answer "where is everybody" and "what are they all doing"; the editor's live map and its bot
+   card already answer both, continuously and for every bot at once, which is why they were
+   skipped rather than translated.
 
 ### Later
 
+- **`trinsic-shop-tailor-2`'s arrival is on the wrong floor.** The shop stands at Z 35; its only
+  adopted arrival is at Z 15, twenty below it. So the tailor the recipe pins there finds no
+  standable tile in reach and `TakeUpStation` hands it to `trinsic-shop-tailor` instead — which is
+  the documented relocation rule working correctly on a broken record. `Bots.Recipe` reports it on
+  every `[CoreSmoke`, naming where the crafter went. The fix is one arrival point on the shop's own
+  floor, authored in the editor.
+- **Trinsic has no work sites at all** — no mine, no lumber — and no `plaza`, `wander` or `gate`
+  destination to anchor a roaming spawner on, so its roamers fall back to the bank. Both are data,
+  not code: author a Trinsic square with a `plaza` tag and the recipe picks it up with no code
+  change, and `Bots.Recipe` prints which stop each town's anchor resolved at so the switch is
+  visible when it happens.
+- **`byType` has no entry for `dock`, `shrine`, `stables` or `healer`** — seven destinations, six of
+  them Trinsic's, all rolling at the implicit 1.0, so `trinsic-healer` outranks a Trinsic bank for
+  a non-Merchant. Harmless today and worth a weight when somebody is next in `bots.json`.
 - **The two picked-but-unwritten sites**, `brit-mine-west` (1192,1750, reach 15) and
   `brit-lumber-south` (1422,1832, reach 4). The ground is verified; only the road is missing, and it
   is missing because the flood cannot walk through a town gate. Hand-author a corridor out through

@@ -14,7 +14,7 @@ Written before step 6 (the bot-mobile layer), as the survey `nav-format-comparis
 | --- | --- |
 | **Surveyed** | `Klein187/uo-offline` @ `91848d8`, installed 2026-09-05, then at `E:\dev\UO\uo-offline-server` |
 | **Current reference** | `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` — @ `fe18a469`, installed 2026-09-06, on ModernUO `0.15.6.145-4-ge7f85d404` |
-| **Ported so far** | sessions 1–5 (shard steps 6–8 and 7d/7e): identity, movement, lifecycle, speech, work |
+| **Ported so far** | sessions 1–6 (shard steps 6–11): identity, movement, lifecycle, speech, work, **population** |
 | **Stale below** | four modules rewritten by their September 2026 release — see §5 |
 
 **Every line count and file count in §1 was taken at `91848d8` and has not been re-taken.** The
@@ -425,10 +425,23 @@ for two of those three** — `ChatLibrary` is the only genuinely new foundation.
 | **6b** | **It talks** | `ChatLibrary` + the corpus copy, `PlayerBotBehavior`'s speech helpers, `BotSpeechResponder`, `SpeechHues` wiring | Bots answer when you greet them, by name, in their own colour |
 | **6c** | **It moves** | `BehaviorRegistry`, `BehaviorTickManager` (rebuilt on `LiveRegistry`), a `Traveler` behaviour built on `NavWalker` + `Nav`, `Commuting` stand-aside, `LiveRegistry` registration | Bots walk Britain's real roads between real destinations, and appear on the editor's live layer |
 | **6d** | **It has a day** | `BotLifecycleManager`, `LifecycleTransitions`, `BotPersonality` wiring, `BankSitter`, `Visitor`, `Shopper`, `BotSessionManager` + population curve, `HealthCheck` registration | The bank crowd forms and disperses; the town's population rises and falls on a curve |
-| **6e** | **It persists correctly** | Spawner decision (ServUO `Spawner` subclass vs XmlSpawner2 vs a population manager), ephemeral-delete on load, `[SetBotPopulation`, `[BotWhere`, `[BotGoals` | Restart the shard and the population rebuilds itself, with nothing left in the save |
+| **6e** | **It persists correctly** — **DONE** | **Decided: XmlSpawner2, with the seed as `[CommandProperty]` setters on the bot.** A `Spawner` subclass was rejected: it is invisible to the editor's spawner layer, is not authorable from its form, and puts authored placement in the world save instead of in git. The recipe is derived from the nav graph and **written to `Spawns/Custom/<facet>/GG_BotPop.xml`** rather than minted as world items, which deletes upstream's whole stacked-spawner failure class — `[ClearSpawners`, the `StartupCap` runaway brake and `BankFixtures`' count top-up all exist only to mop that up. Ephemeral-delete on load was already done and is stronger than upstream's orphan sweep. `[SetBotPopulation` became `[BotPopulation`; `[BotWhere` and `[BotGoals` were **not** ported — the editor's live map and bot card already answer both. `BotSessionManager` ported as `BotSession`. New: `[BotPopulationAudit`, `[BotPopulationGen`, `Bots.Recipe` | Restart the shard and the population rebuilds itself, with nothing left in the save |
 
 Everything beyond 6e — Adventurer, PK, dungeons, economy, parties, guilds, taming, housing,
 treasure hunts — is a **separate layer** and out of scope for this ordering, as the brief asks.
+
+**The whole 6a–6e ordering is now done.** One finding from 6e is worth carrying forward because it
+is not a bot fact at all: **XmlSpawner2 refuses to construct a type whose constructor is not marked
+`[Constructable]`, and reports success while doing it** — `CreateObject` defaults
+`requireconstructable` to true (`XmlSpawner2.cs:11263-11265`), and a refused spawn sets `status_str`
+to `"invalid type specification"` and returns `true`, so the spawner reschedules its timer and sits
+at a count of zero for ever with nothing in any log. Anything this port ever spawns through a
+spawner needs the attribute, and the editor's type vocabulary now filters on it.
+
+The **population sizing question** §4 left open is answered and instrumented rather than guessed:
+the shipped target is **60**, not 1600, and `BotTickManager` times its own pass so `Bots.Recipe`
+reports the cost beside the live count (60 bots: 0.4 ms mean of a 2,000 ms budget). Raising it is
+arithmetic now.
 
 ### Re-survey these four before porting them
 

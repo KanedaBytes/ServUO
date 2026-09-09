@@ -108,15 +108,27 @@ Ported from the ModernUO shard, in this order:
 | 6 | `Scripts/Custom/Bots/` — PlayerBots, session 1: the bot mobile you can spawn and inspect | **done** |
 | 7 | PlayerBots, session 2: the behaviour tick, `Traveler` on `NavWalker`, class-weighted destinations | **done** |
 | 8 | PlayerBots, session 3: the lifecycle roller, bank crowds and shoppers | **done** |
+| 9 | PlayerBots, session 4: the chat corpus, ambient chatter, and a bot that answers to its name | **done** |
+| 10 | PlayerBots, session 5: work — gatherers, artisans, real harvest and real craft | **done** |
+| 11 | PlayerBots, session 6: the population — the recipe, `GG_BotPop.xml`, and the session curve | **done** |
 | 5e | The editor's left column: collapsible sections, a resizable column, the bot card, and create forms fed from the shard | **done** (the admin panel is 5f) |
 
 The bot layer is being ported in sessions, from the survey in `docs-src/uo-offline-port-survey.md`.
 Session 1 was identity — class, tier, skills, stats, name, speech hue, outfit. Session 2 made them
 walk: a behaviour tick over `LiveRegistry`, a `Traveler` on the shard's existing `NavWalker`, and
 class-weighted destinations from `bots.json`. Session 3 gave them a life — a personality-weighted
-phase roller, a bank with a standing crowd, and shops worth browsing. Speech and population follow.
-See `Scripts/Custom/Bots/README.md`, in particular its **Deviations from uo-offline** and **Severed
-seams** sections.
+phase roller, a bank with a standing crowd, and shops worth browsing. Session 4 gave them a voice,
+session 5 gave them work, and **session 6 gave the world a population**: a recipe read off the nav
+graph, written to `Spawns/Custom/trammel/GG_BotPop.xml`, and a daily curve that makes it breathe.
+See `Scripts/Custom/Bots/README.md`, in particular its **Deviations from uo-offline**, **Severed
+seams** and **Population** sections.
+
+The population is **derived, not authored**: nothing in the code knows the name "Britain". A town is
+a tag in `bots.json`, a bank is a `bank` destination carrying it, a station is whatever
+`CrafterProfiles` says a class works — so authoring a destination in the editor grows the recipe.
+`[BotPopulationAudit` says what it would produce and whether the file still matches; `Bots.Recipe`
+says the same thing on every `[CoreSmoke`, and reports the **tick cost** beside the live count so
+the target is a number rather than a nerve. Sixty bots cost 0.4 ms of a 2,000 ms budget.
 
 The art view (5d) took three sessions: the isometric renderer and its on-demand tile cache; then
 stretched terrain, the shard's own furniture and the floor slider; then **the pick map**, which is
@@ -151,9 +163,19 @@ What a bot is, in one paragraph: a `BaseCreature` flagged `Player`, with a class
 and a **home town** rolled at creation. It picks destinations from `navigation.json` weighted by
 `bots.json` - class × kind, times 2.5 for its home town, with a distance term only on work sites -
 walks them on `NavWalker`, and hands off to a visit behaviour on arrival. A 60-second roller
-transitions it between `Traveler` and `Idle` when its phase expires and it is not mid-walk. Nothing
-about it survives a restart. There is no spawner, no session curve and no population yet; that is
-the population session.
+transitions it between `Traveler` and `Idle` when its phase expires and it is not mid-walk. **Nothing
+about it survives a restart** — `Deserialize` ends in `Timer.DelayCall(Delete)` — and what does
+survive is the spawner file it came from, which is rebuilt into spawners by `[GG_Reimport` and
+filled at `ServerStarted`.
+
+A bot is one of two things, and it is the difference the whole population layer turns on. A
+**lifecycle** bot has a session: it rolls behaviours, plays for one to four hours, says goodbye and
+vanishes, and the daily curve decides how many of them are on. A **fixed-role** bot is furniture: it
+never rolls, never logs out and never counts toward the target, so the bank crowds and the staffed
+benches are there at 05:00 exactly as at 19:00. Which one it is comes from its spawner, as a
+property on the bot rather than as the spawner's type — because XmlSpawner calls `OnAfterSpawn`
+*before* it applies the spawn string, so upstream's `Spawner is FixedRoleBotSpawner` could not be
+carried across.
 
 Rules in force for bots and occupied tiles, each with its row in the README's Deviations table:
 
@@ -227,6 +249,10 @@ checkpoint has shipped it as `True` once already.
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
+| `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
+| `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
+| `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
+| `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
 | `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
 | `[Vocabulary` | Administrator | Write what the shard actually loaded - every spawnable creature type, which are vendors, and the C# enums - for the editor's dropdowns |
 
@@ -246,6 +272,18 @@ and `[XmlUnLoad` take an optional `SpawnerPrefixFilter` second argument matched 
 
 `[GG_Reimport` is preferred because `[XmlLoad` alone is an upsert — a spawn point deleted from the
 XML would keep its spawner in the world forever. See `Spawns/Custom/README.md`.
+
+**`trammel/GG_BotPop.xml` is generated, not authored.** `[BotPopulationGen` writes it whole from the
+recipe and owns every `GG_BotPop_` name in it; hand-placed bot spawners belong in `GG_Bots.xml`,
+which the generator never touches. Both are LF, pinned in `.gitattributes` for the reason the JSON
+files are.
+
+**A spawner will not construct a type whose constructor lacks `[Constructable]`** — and it says so
+to nobody: `XmlSpawner2.cs:11263` defaults `requireconstructable` to true, and a refused spawn sets
+`status_str` and *returns true*, so the spawner reports success and sits at a count of zero for
+ever. This cost eight minutes of staring at thirty-seven working spawners that made nothing.
+`[Vocabulary` now filters on the same attribute, so the editor's Type dropdown offers only what a
+spawner can actually call.
 
 ## Navigation
 
@@ -523,6 +561,14 @@ The three forms that needed rebuilding are rebuilt. **Corridor** takes a name an
 **Work site** explains each field in a line. **Spawner** is uo-offline's form - kind first, type
 filtered by kind, count, home range, respawn window - with `GG_` applied rather than typed.
 
+**The two bot kinds are there now** - *Bot - fixed role* and *Bot - lifecycle seed*, upstream's
+`PlayerBotFixed` and `PlayerBotLifecycle`. For those two, `kind` stops being a filter and becomes
+the field that decides what is written: there is no `PlayerBotFixed` class to spawn, so the form
+writes `PlayerBot/Role/Fixed/Seed/BankSitter` and the bot is told what to be by property setters
+after it lands. Their Type list is the **behaviour** registry, exported by `[Vocabulary` from
+`BotBehaviors`' own keys because there is no enum to reflect over. Most bot spawners are written by
+`[BotPopulationGen`; this form is for the fixture the recipe cannot know about.
+
 > **Saving a spawner from the browser had never written anything.** `filesWithEdits` returned a
 > fixed three-name list and a spawn key is `spawn:<facet>/GG_Thing.xml`, so `save()` looped over
 > nothing and reported *"Saved and reloaded."* The bridge's half was right and tested the whole
@@ -543,3 +589,12 @@ original when the editing UI lands.
 - **`NotifyStaff` is copied privately in three systems** (`RestrictedZoneSystem`,
   `NavigationSystem`, `DailyLifeSystem`). Three is tolerable; the fourth should become a
   `Custom/Core` helper rather than a fourth copy.
+- **`trinsic-shop-tailor-2` cannot be staffed**, and `Bots.Recipe` says so on every `[CoreSmoke`.
+  The shop stands at Z 35 and its only adopted arrival is at Z 15, twenty below the floor, so the
+  tailor the recipe pins there finds no standable tile in reach and walks to `trinsic-shop-tailor`
+  instead. The fix is an arrival point on the shop's own floor, authored in the editor; the
+  warning is deliberately left standing until it is, and it names where the crafter went.
+- **`Data/Live/vocabulary.json` shrank when `[Constructable]` became the filter**, which is
+  correct — it now lists what a spawner can actually construct — but nothing has audited which
+  types left. If a type that used to be offered turns out to be spawnable some other way, the
+  filter is the thing to revisit, not the attribute.
