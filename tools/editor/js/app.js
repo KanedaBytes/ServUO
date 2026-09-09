@@ -859,7 +859,13 @@ function buildCreateButtons() {
 }
 
 function updateCounts() {
-    for (const element of document.querySelectorAll('.count')) {
+    // Scoped to the layer list, not the document. `.count` is also the class on the Bots panel's
+    // trailing slot, and a document-wide sweep found those too: they carry no data-layer, so they
+    // fell through to the last branch and were set to the number of shapes in layer `undefined`,
+    // which is 0. Every bot row has read "0" where its behaviour or its stuck rung should be,
+    // for as long as the panel has existed - so the one thing the README says that slot is for,
+    // "a wedged bot is the thing somebody opened this panel to find", has never once worked.
+    for (const element of dom.layers.querySelectorAll('.count')) {
         const layer = element.dataset.layer;
 
         if (layer === 'coverage') {
@@ -3882,7 +3888,17 @@ function filesWithEdits() {
 
     // Navigation first: a daily-life record naming a nav id that does not exist yet is only a
     // warning, but it makes the editor look wrong for the length of one refresh.
-    return ['navigation', 'restrictedZones', 'dailyLife'].filter((file) => files.has(file));
+    const known = ['navigation', 'restrictedZones', 'dailyLife'].filter((file) => files.has(file));
+
+    // AND THE SPAWN FILES, which this used to drop on the floor. The three names above are a
+    // fixed list and a spawn key is `spawn:<facet>/GG_Thing.xml` - dynamic by construction - so
+    // no spawner edit has ever survived this filter. Editing a GG spawner in the panel, or
+    // creating one with the Spawner tool, reported "Saved and reloaded" and wrote nothing at all:
+    // save() iterates what this returns, and an empty list is indistinguishable from a clean run.
+    // The bridge's half worked the whole time and is tested; this was the half nobody called.
+    const spawn = [...files].filter((file) => file.startsWith('spawn:')).sort();
+
+    return [...known, ...spawn];
 }
 
 async function save() {
@@ -3923,9 +3939,29 @@ async function save() {
         return;
     }
 
+    const files = filesWithEdits();
+
+    // There are edits - hasEdits() said so at the top - so an empty file list means at least one
+    // of them belongs to no file the editor can name, and the loop below would then say "Saved
+    // and reloaded" having sent nothing. That is the failure this whole function just had, in two
+    // independent forms at once, and it was invisible both times because the success message did
+    // not depend on anything having been written.
+    if (files.length === 0) {
+        const orphans = [...state.dirty.values(), ...state.created.values(), ...state.deleted.values()]
+            .filter((shape) => !fileOf(shape))
+            .map((shape) => shape.id);
+
+        showBanner(
+            'Nothing was written: these edits do not belong to any file the editor can save.\n\n'
+            + (orphans.length > 0 ? orphans.slice(0, 5).join('\n') : '(no shape could be named)')
+            + '\n\nThis is a bug - please say what you were creating when it happened.');
+        setStatus('Save wrote nothing: no file could be resolved for these edits.', 'error');
+        return;
+    }
+
     setStatus('Saving...');
 
-    for (const file of filesWithEdits()) {
+    for (const file of files) {
         let result;
 
         try {

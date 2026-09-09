@@ -203,8 +203,15 @@ export function buildShape(key, props, map, draft, context = {}) {
             const id = context.uniqueId;
             const name = ggName(props.Name);
 
+            // `<facet>/GG_Thing.xml`, never the `spawn:` save key. app.js's fileOf reconstructs
+            // the key by prefixing `spawn:` back onto this slice, so a key pasted in here would
+            // give `spawn:spawn:...`, match no writable file, and make the save a no-op that
+            // still said it had succeeded. Tolerated rather than refused because both forms are
+            // reasonable things to have in your hand.
+            const file = String(props.file || '').replace(/^spawn:/, '');
+
             return {
-                ...common, id: `spawner:${props.file}#${id}`, kind: 'point', label: name,
+                ...common, id: `spawner:${file}#${id}`, kind: 'point', label: name,
                 map, points: [[point[0], point[1], point[2] === undefined ? 0 : point[2]]],
                 props: {
                     Name: name,

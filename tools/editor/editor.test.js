@@ -743,6 +743,85 @@ test('a point placed with no Z at all is still written at zero, not undefined', 
     assert.strictEqual(built.points[0][2], 0);
 });
 
+test('a spawner shape names its file the way fileOf reads it back', async () => {
+    // The round trip that was broken: buildShape writes `spawner:<relative>#<guid>` and app.js's
+    // fileOf reconstructs the save key by slicing that and prefixing `spawn:`. Handing the field
+    // the full key instead gave `spawner:spawn:trammel/...`, fileOf gave `spawn:spawn:trammel/...`,
+    // and the save matched no writable file - reporting success having written nothing.
+    const { buildShape } = await import('./js/build.js');
+
+    // fileOf, transcribed. Not imported: it lives in app.js, which needs a DOM to load at all.
+    const fileOf = (shape) => `spawn:${shape.id.slice('spawner:'.length, shape.id.lastIndexOf('#'))}`;
+
+    for (const typed of ['trammel/GG_Test.xml', 'spawn:trammel/GG_Test.xml']) {
+        const built = buildShape(
+            'spawner',
+            { Name: 'Test', file: typed, Objects2: 'Rabbit', MaxCount: '1' },
+            'Trammel', { points: [[10, 20, 0]] }, { uniqueId: 'guid' });
+
+        assert.strictEqual(built.id, 'spawner:trammel/GG_Test.xml#guid',
+            `a file typed as '${typed}' must give one id, not two`);
+        assert.strictEqual(fileOf(built), 'spawn:trammel/GG_Test.xml');
+        assert.ok(whitelist.resolveSpawnFile(fileOf(built)),
+            'the key fileOf produces must resolve to a writable file');
+    }
+});
+
+test('the vocabulary offers spawn files in the form the spawner shape wants', async () => {
+    // The other half of the same bug: whitelist.listSpawnFiles returns `spawn:` keys and the
+    // field means a relative path, so the vocabulary trims them rather than the form having to.
+    const vocabulary = require('./vocabulary.js');
+    const readJson = (file) => {
+        try {
+            return JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch {
+            return null;
+        }
+    };
+
+    for (const file of vocabulary.build(readJson).spawnFiles) {
+        assert.ok(!file.startsWith('spawn:'), `${file} must be relative, not a save key`);
+        assert.ok(whitelist.resolveSpawnFile(`spawn:${file}`), `spawn:${file} resolves`);
+    }
+});
+
+test('every file an edit can belong to is a file save() will actually send', () => {
+    // filesWithEdits returned a fixed three-name list, and a spawn key is
+    // `spawn:<facet>/GG_Thing.xml` - dynamic by construction - so no spawner edit ever survived
+    // it. save() loops over what it returns, so an empty list ran zero iterations and fell
+    // straight through to "Saved and reloaded". Both the spawner tool and the panel's spawner
+    // fields were silently no-ops for as long as they have existed.
+    const app = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+    const body = app.slice(app.indexOf('function filesWithEdits'));
+
+    assert.ok(/startsWith\('spawn:'\)/.test(body.slice(0, 1200)),
+        'filesWithEdits must pass spawn keys through, not only the three fixed names');
+
+    // And the guard that would have made either bug visible on the first attempt: edits that
+    // resolve to no file at all must be reported, never reported as a successful save.
+    assert.ok(/files\.length === 0/.test(app),
+        'save() must refuse when there are edits but no file to write them to');
+});
+
+test('the layer-count sweep is scoped, because the Bots panel uses the same class', () => {
+    // `updateCounts` swept document.querySelectorAll('.count'), and the Bots panel's trailing slot
+    // is a span of class `count` too. Those carry no data-layer, so they fell through to the last
+    // branch and were set to the number of shapes in layer `undefined` - zero. Every bot row read
+    // "0" where its behaviour or its stuck rung should be, for as long as the panel has existed,
+    // which means the one thing the README says that slot is for - "a wedged bot is the thing
+    // somebody opened this panel to find" - had never once worked.
+    //
+    // A source assertion rather than a DOM one, because the fault is the SELECTOR: a rendered
+    // panel can be made to look right by ordering the two updates, and the next thing added to
+    // the sidebar with a count would break it again.
+    const app = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+
+    assert.ok(!/document\.querySelectorAll\(\s*'\.count'\s*\)/.test(app),
+        'the .count sweep must be scoped to the layer list, not the document');
+    assert.ok(/dom\.layers\.querySelectorAll\(\s*'\.count'\s*\)/.test(app),
+        'the .count sweep is scoped to #layers');
+});
+
 test('an arrival written with a range keeps it, and one at zero does not write the key', async () => {
     // The form has asked for a range since the arrival tool existed, and buildShape dropped it -
     // so every arrival the editor created stood on its exact tile whatever was typed. The zero

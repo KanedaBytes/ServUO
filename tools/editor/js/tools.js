@@ -420,8 +420,9 @@ export const TOOLS = {
             {
                 key: 'file', label: 'File', required: true,
                 optionsFrom: 'spawnFiles', combo: true,
-                help: 'Which Spawns/Custom file it lands in. Saving reloads that one file, not'
-                    + ' every GG spawner. Type a new spawn:<facet>/GG_Name.xml to start one.'
+                help: 'Which Spawns/Custom file it lands in, as <facet>/GG_Thing.xml. Saving'
+                    + ' reloads that one file, not every GG spawner. Type a name that is not in'
+                    + ' the list to start a new file.'
             },
             {
                 key: 'MaxCount', label: 'Count', value: '1',

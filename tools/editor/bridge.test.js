@@ -629,7 +629,11 @@ test('the vocabulary answers with the shard down, and never with a hand-kept lis
 
     // The spawn files are the directory's, not the viewport's - which is what the old
     // spawnfile-list could never be, since it was built from whichever files had been loaded.
-    assert.deepStrictEqual(body.spawnFiles.sort(), whitelist.listSpawnFiles().sort());
+    // Relative, not `spawn:` keys: that is the form a spawner shape's id is built from, and
+    // handing over the key instead is what made a spawner save match no file at all.
+    assert.deepStrictEqual(
+        body.spawnFiles.sort(),
+        whitelist.listSpawnFiles().map((key) => key.replace(/^spawn:/, '')).sort());
 
     // Every kind is present at zero rather than absent. An absent kind reads as a form still
     // loading; `Monster (0)` reads as what it is.

@@ -346,9 +346,16 @@ function build(readJson) {
         spawnUnclassified: spawn.unclassified,
         spawnScanned: spawn.scanned,
 
-        // The files a new spawner can land in. Free text still works, which is how a brand-new
-        // file gets made - whitelist.SPAWN_NAME is what decides whether the name is acceptable.
-        spawnFiles: whitelist.listSpawnFiles()
+        // The files a new spawner can land in, as `<facet>/GG_Thing.xml` - the RELATIVE form,
+        // which is what a spawner shape's id is built from and what app.js's fileOf turns back
+        // into a `spawn:` save key. Offering the full key instead produced an id of
+        // `spawner:spawn:trammel/...`, fileOf then produced `spawn:spawn:trammel/...`, and the
+        // save silently matched no file - so listSpawnFiles' own form is deliberately trimmed
+        // here rather than passed through.
+        //
+        // Free text still works, which is how a brand-new file gets made; whitelist.SPAWN_NAME is
+        // what decides whether the name is acceptable, on the way in.
+        spawnFiles: whitelist.listSpawnFiles().map((key) => key.replace(/^spawn:/, ''))
     };
 }
 
