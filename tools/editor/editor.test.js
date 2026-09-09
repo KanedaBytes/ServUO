@@ -878,6 +878,38 @@ test('GG_ is applied to a spawner name rather than typed, and never doubled', as
     assert.strictEqual(built.label, 'GG_Bakers', 'the label is the name that will be written');
 });
 
+test('a bot kind writes a spawn string, not a type name', async () => {
+    // `kind` is a UI filter for every other kind and is thrown away. For the two bot kinds it is
+    // the field that decides what gets written, because there is no PlayerBotFixed class to spawn:
+    // a bot spawner spawns a PlayerBot and then TELLS it what to be, through property setters
+    // XmlSpawner applies AFTER placement. Upstream reads its spawner's type inside OnAfterSpawn,
+    // and that hook runs before the spawn string here (XmlSpawner2.cs:9337 then :9344).
+    const { buildShape, botType } = await import('./js/build.js');
+
+    assert.strictEqual(botType('PlayerBotFixed', 'BankSitter'), 'PlayerBot/Role/Fixed/Seed/BankSitter');
+    assert.strictEqual(botType('PlayerBotLifecycle', 'Traveler'), 'PlayerBot/Role/Lifecycle/Seed/Traveler');
+
+    // Everything else is untouched - a creature kind spawns the type it names.
+    assert.strictEqual(botType('Monster', 'Balron'), 'Balron');
+    assert.strictEqual(botType(undefined, 'Baker'), 'Baker');
+
+    const built = buildShape(
+        'spawner',
+        {
+            kind: 'PlayerBotFixed', Name: 'BankCrowd',
+            file: 'spawn:trammel/GG_Test.xml', Objects2: 'BankSitter', MaxCount: '3'
+        },
+        'Trammel', { points: [[10, 20, 0]] }, { uniqueId: 'x' });
+
+    assert.strictEqual(built.entries[0].type, 'PlayerBot/Role/Fixed/Seed/BankSitter');
+    assert.strictEqual(built.entries[0].max, '3');
+
+    // NO COLON, anywhere. XmlSpawner splits an <Objects2> entry on ":MX=" and its ten siblings and
+    // discards an entry containing one without a word, which is why upstream's own "Crafter:Smith"
+    // convention could not be carried across.
+    assert.ok(!built.entries[0].type.includes(':'), 'a colon would make the entry vanish silently');
+});
+
 test('every tool declares its steps, and the site tool still has three', async () => {
     // The step counter used to be `tool.kind === 'site' ? 3 : 0` in app.js, so every other tool
     // ran with no step guidance at all. It now comes off the tool, which means a tool that grows

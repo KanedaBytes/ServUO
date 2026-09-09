@@ -242,6 +242,16 @@ namespace Server.Custom
             AppendArray(builder, "botTiers", EnumNames(typeof(BotSkillTier), false));
             AppendArray(builder, "crafterTypes", EnumNames(typeof(CrafterType), false));
 
+            // The behaviours a bot spawner may seed, from the registry rather than from an enum,
+            // because there is no enum: "the state IS the behaviour name" (BotBehaviors.cs:9-12).
+            // This is the one dropdown in the editor whose values are C# CLASS NAMES the shard
+            // resolves by string, so a stale list here is a spawner that silently makes an Idle
+            // bot - which looks exactly like a spawner that works.
+            AppendArray(builder, "botBehaviors", new List<string>(BotBehaviors.Names()));
+
+            // Fixture or session. An enum precisely so this line can exist.
+            AppendArray(builder, "botRoles", EnumNames(typeof(BotRole), false));
+
             // Lowercased, because that is how they are spelled in navigation.json: NavEdge.Kind
             // compares KindName against "gate" and NavRoute parses "oneway", so an editor offering
             // "OneWay" would be offering a value the file has never held.

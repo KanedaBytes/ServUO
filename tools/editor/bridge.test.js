@@ -637,7 +637,10 @@ test('the vocabulary answers with the shard down, and never with a hand-kept lis
 
     // Every kind is present at zero rather than absent. An absent kind reads as a form still
     // loading; `Monster (0)` reads as what it is.
-    assert.deepStrictEqual(body.spawnKinds.map((kind) => kind.key), ['Monster', 'NPC', 'Vendor']);
+    assert.deepStrictEqual(
+        body.spawnKinds.map((kind) => kind.key),
+        ['Monster', 'NPC', 'Vendor', 'PlayerBotFixed', 'PlayerBotLifecycle']
+    );
 });
 
 // ---- the isometric art tiles ------------------------------------------------------------------

@@ -94,6 +94,8 @@ const FULL_REPORT = {
     botClasses: ['Warrior', 'Miner'],
     botTiers: ['Novice', 'Grandmaster'],
     crafterTypes: ['Smith'],
+    botBehaviors: ['BankSitter', 'Crafter', 'Gatherer', 'Idle', 'Shopper', 'Traveler'],
+    botRoles: ['Lifecycle', 'Fixed'],
     edgeKinds: ['walk', 'gate'],
     routeModes: ['cycle', 'oneway', 'pingpong'],
     legacyBotClasses: ['Crafter']
@@ -116,12 +118,43 @@ test('with the shard down it still answers, marked', () => {
     // checking for undefined first.
     assert.deepStrictEqual(data.siteTypes, []);
     assert.deepStrictEqual(data.botClasses, []);
-    assert.deepStrictEqual(data.spawnTypes, { Monster: [], NPC: [], Vendor: [] });
+    assert.deepStrictEqual(data.spawnTypes, {
+        Monster: [], NPC: [], Vendor: [], PlayerBotFixed: [], PlayerBotLifecycle: []
+    });
 
     // Every kind is still offered, at zero. An absent kind would look like a form that had not
-    // finished loading; `Monster (0)` says what is actually true.
-    assert.deepStrictEqual(data.spawnKinds.map((k) => k.key), ['Monster', 'NPC', 'Vendor']);
-    assert.deepStrictEqual(data.spawnKinds.map((k) => k.count), [0, 0, 0]);
+    // finished loading; `Monster (0)` says what is actually true. The two bot kinds count
+    // BEHAVIOURS rather than creature types, so with the shard down they are zero for the same
+    // reason the others are: nothing has said what exists.
+    assert.deepStrictEqual(
+        data.spawnKinds.map((k) => k.key),
+        ['Monster', 'NPC', 'Vendor', 'PlayerBotFixed', 'PlayerBotLifecycle']
+    );
+    assert.deepStrictEqual(data.spawnKinds.map((k) => k.count), [0, 0, 0, 0, 0]);
+});
+
+test('a bot kind offers behaviours, and they come from the shard', () => {
+    // The one dropdown in the editor whose values are strings the shard resolves at spawn time
+    // rather than class names it can check. BotBehaviors has no enum to reflect over - "the state
+    // IS the behaviour name" - so VocabularySnapshot exports the registry's own keys, and a stale
+    // list here would author a spawner that silently makes an Idle bot.
+    writeShardReport(FULL_REPORT);
+
+    const data = vocabulary.build(readJson);
+
+    assert.deepStrictEqual(data.spawnTypes.PlayerBotFixed, FULL_REPORT.botBehaviors);
+    assert.deepStrictEqual(data.spawnTypes.PlayerBotLifecycle, FULL_REPORT.botBehaviors);
+
+    const bot = data.spawnKinds.filter((k) => k.key.startsWith('PlayerBot'));
+
+    assert.strictEqual(bot.length, 2);
+    assert.deepStrictEqual(bot.map((k) => k.label), ['Bot - fixed role', 'Bot - lifecycle seed']);
+    assert.deepStrictEqual(bot.map((k) => k.count), [6, 6]);
+
+    // Not a creature: PlayerBot is in `creatures` too (it is a BaseCreature with a parameterless
+    // constructor), and the Monster bucket is where the folder scan puts anything it did not see.
+    // That is fine and stays - what must not happen is a bot kind listing creatures.
+    assert.ok(!data.spawnTypes.PlayerBotFixed.includes('Balron'));
 });
 
 test('the folder scan gets no say over whether a type is a vendor', () => {

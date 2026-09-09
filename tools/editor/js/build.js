@@ -223,7 +223,7 @@ export function buildShape(key, props, map, draft, context = {}) {
                     MaxDelay: props.MaxDelay || '10',
                     IsRunning: 'True'
                 },
-                entries: [{ type: props.Objects2, max: props.MaxCount || '1' }],
+                entries: [{ type: botType(props.kind, props.Objects2), max: props.MaxCount || '1' }],
                 fields: SPAWNER_FIELDS
             };
         }
@@ -231,6 +231,43 @@ export function buildShape(key, props, map, draft, context = {}) {
         default:
             return null;
     }
+}
+
+/**
+ * The spawn string for a bot kind, or the type unchanged for everything else.
+ *
+ * `kind` is otherwise a pure UI filter and is thrown away here - for the two bot kinds it is the
+ * one field that decides what gets written, because a bot spawner does not spawn a "PlayerBotFixed"
+ * (there is no such class). It spawns a PlayerBot and then TELLS it what to be, through the
+ * property setters XmlSpawner applies after placement:
+ *
+ *     PlayerBot/Role/Fixed/Seed/BankSitter
+ *
+ * That indirection is not a flourish. XmlSpawner calls OnAfterSpawn BEFORE it applies the spawn
+ * string (XmlSpawner2.cs:9337 then :9344), so a bot cannot learn anything from its spawner the way
+ * uo-offline's does - upstream reads `Spawner is FixedRoleBotSpawner` inside OnAfterSpawn, and that
+ * hook is simply too early here. The setters are what replace it.
+ *
+ * The separator is a slash for a reason too: a colon cannot appear in an <Objects2> entry at all -
+ * XmlSpawner splits on ":MX=" and its ten siblings and silently DISCARDS an entry containing one -
+ * which is why upstream's own "Crafter:Smith" convention could not be carried across.
+ *
+ * Everything else a spawner can seed - the forced class, the home town, the station - is the
+ * population recipe's business and is written by [BotPopulationGen. A hand-placed fixture that
+ * needs one can have it typed into Objects2 in the side panel, which round-trips untouched.
+ */
+export function botType(kind, type) {
+    const behaviour = String(type || '').trim();
+
+    if (kind === 'PlayerBotFixed') {
+        return `PlayerBot/Role/Fixed/Seed/${behaviour}`;
+    }
+
+    if (kind === 'PlayerBotLifecycle') {
+        return `PlayerBot/Role/Lifecycle/Seed/${behaviour}`;
+    }
+
+    return type;
 }
 
 /**

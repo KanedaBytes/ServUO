@@ -396,9 +396,11 @@ export const TOOLS = {
                 optionsFrom: (v) => v.spawnKinds().map((entry) => ({
                     value: entry.key, label: `${entry.label} (${entry.count})`
                 })),
-                help: 'Filters the type list below. The two bot kinds uo-offline offers - fixed'
-                    + ' role and lifecycle seed - come with the Population session; this shard has'
-                    + ' no bot spawner yet.'
+                help: 'Filters the type list below, and for the two bot kinds it decides what is'
+                    + ' written: a fixed role never re-rolls and never logs out, a lifecycle seed'
+                    + ' is a bot having a session. Most bot spawners are written by'
+                    + ' [BotPopulationGen into GG_BotPop.xml - this form is for the fixture the'
+                    + ' recipe cannot know about.'
             },
             {
                 key: 'Objects2', label: 'Type', required: true,
@@ -406,7 +408,8 @@ export const TOOLS = {
                 optionsFrom: (v, values) => v.spawnTypes(values.kind || 'Monster'),
                 help: 'What it spawns. Typeable, because even one kind is hundreds of entries -'
                     + ' the list is every type the shard actually loaded with a constructor a'
-                    + ' spawner can call.'
+                    + ' spawner can call. For a bot kind it is the BEHAVIOUR the bot wakes up in,'
+                    + ' and the spawn string is built around it.'
             },
             {
                 // GG_ is not decoration: [XmlLoad and [XmlUnLoad filter on it with an ordinal

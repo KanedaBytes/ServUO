@@ -71,6 +71,8 @@ function readShard(readJson) {
         botClasses: data.botClasses || [],
         botTiers: data.botTiers || [],
         crafterTypes: data.crafterTypes || [],
+        botBehaviors: data.botBehaviors || [],
+        botRoles: data.botRoles || [],
         edgeKinds: data.edgeKinds || [],
         routeModes: data.routeModes || [],
         legacyBotClasses: data.legacyBotClasses || []
@@ -186,14 +188,24 @@ function spawnKinds(shard) {
     // With the shard down there is nothing to classify, and the scan is ~900 files of reading to
     // answer a question nobody asked. The kinds still come back, at zero, which is exactly what
     // the form should show.
+    // The two bot kinds are uo-offline's, by their names: GenerateCustomSpawnersCommand.cs:167-170
+    // switches on exactly "PlayerBotFixed" and "PlayerBotLifecycle". Their "type" list is not a
+    // creature list at all - it is the behaviour the spawned bot wakes up in - which is why they
+    // are built here rather than falling out of the folder scan with everybody else.
+    const botKinds = (behaviours) => [
+        { key: 'PlayerBotFixed', label: 'Bot - fixed role', count: behaviours.length },
+        { key: 'PlayerBotLifecycle', label: 'Bot - lifecycle seed', count: behaviours.length }
+    ];
+
     if (shard.creatures.length === 0 && shard.vendors.length === 0) {
         return {
             kinds: [
                 { key: 'Monster', label: 'Monster', count: 0 },
                 { key: 'NPC', label: 'NPC', count: 0 },
-                { key: 'Vendor', label: 'Vendor', count: 0 }
+                { key: 'Vendor', label: 'Vendor', count: 0 },
+                ...botKinds([])
             ],
-            types: { Monster: [], NPC: [], Vendor: [] },
+            types: { Monster: [], NPC: [], Vendor: [], PlayerBotFixed: [], PlayerBotLifecycle: [] },
             unclassified: 0,
             scanned: 0
         };
@@ -219,14 +231,26 @@ function spawnKinds(shard) {
         }
     }
 
+    const behaviours = (shard.botBehaviors || []).slice();
+
     return {
         // Order matters: it is the order of the kind dropdown, and Monster is the common case.
+        // The bot kinds go last because a hand-placed bot spawner is the rare one - the population
+        // recipe writes GG_BotPop.xml and this form is for the fixture the recipe cannot know
+        // about.
         kinds: [
             { key: 'Monster', label: 'Monster', count: monster.length },
             { key: 'NPC', label: 'NPC', count: npc.length },
-            { key: 'Vendor', label: 'Vendor', count: shard.vendors.length }
+            { key: 'Vendor', label: 'Vendor', count: shard.vendors.length },
+            ...botKinds(behaviours)
         ],
-        types: { Monster: monster, NPC: npc, Vendor: shard.vendors.slice() },
+        types: {
+            Monster: monster,
+            NPC: npc,
+            Vendor: shard.vendors.slice(),
+            PlayerBotFixed: behaviours,
+            PlayerBotLifecycle: behaviours.slice()
+        },
         unclassified,
         scanned: folders.size
     };
@@ -336,6 +360,8 @@ function build(readJson) {
         botClasses: shard.botClasses || [],
         botTiers: shard.botTiers || [],
         crafterTypes: shard.crafterTypes || [],
+        botBehaviors: shard.botBehaviors || [],
+        botRoles: shard.botRoles || [],
         legacyBotClasses: shard.legacyBotClasses || [],
         edgeKinds: shard.edgeKinds || [],
         routeModes: shard.routeModes || [],
