@@ -345,7 +345,23 @@ namespace Server.Custom
                 // stops being one when the smith walks away.
                 if (IsStaffed(candidate, profile))
                 {
-                    return 20.0;
+                    // AND THE NEAREST STAFFED BENCH, not any staffed bench. Staffing alone was
+                    // the whole test, so every staffed forge on the facet returned 20.0 and a
+                    // laden miner picked between them by dice. Measured: a miner that filled its
+                    // pack at 'brit-mine-north' (1449,1521) walked 255 tiles to 'britain-forge'
+                    // past 'brit-forge' 36 tiles away, both staffed, both weighing the same - and
+                    // the work probe read that as a hand-over that never happened, because the
+                    // smith it was watching was the one that got walked past.
+                    //
+                    // Distance is deliberately NOT a general term in this table - a bot choosing
+                    // where to spend its evening should not be pulled towards whatever is closest,
+                    // and the comment on HomeBias above says so. A haul is the exception and the
+                    // reason is the load: the ore is already in the pack, every tile of the walk
+                    // is a chance for the recovery ladder to fire, and the bench that gets it is
+                    // interchangeable. Nearest is not a preference here, it is the whole errand.
+                    return Insensitive.Equals(candidate.Id, NearestStaffedStationId(bot, raw))
+                        ? 20.0
+                        : 0.5;
                 }
 
                 return AnyStaffedStation(bot, raw) ? 0.02 : 9.0;
@@ -364,6 +380,55 @@ namespace Server.Custom
             }
 
             return 0.02;
+        }
+
+        /// <summary>
+        /// The staffed station of this trade closest to the bot, by the DESTINATION's tile.
+        ///
+        /// The destination rather than the crafter, because the destination is what the bot walks
+        /// to; a smith that has wandered a few tiles off its bench does not move the forge.
+        ///
+        /// Ties go to the first seen, which is fine: two staffed benches the same distance away
+        /// are the same errand, and the roll below still has to pick one of them.
+        /// </summary>
+        private static string NearestStaffedStationId(PlayerBot bot, Type raw)
+        {
+            if (bot == null || raw == null)
+            {
+                return null;
+            }
+
+            string nearest = null;
+            int best = Int32.MaxValue;
+
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (crafter.RawGood != raw
+                    || !crafter.IsAtStation
+                    || BotWorkSites.IsExcluded(crafter.DestinationId))
+                {
+                    continue;
+                }
+
+                NavDestination station = Nav.Destination(crafter.DestinationId);
+
+                if (station == null)
+                {
+                    continue;
+                }
+
+                int distance = Math.Max(
+                    Math.Abs(station.Location.X - bot.X),
+                    Math.Abs(station.Location.Y - bot.Y));
+
+                if (distance < best)
+                {
+                    best = distance;
+                    nearest = crafter.DestinationId;
+                }
+            }
+
+            return nearest;
         }
 
         /// <summary>Is a crafter of the trade that buys this good working anywhere on the facet?</summary>
