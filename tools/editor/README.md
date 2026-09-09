@@ -61,6 +61,29 @@ comes back. And the whole channel is inspectable with `type` and `del`, which an
 | `js/landz.js` | Where the ground is, for the rects that are drawn on it and carry no Z |
 | `../MapExport/` | The tile renderers, radar and isometric |
 
+## The left column
+
+Every section is a `<details>`, and **its id is the key its open state is remembered under**
+(`js/panels.js`, `localStorage`). The ids are therefore part of the interface: renaming one
+silently resets that section for everybody who had already collapsed it.
+
+A `MutationObserver` reopens a collapsed section when something inside it stops being `hidden`.
+That is not decoration — several things here un-hide themselves without anybody clicking their
+section: the bot detail block when a bot is picked on the map, the floor row when the base map
+switches to art, the reapply button on the banner. Inside a collapsed section all of those appear
+to do nothing at all, which is indistinguishable from the feature being broken. Taken from
+uo-offline's `map.html:1487-1505`, which does both of these for the same reasons.
+
+The column's width is dragged from the handle on its right edge and remembered too, clamped to
+200px and 40% of the window. Its own element rather than a CSS `resize` on `#sidebar`, because
+`resize: horizontal` needs `overflow: hidden` and the sidebar has to scroll. Double-click resets
+it. Nothing tells the canvas: `render()` calls `view.resize()` every frame and the `ResizeObserver`
+on the canvas asks for a frame whenever its box changes, which a flex sibling's width does.
+
+Every storage read *and write* is guarded. A private window or a browser set to block site storage
+makes both throw, and an unguarded write inside a `toggle` handler would take the handler with it —
+so a section would stop collapsing rather than merely stop being remembered.
+
 ## Security
 
 The bridge binds `127.0.0.1` and nothing else, so nothing off this machine can reach it. That
@@ -239,9 +262,11 @@ itself, and nothing is saved until you say so. The in-game equivalents are `[Nav
 `[NavRecord` / `[NavLink` (`Scripts/Custom/Core/Navigation/README.md`), which are the right reach
 for a single waypoint rather than a road.
 
-1. **Click `Corridor`, then click where the road starts.** Start it *on* an existing waypoint when
-   you mean to join the graph there — a road that starts within a tile of one reuses it rather than
-   creating a second waypoint on the same tile, and the status line names what it joined.
+1. **Click `Corridor`. Name the road**, and set its tags — the form opens before the first click,
+   because the name is what every waypoint the road mints is called. **Then click where the road
+   starts.** Start it *on* an existing waypoint when you mean to join the graph there — a road that
+   starts within a tile of one reuses it rather than creating a second waypoint on the same tile,
+   and the status line names what it joined.
 2. **Click via points to steer it, then the end.** Each leg is routed separately and joined, so a
    via point is how you make the road go round the mountain rather than at it.
 3. **Enter, or the `Finish` button, routes it.** The status line counts the legs as they walk;
@@ -262,6 +287,20 @@ waypoints and a mine hung off the graph as an island: every edge pathed, the aud
 nothing could walk there. Reusing an existing waypoint at the ends is what prevents it, and
 `Nav.Data` now warns at load when any component other than the largest holds a destination or an
 arrival, naming its waypoints. `[NavAudit` repeats the finding.
+
+**The waypoints are named after the road**, not after the zone they landed in: `<name>-WP-0001`
+upward in walk order, zero-padded to four so they sort as text the way they sort on the ground —
+`WP-10` between `WP-1` and `WP-2` is what makes a road look shuffled in the filter. It is the one
+place a tool departs from `js/ids.js`, and it departs deliberately: a road is a thing rather than a
+scattering of points, and named this way it reads as one set in the filter, in a `navigation.json`
+diff and in an audit finding, exactly as a work site's three records already do. Any case, digits,
+`-`, `_` and `.` are all legal in an id (`NavIds.IsValid`), so the shard takes it as written.
+
+Waypoints **joined** at the ends keep their own ids. Renaming a record the author did not ask to
+touch would be worse than a mixed-looking road, and the join is what stops the road becoming an
+island in the first place.
+
+**The edges carry the corridor's tags**, which is the other half of the road being one thing.
 
 **An inserted point is named after its neighbours**, not after the zone it landed in — inserting
 between `town-9` and `town-10` gives `town-10a`, even in the middle of the bank quarter, and it
@@ -1079,6 +1118,84 @@ a shopkeeper stays a JSON edit. The map markers for those records (`marker:shop:
 are *derived*: their coordinates live in `navigation.json`, so they are not draggable and the
 bridge refuses them by name.
 
+**Every tool declares its steps**, and the step counter reads them. It used to be
+`tool.kind === 'site' ? 3 : 0` in `app.js`, so the Site tool was the only one with any step
+guidance at all. The wording tracks the walkthroughs above, so a tool that changes changes in one
+place and the two cannot end up saying different things.
+
+Two tools ask their form before the geometry, for different reasons. **Corridor asks at the very
+start**, because its name is what every waypoint the road mints is called and it has to exist
+before there is anything to name. **Work site asks after the first click**, because its auto id is
+generated from the zone the centre tile lands in, and the type it collects decides which harvest
+definition the sweep two steps later measures against.
+
+## No form carries a list of shard values
+
+A field whose valid values are a finite set is populated from real data. Free text survives only
+where the value is genuinely free — a display name, a corridor's name, a restricted zone's name.
+
+Before this, half of them were free text with an example typed into the table: `value: 'shop'` for
+a destination type, `'mine or lumber'` in a label, `'town road'` for tags. Each of those is a copy
+of the shard's vocabulary that nothing checks and nothing updates.
+
+**uo-offline has the same fault, more visibly.** Its spawn types are a checked-in
+`spawn_types.json` regenerated by hand from a Python source-scanner
+(`map-editor/gen_spawn_types.py`), and its bot behaviours are a literal array in the page
+(`map-editor/map.html:204`). Both drift, and neither says when.
+
+### Who answers what
+
+| | |
+| --- | --- |
+| **the shard** | what it actually **loaded** — every concrete `BaseCreature` with a public parameterless constructor, and which of them are `BaseVendor`; plus the C# enums (`BotClass`, `BotSkillTier`, `NavEdgeKind`, `NavRouteMode`, the gatherer site types). `VocabularySnapshot.cs` → `Data/Live/vocabulary.json`, on the `vocabulary` request |
+| **the bridge** | what is **written down** — the destination types and tags in use in `navigation.json`, the ones `bots.json` weights, the spawn files on disk; and the one thing the shard cannot answer, which source folder a creature type came from. `vocabulary.js` → `GET /api/vocabulary` |
+
+That last split is the interesting one. The spawner form wants Monster / NPC / Vendor, and **ServUO
+exposes no source folder at runtime** — `Scripts/Mobiles/Normal` holds `Alligator` next to
+`Balron`, so no property of a loaded `Type` separates a townsfolk from a dragon without
+instantiating it, and instantiating 1,400 mobiles to fill a dropdown is not a trade worth making.
+The folder *is* the answer and the folder is a fact about the repo. So the shard says what exists,
+the bridge says where it was written, and neither of them is a file somebody re-runs. The vendor
+question comes from the type chain and the folder scan gets no say in it, because `BaseVendor` is
+exact and a folder is a guess.
+
+The scan reads file **contents**, not names: `AlelleTheAborist.cs` declares `Alelle`, and several
+ServUO files declare more than one class. It is cached against the tree's file count and newest
+mtime, the same discipline `readStockFile` uses for the 4 MB `trammel.xml`.
+
+A type the shard loaded that the scan never saw falls to Monster and is **counted** — and it is not
+a small number (226 of 1,223 on this tree), because creature subclasses live under
+`Scripts/Engines`, `Scripts/Services` and `Scripts/Custom` too.
+
+### Select, or combo
+
+A `<select>` only where the shard has a **closed set**: route mode, edge kind, spawner kind, bot
+class, bot tier. Those are C# enums and a value outside them is a file the shard refuses to load.
+
+Everywhere the shard accepts a free token — destination `type`, every tag field, the site type — a
+typeable combo. `NavRecords.ValidateDestinations` says why in as many words: *"uo-offline-server's
+flat enum conflated category and mechanism; ours is a free token deliberately."* A control stricter
+than the file format would refuse a type the shard would have accepted. uo-offline reached the same
+answer for the same reason — `map.html:126` is an `<input list>`, not a `<select>`.
+
+The Selection panel uses the same vocabulary, from one table in `js/vocab.js` keyed on
+`<layer>.<field>`. A dropdown when you create a destination and free text when you edit one is
+exactly the drift this removes: the second form quietly teaches you that the vocabulary is optional.
+Two entries in that table — an edge's `kind` and `tags` — are prepared rather than in use, because
+an edge exposes no editable fields yet.
+
+### With the shard down it still answers
+
+Everything derived from the files is there, the shard's lists are empty rather than absent, and
+`shardSeen` is false so the editor can say which half is missing. The spawner's kind dropdown reads
+`Monster (0)` — an *absent* kind would look like a form that had not finished loading, and a count
+of zero does not. The art view already works with the shard down; a create form that refused to
+open without it would be a regression.
+
+The bridge asks the shard for a fresh list when `vocabulary.json` is older than `Scripts.dll`, and
+not on a timer: the answer only changes when the assembly does, which means a rebuild, which means
+a restart.
+
 ## Labels
 
 Drawn in a second pass over the shapes, not inline with them, because a label drawn during the
@@ -1126,10 +1243,37 @@ the shard and forgotten here would draw as an ordinary bot and look deliberate.
 The trailing slot shows the stuck rung when there is one, in preference to the behaviour name: a
 wedged bot is the thing somebody opened this panel to find.
 
+> **And it never once did.** `updateCounts` swept `document.querySelectorAll('.count')` to fill in
+> the layer-row totals, and the Bots panel's trailing slot is a span of class `count` too. Those
+> carry no `data-layer`, so they fell through to the last branch and were set to the number of
+> shapes in layer `undefined` — zero. Every bot row read `0` where its behaviour or its stuck rung
+> should be, for as long as the panel has existed. The sweep is now scoped to `#layers`, and a test
+> asserts the selector rather than the rendered panel: ordering the two updates would also make it
+> look right, and the next thing added to the sidebar with a count would break it again.
+
 Selecting a bot shows its detail and its **event log**, read from `Data/Live/botlog.json` through
 `GET /api/botlog` — fetched on the same poll as the entities, because the shard writes both on one
 snapshot pass and two cadences could only ever show a bot's history from a different moment than
 its position.
+
+### The bot card
+
+Clicking a bot — a row here, or its dot on the map in **either view** — also opens a floating card
+over the map: the same detail, the same event log, closable and draggable by its header, with its
+position remembered.
+
+It exists because the panel's detail block can be a whole column's scroll away from the dot that
+was clicked, and on the art view that dot is usually the only reason anybody is looking at that
+part of the map. The panel selection still updates exactly as before — `selectBot` is one function
+and both routes go through it, so the row highlights and scrolls itself into view either way.
+
+**One function fills both.** `renderBotDetail` was split into `fillBotDetail(element, bot)` and is
+called twice. Two views of one record that could each build their own DOM would be free to
+disagree, which is the fault this panel was built to prevent between a row and a dot.
+
+Esc is deliberately not bound to it. Esc already deselects and cancels a tool, and the card is open
+for most of the time anybody is watching bots — taking the key for it would make Esc mean the more
+useful thing only when the card happened to be shut.
 
 **This is the panel the Gatherer walk-in fault needed and did not have.** Three separate faults
 shared one symptom — a bot standing still — and telling them apart meant reading a console that
@@ -1152,6 +1296,40 @@ Two layers, and the difference is what you may write to. `spawners` is `Spawns/C
 - seven of them today, editable. `spawners-stock` is `Spawns/<facet>.xml` - 2,572 on Trammel alone,
 read-only, and there to answer "what else is already spawning near the thing I am editing", which
 the GG files cannot.
+
+### The create form, and the save that never ran
+
+The New GG spawner form is uo-offline's (`map-editor/map.html:118-133`, JS at `:1101-1141`): the
+**kind** first, then a **type** list filtered by it, then count, home range and the respawn window,
+with a line under each field saying what it decides. Kind first because the type list is meaningless
+without it — 1,400 creature names in one combo is not a list anybody reads, and filtered to a kind
+it is something you can scan. The type control stays typeable for the same reason uo-offline's is.
+
+The counts on the kind labels — `Monster (818)`, `NPC (47)`, `Vendor (405)` — are ours rather than
+theirs, and they are there because the split is derived rather than stored: a scan that found
+nothing gives an empty type list, and an empty dropdown is indistinguishable from one still loading.
+
+**`GG_` is applied, not typed.** `[XmlLoad` and `[XmlUnLoad` filter on it with an ordinal
+`StartsWith`, so a spawner missing the prefix is invisible to `[GG_Reimport` for ever — never swept
+and never replaced. A prefix everybody has to remember is a prefix somebody will forget. It is
+idempotent, so typing it out of habit does not give `GG_GG_`.
+
+> **And none of this could have been saved, because no spawner ever could.** `filesWithEdits`
+> returned `['navigation', 'restrictedZones', 'dailyLife'].filter(...)` — a fixed list — and a spawn
+> key is `spawn:<facet>/GG_Thing.xml`, dynamic by construction. So no spawner edit has ever survived
+> that filter: `save()` iterates what it returns, an empty list runs zero iterations, and the run
+> falls straight through to *"Saved and reloaded."* Editing a GG spawner's fields in the panel and
+> creating one with the Spawner tool were both silent no-ops for as long as they have existed. The
+> bridge's half worked the whole time and is tested end to end above; it was simply never called.
+>
+> The new form then hit the same wall a second way, in one afternoon: the file field was fed
+> `whitelist.listSpawnFiles()`, which returns `spawn:` keys, where the shape id wants the relative
+> path — giving `spawner:spawn:trammel/...`, then `fileOf` giving `spawn:spawn:trammel/...`, and a
+> save that matched no writable file.
+>
+> Two independent bugs with one symptom, and the symptom was silence. So **`save()` now refuses out
+> loud** when it has edits and can resolve no file to put them in, naming the shapes. That guard is
+> what would have caught either of them on the first attempt, and it is the part worth keeping.
 
 **Stock spawners load by viewport, not by facet.** `/api/spawners?bbox=x,y,w,h` filters on
 `(Map, CentreX, CentreY)` rather than on filename, because `trammel.xml` contains 47 Felucca
@@ -1335,3 +1513,30 @@ the token body carries a **nonce** that `WriteAck` echoes back in `token`, which
 editor tabs and a bridge that dies mid-sequence. The nonce is generated in the bridge, not the
 browser, and only for the four requests whose dispatch ignores its body — `livemap-on` parses
 its body and is excluded.
+
+## The admin panel, and what is not in it yet
+
+The next session adds a **Shard** admin section: restart the shard the way `tools/dev.ps1` does
+(behind a confirmation, with the `save` request acked before the process is stopped), save the
+world, a live console feed with logins and warnings picked out, and four named actions as
+buttons — `[WorldItems`, `[BotSmoke`, resync spawns (which exists today) and broadcast a message.
+
+It is deliberately not in this one. Every other item here is the editor and the bridge; this is the
+only one that touches the shard **process**, it needs a console channel that does not exist yet,
+and it is the only one that can leave the shard down.
+
+What else such a panel could hold, in rough order of how often you would want it:
+
+- **Who is connected** — `NetState.Instances` with account, IP and idle time, and a kick.
+- **A save-progress line.** `World.Save` freezes the world on the core thread, so an editor that
+  keeps polling through one has no way to say *why* everything stopped.
+- **The request log** — the last N tokens and their acks, which is the whole editor-to-shard
+  channel and is currently only readable with `type` in `Data/Live/requests/`.
+- **`[CoreSmoke` and `[DailyLifeSmoke` on demand**, with their result lines in the panel rather
+  than in a console window behind the browser. The Health section already shows what they register.
+- **Config, read-only** — the `Custom.*` keys actually in force, which today means opening
+  `Config/Custom.cfg` and hoping `_DEBUG.cfg` is not overriding it.
+- **Toggle the smoke-on-start flags**, which is the one edit anybody makes to `Custom.cfg` by hand
+  and the one that has been committed as `True` by accident once already (SHARD.md).
+- **Build and restart**, as opposed to restart — it would have to refuse while `Scripts.dll` is
+  locked, which is exactly the failure `build.ps1` exists to make loud.

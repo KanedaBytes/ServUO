@@ -108,6 +108,7 @@ Ported from the ModernUO shard, in this order:
 | 6 | `Scripts/Custom/Bots/` — PlayerBots, session 1: the bot mobile you can spawn and inspect | **done** |
 | 7 | PlayerBots, session 2: the behaviour tick, `Traveler` on `NavWalker`, class-weighted destinations | **done** |
 | 8 | PlayerBots, session 3: the lifecycle roller, bank crowds and shoppers | **done** |
+| 5e | The editor's left column: collapsible sections, a resizable column, the bot card, and create forms fed from the shard | **done** (the admin panel is 5f) |
 
 The bot layer is being ported in sessions, from the survey in `docs-src/uo-offline-port-survey.md`.
 Session 1 was identity — class, tier, skills, stats, name, speech hue, outfit. Session 2 made them
@@ -227,6 +228,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
 | `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
+| `[Vocabulary` | Administrator | Write what the shard actually loaded - every spawnable creature type, which are vendors, and the C# enums - for the editor's dropdowns |
 
 ## Custom spawns
 
@@ -499,6 +501,38 @@ tile, which is how a spawn point that exists twice becomes visible - see the not
 The sidebar's **Audit** button runs `[NavAudit` and draws what it could not path; **Resync all
 spawns** runs `[GG_Reimport` behind a confirmation, because that one deletes every `GG_` spawner in
 the world along with its spawned mobiles.
+
+**The left column, and the forms (5e).** Every section collapses and remembers it; the column's
+width is dragged and remembered. Clicking a bot - a row, or its dot on the map in either view -
+opens a card over the map with the same detail and event log the Bots panel shows, closable and
+draggable.
+
+**And no create form carries a list of shard values any more.** A field whose valid values are a
+finite set is populated from real data: `[Vocabulary` (or the `vocabulary` token) writes what
+`Scripts.dll` actually loaded - every concrete `BaseCreature` with a constructor a spawner can
+call, which of them are vendors, and the C# enums - and the bridge merges that with what is written
+down in `navigation.json`, `bots.json` and `Spawns/Custom`. The Monster/NPC split is the bridge's,
+because ServUO exposes no source folder at runtime and `Scripts/Mobiles/Normal` holds `Alligator`
+next to `Balron`: the shard says what exists, the repo says where it was written, and neither is a
+list anybody maintains. A `<select>` only where the shard has a closed enum; a typeable combo
+wherever it takes a free token, because `NavRecords` makes a destination type free *deliberately*
+and a stricter control would refuse what the shard would accept.
+
+The three forms that needed rebuilding are rebuilt. **Corridor** takes a name and mints
+`<name>-WP-0001` upward in walk order, with its tags on the waypoints and the edges between them.
+**Work site** explains each field in a line. **Spawner** is uo-offline's form - kind first, type
+filtered by kind, count, home range, respawn window - with `GG_` applied rather than typed.
+
+> **Saving a spawner from the browser had never written anything.** `filesWithEdits` returned a
+> fixed three-name list and a spawn key is `spawn:<facet>/GG_Thing.xml`, so `save()` looped over
+> nothing and reported *"Saved and reloaded."* The bridge's half was right and tested the whole
+> time; nobody called it. `save()` now refuses out loud when it has edits and no file to put them
+> in. The Bots panel's trailing slot had the same shape of fault - `updateCounts` swept `.count`
+> document-wide, so every row read `0` where its stuck rung should be.
+
+**Still to come: the admin panel** - restart the shard, save the world, a live console feed and the
+named actions. It is the only part of the editor that touches the shard *process*; see the end of
+`tools/editor/README.md` for what else it could hold.
 
 See `tools/editor/README.md` for the save contract, the two tiers of validation failure - a dangling
 edge id is a warning here, not a rejection - and what is still to bring back from the ModernUO
