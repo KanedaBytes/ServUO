@@ -21,11 +21,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Server.Custom
 {
     public static class NamePool
     {
+        private static readonly CustomLogger Log = CustomLogger.For("Bots");
+
         private static readonly string[] MaleNames =
         {
             // Anglo-Saxon / Old English
@@ -335,7 +338,59 @@ namespace Server.Custom
                 }
             }
 
-            return PickRandom(female);
+            // 4) THE LAST RESORT HAS TO CLAIM, and it used to not.
+            //
+            // It was `return PickRandom(female)` - a name handed out without being registered. That
+            // is the census reading LOW: sixty live bots and fifty-nine claimed names, which is the
+            // exact inverse of the leak Bots.Population watches for and was invisible to it. Found
+            // the first time this shard ran a real population.
+            //
+            // The count matters more than the prettiness of the sixtieth name: BotSession's curve
+            // and every "how many bots are there" answer are built on InUseCount precisely because
+            // it is O(1) and exact, and a number that is exact except occasionally is not exact.
+            // So the fallback disambiguates until it lands, and only then gives up - and if it ever
+            // did give up it would say so rather than returning a lie.
+            string basis = PickRandom(female);
+
+            for (int i = 2; i < 1000; i++)
+            {
+                string candidate = basis + " " + ToRoman(i);
+
+                if (Claim(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            Log.Warn(
+                "The name pool could not find a free name for a bot; the census will read one short.");
+
+            return basis;
+        }
+
+        /// <summary>
+        /// "II", "III", "IV" - a disambiguator that reads as a name rather than as a serial.
+        ///
+        /// Roman rather than "Tessa 2" because the fallback's whole job is to be indistinguishable
+        /// from the pool it is standing in for, and this shard's bots are meant to read as people.
+        /// </summary>
+        private static string ToRoman(int value)
+        {
+            int[] numbers = { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+            string[] letters = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+
+            var text = new StringBuilder(8);
+
+            for (int i = 0; i < numbers.Length && value > 0; i++)
+            {
+                while (value >= numbers[i])
+                {
+                    text.Append(letters[i]);
+                    value -= numbers[i];
+                }
+            }
+
+            return text.ToString();
         }
 
         private static string RollBase(bool female)

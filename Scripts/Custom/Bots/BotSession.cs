@@ -141,6 +141,9 @@ namespace Server.Custom
                 }
             }
 
+            // `<=`, where upstream has `<`, and that is the translation rather than an off-by-one.
+            // Upstream asks before the bot exists, so its count excludes the candidate; this asks
+            // after, so `live` already includes it. Both mean "would this one be the (target+1)th".
             return live <= TargetNow;
         }
 

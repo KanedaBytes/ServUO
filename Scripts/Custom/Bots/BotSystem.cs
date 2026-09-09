@@ -380,6 +380,43 @@ namespace Server.Custom
                     BotTickManager.GaveUpTotal);
             }
 
+            // THE CENSUS COMES FIRST IN THIS LADDER, above every config warning below it.
+            //
+            // Not tidiness: a wrong count undermines every other number on this line and the
+            // curve that is built on it, while an overcrowded destination is a note about the
+            // config. Ordered the other way round - which is how it was - the crowd-floor
+            // warning returned first and MASKED a census that had been reading one short for a
+            // whole session. The more serious fault must not be the one that gets short-
+            // circuited.
+            // A claimed name with no live bot behind it is a leak in the census the population
+            // manager now depends on, so it is worth saying out loud.
+            if (NamePool.InUseCount > count)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} claimed name(s) but only {1} live bot(s) - names leaked on delete. {2}",
+                    NamePool.InUseCount,
+                    count,
+                    detail));
+            }
+
+            // AND THE OTHER DIRECTION, which is the one that actually happened.
+            //
+            // This check watched only for a leak, so a census reading LOW was invisible to it -
+            // and PickUnique's last resort used to hand out a name without claiming it, which is
+            // exactly that. Sixty live bots reported fifty-nine claimed names for a whole session
+            // and nothing said a word. The count is load-bearing now: BotSession's curve is built
+            // on it precisely because it is O(1) and exact.
+            if (NamePool.InUseCount < count)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} live bot(s) but only {1} claimed name(s) - a bot was named without "
+                    + "claiming it, so the census reads low. {2}",
+                    count,
+                    NamePool.InUseCount,
+                    detail));
+            }
+
+
             // A class that can never travel is a config bug that looks exactly like a walker bug:
             // the bot asks for a destination every tick, gets nothing, and stands still.
             List<BotClass> starved = BotDestinations.StarvedClasses(facet ?? Map.Trammel);
@@ -450,17 +487,6 @@ namespace Server.Custom
                     "{0} of {1} bot(s) have an UNSET PHASE CLOCK - they are permanently overdue and "
                     + "the lifecycle will overwrite anything set on them. {2}",
                     clockless,
-                    count,
-                    detail));
-            }
-
-            // A claimed name with no live bot behind it is a leak in the census the population
-            // manager will later depend on, so it is worth saying out loud now.
-            if (NamePool.InUseCount > count)
-            {
-                return HealthResult.Warn(String.Format(
-                    "{0} claimed name(s) but only {1} live bot(s) - names leaked on delete. {2}",
-                    NamePool.InUseCount,
                     count,
                     detail));
             }

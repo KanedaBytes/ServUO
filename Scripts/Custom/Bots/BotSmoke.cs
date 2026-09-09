@@ -216,6 +216,24 @@ namespace Server.Custom
         /// Run the audit. <paramref name="from"/> may be null when run headlessly at boot; when
         /// present it also receives the report.
         /// </summary>
+        /// <summary>Live bots, from the registry rather than World.Mobiles (CLAUDE.md section 15).</summary>
+        private static int CountPopulation()
+        {
+            int live = 0;
+
+            foreach (Mobile mobile in LiveRegistry.Snapshot())
+            {
+                var bot = mobile as PlayerBot;
+
+                if (bot != null && !bot.Deleted && bot.Map != null && bot.Map != Map.Internal)
+                {
+                    live++;
+                }
+            }
+
+            return live;
+        }
+
         public static HealthResult Run(Mobile from)
         {
             BotCaps caps = BotSystem.Caps;
@@ -224,6 +242,8 @@ namespace Server.Custom
 
             Map map = from != null && from.Map != null && from.Map != Map.Internal ? from.Map : Map.Trammel;
             Point3D location = from != null ? from.Location : new Point3D(1475, 1645, 20);
+
+            int populationBefore = CountPopulation();
 
             try
             {
@@ -299,9 +319,20 @@ namespace Server.Custom
                 }
             }
 
+            // THE POPULATION IS THE BASELINE NOW, and saying so is what makes a leak visible.
+            //
+            // This probe spawns a bot per class and deletes them again. It used to run in an empty
+            // world, so "a bot left standing" was obvious. With a population alive it is not: the
+            // count is sixty either way, and a probe that leaked one would read as sixty-one bots
+            // that somebody would assume the curve had made. Naming the count before and after
+            // turns that back into something a reader can subtract. Bots.Population's name-pool
+            // check is the automated half; this is the one in front of whoever typed the command.
             string summary = String.Format(
-                "{0} class(es) audited at Grandmaster. {1}",
+                "{0} class(es) audited at Grandmaster; population {1} before, {2} after ({3} kept). {4}",
                 spawned.Count,
+                populationBefore,
+                CountPopulation(),
+                Config.Get("Custom.BotSmokeKeep", 0),
                 caps.Describe());
 
             if (problems.Count > 0)
