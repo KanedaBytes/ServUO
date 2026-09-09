@@ -75,6 +75,21 @@ namespace Server.Custom
         /// <summary>Nothing fits on the goal tile at any height. See the header.</summary>
         public bool GoalUnstandable;
 
+        /// <summary>
+        /// WHY this walk ended, in the only two shapes that ask different questions.
+        ///
+        /// "goal empty" was one bucket and it hid two unrelated faults. A bot standing INSIDE the
+        /// arrival's range that still could not finish has a stand-tile problem - the place was
+        /// reached and no tile in it would take the mobile. A bot that ran out of ladder ten tiles
+        /// short never reached the place at all, and its problem is the road behind it, which is
+        /// why that case carries the last hop. Merged, they made 28 of 30 failures look like one
+        /// thing; they are not, and the two fixes have nothing in common.
+        /// </summary>
+        public string Cause;
+
+        /// <summary>The arrival range in force, so "within range" is reproducible from the file.</summary>
+        public int ArrivalRange;
+
         /// <summary>"Name (type) at x,y" for everything within two tiles of the GOAL.</summary>
         public readonly List<string> Near = new List<string>();
     }
@@ -122,7 +137,7 @@ namespace Server.Custom
         /// would not be worth it on a hot path.
         /// </summary>
         public static void Record(
-            Mobile mobile, Map map, Point3D goal, string hop, bool watched)
+            Mobile mobile, Map map, Point3D goal, string hop, bool watched, int arrivalRange)
         {
             if (mobile == null || map == null || map == Map.Internal)
             {
@@ -142,7 +157,8 @@ namespace Server.Custom
                 FromX = mobile.X,
                 FromY = mobile.Y,
                 FromZ = mobile.Z,
-                Watched = watched
+                Watched = watched,
+                ArrivalRange = arrivalRange
             };
 
             // Mobiles deliberately not counted: the question is whether the TILE can take anybody,
@@ -150,6 +166,17 @@ namespace Server.Custom
             failure.GoalUnstandable =
                 !map.CanFit(goal.X, goal.Y, goal.Z, 16, false, false, true)
                 && !map.CanFit(goal.X, goal.Y, map.GetAverageZ(goal.X, goal.Y), 16, false, false, true);
+
+            // Chebyshev, because that is the metric the walker's own arrival test uses; and at
+            // least one, because a range-0 arrival is still "reached" when the bot is on the tile
+            // beside it and the single last step is what failed.
+            int reach = Math.Max(Math.Abs(mobile.X - goal.X), Math.Abs(mobile.Y - goal.Y));
+
+            failure.Cause = failure.GoalUnstandable
+                ? "goal-unstandable"
+                : reach <= Math.Max(arrivalRange, 1)
+                    ? "arrived-no-stand-tile"
+                    : "short-of-goal";
 
             // Centred on the GOAL, which is the whole point. NavWalker's own DescribeBlocker falls
             // back to a list centred on the walker, and a walker that has been shuffling for two
@@ -268,6 +295,8 @@ namespace Server.Custom
                 builder.Append(",\"fromZ\":").Append(failure.FromZ);
                 builder.Append(",\"watched\":").Append(failure.Watched ? "true" : "false");
                 builder.Append(",\"goalUnstandable\":").Append(failure.GoalUnstandable ? "true" : "false");
+                builder.Append(",\"cause\":").Append(Json.Quote(failure.Cause));
+                builder.Append(",\"range\":").Append(failure.ArrivalRange);
                 builder.Append(",\"near\":[");
 
                 for (int n = 0; n < failure.Near.Count; n++)

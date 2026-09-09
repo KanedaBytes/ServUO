@@ -297,6 +297,52 @@ sake of a report. It re-walks `MovementPath.Directions` and matches the engine's
 — `CanMoveOver` lets a walker pass the dead, dead bonded pets and hidden staff, and the goal tile
 is exempt — so it does not invent obstructions the walker would not meet.
 
+## The pathfinder is greedy, and it has a budget
+
+Measured this session, and it explains more walk failures than the graph does.
+
+`MovementPath` (`Scripts/Services/Pathing/MovementPath.cs:39`) runs `FastAStarAlgorithm`, whose
+`Heuristic` (`FastAStarAlgorithm.cs`) returns **squared** distance — `(x*x) + (y*y) + (z*z)`, with
+x and y scaled by 11 — while `cost` accumulates linearly at roughly one per step. A twelve-tile gap
+scores about 34,800 against a cost of about 12, so the cost term is noise: **this is greedy
+best-first search, not A\***. It then stops after `MaxDepth = 300` node expansions
+(`FastAStarAlgorithm.cs:26`).
+
+The consequence is that reachability is **directional**, which geometry never is. Walking to
+`1840,2710` (the Trinsic alchemist arrival, ten Z above the road below it):
+
+| from | distance | result |
+| --- | --- | --- |
+| `1840,2719` | 9 | path found |
+| `1840,2720` | 10 | **no path** |
+| `1837,2722` | 12 | **no path** |
+| `1840,2710` → `1841,2723` | 13, reversed | path found |
+
+Same tiles, same box, same algorithm. The road out of there is 30 tiles long and detours ten tiles
+**east** before it can climb, so a greedy frontier aimed straight at the goal meets the wall and
+unwinds tile by tile until the budget runs out. From inside the constriction it spills into open
+ground immediately and finishes.
+
+Two things follow, and both are already acted on:
+
+- **Author uphill hops short.** An edge whose straight-line length is 12 can have a 30-tile walk.
+  `trinsic-alchemist-slope-1..4` exist for exactly this: they split `uo-wp-188-s3 -> uo-wp-188-s4`
+  into five hops of at most six tiles, each verified with the engine.
+- **`NavAudit` cannot see this**, because `CanWalk` asks the same pathfinder. An edge it calls
+  BLOCKED may be walkable in the other direction, and one it passes may be unreachable in practice
+  from where a bot actually stands. `NavWalkFailures`' `cause` field is the instrument for that,
+  not the audit.
+
+### The seam for a custom pathfinder
+
+`MovementPath.OverrideAlgorithm` (`MovementPath.cs:58`) is a public static `PathAlgorithm` setter,
+consulted at `MovementPath.cs:39` before `FastAStarAlgorithm.Instance` is chosen. Assigning it
+swaps the algorithm for **every** caller in the server, bots and stock NPCs alike — so it is a real
+seam and a loaded gun in the same object.
+
+**This is a note, not a plan. Nothing here assigns it**, and a session that wants to should price
+the blast radius first: every creature in the world paths through it.
+
 ## Adopting uo-offline's data
 
 `Data/Custom/reference/uo-offline-nav.trammel.json` holds 3952 waypoints and 4291 edges converted

@@ -171,6 +171,31 @@ path the population session adds is already covered.
 Places where this port deliberately does something else. **Each is a decision, not a gap** - if one
 looks like a mistake later, read the reason before "fixing" it back.
 
+### A haul goes to the nearest STAFFED bench, not to any bench of the trade
+
+Upstream's haul weighting is a pure type switch (`DestinationCatalog.cs:191-206`): `Bank => 2.0`,
+`Forge`/`VendorSmith` `=> 9.0` for a Miner, everything else `0.02`, then a `HomeCity` x2.5 bias and
+`BotDangerMap`. It asks neither **who is there** nor **how far it is**. Both questions are ours.
+
+**Staffing.** A load left at an empty forge is a load in a bank box with extra steps, so a station
+with a crafter of the trade clocked in at it weighs 20.0, and an empty one of the same trade drops
+to the bank's level once anybody is staffed anywhere. Upstream never met this: their spawner pins a
+smith at every forge, so every forge is staffed by construction. Ours has four forges and one
+probe-staffed smith.
+
+**Distance.** Staffing alone still left every staffed forge on the facet weighing the same, so the
+choice between them was dice. Measured: a miner that filled its pack at `brit-mine-north`
+(`1449,1521`) walked **255 tiles** to `britain-forge`, past `brit-forge` **36 tiles** away, and
+`Bots.Shift` read that as a hand-over that never happened - because the smith it was watching was
+the one that got walked past. The nearest staffed bench now takes 20.0 and a farther one 0.5.
+
+Distance is deliberately **not** a general term in the weight table, and the `HomeBias` comment in
+`BotDestinations` says so: a bot choosing where to spend its evening should not be dragged towards
+whatever is closest, or every town empties into its own bank. A haul is the exception, and the load
+is the reason - the ore is already in the pack, every tile is another chance for the recovery
+ladder to fire, and one bench of the trade is as good as another. A far bench falls to 0.5 rather
+than being excluded, so a lone distant forge is still reachable.
+
 ### The phase clock does not reset on every behaviour swap
 
 Upstream resets `PhaseStartedAt` inside the `Behavior` setter, so *any* swap anywhere restarts it.

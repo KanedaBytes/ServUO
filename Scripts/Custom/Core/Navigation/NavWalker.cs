@@ -688,13 +688,31 @@ namespace Server.Custom
                     // This log line IS the bug report: it names the edge in the data that is
                     // wrong. Read it with the caveats in NavAudit before believing the geometry
                     // is at fault - something standing in the way looks exactly like this.
+                    // NAMING THE CAUSE HERE, not only in the ledger, because the console line is
+                    // what somebody reads first and "check that edge" was wrong advice for most of
+                    // them: a bot that arrived and could not find a stand tile has nothing wrong
+                    // with its edge at all.
+                    int arrivalRange = ArrivalRangeFor(step);
+                    int reach = Math.Max(
+                        Math.Abs(_mobile.X - step.Point.X),
+                        Math.Abs(_mobile.Y - step.Point.Y));
+                    bool arrived = reach <= Math.Max(arrivalRange, 1);
+
                     Log.Warn(
-                        "{0} could not walk {1} after the whole recovery ladder{2}; it was moved. Check that edge.",
+                        "{0} could not walk {1} after the whole recovery ladder{2}; it was moved. {3}",
                         Who(),
                         DescribeHop(step),
                         _watchedCycles > 0
                             ? String.Format(" and {0} watched cycle(s)", _watchedCycles)
-                            : " with nobody watching");
+                            : " with nobody watching",
+                        arrived
+                            ? String.Format(
+                                "It was IN RANGE ({0} of {1}) and found no stand tile - the place, not the road.",
+                                reach,
+                                Math.Max(arrivalRange, 1))
+                            : String.Format(
+                                "It stopped {0} tile(s) SHORT of the goal - check that edge.",
+                                reach));
 
                     // BEFORE the teleport, because the teleport is what destroys the evidence: it
                     // moves the mobile onto the goal tile, so anything asked afterwards about who
@@ -708,7 +726,8 @@ namespace Server.Custom
                         _mobile.Map,
                         new Point3D(step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point)),
                         DescribeHop(step),
-                        _watchedCycles > 0);
+                        _watchedCycles > 0,
+                        ArrivalRangeFor(step));
 
                     // AND THE EDGE TAKES A STRIKE, so the next bot routes around it.
                     //
