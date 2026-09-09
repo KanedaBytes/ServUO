@@ -25,7 +25,7 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, BEHAVIOR_COLORS, setHopFlags,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, setUnstandableFlags, BEHAVIOR_COLORS, setHopFlags,
     hitTest, pick, entityAt, grabsOverEntity, nearSegment, geometryOf, applyGeometry, moveShape,
     resizeRect, moveNode, syncDerived, isStaleZ
 } from './shapes.js';
@@ -4247,6 +4247,7 @@ function wireAudit() {
 
             state.audit = await api.audit();
             setAuditFlags(state.audit.problems);
+            setUnstandableFlags(state.audit.unstandable);
 
             // Occupied findings are a pass. NavAudit.TryRun returns `blocked == 0`, so an audit
             // that found nothing but mobiles standing on edges has not failed, and must not paint

@@ -273,6 +273,23 @@ export function clearHopFlags() {
     hopFlags = new Map();
 }
 
+/**
+ * Arrivals the shard says nothing can stand on, keyed by tile.
+ *
+ * Module-level and derived, the same shape `audited` uses and for the reason its own comment
+ * gives: it changes rarely and is read on every frame.
+ *
+ * It has to come from the shard. The question is `Map.CanFit` with a mobile's height and a
+ * required surface, and the browser has no way to ask it - landz answers where the ground IS, not
+ * whether anything fits there. So [NavAudit computes it and writes it into nav-audit.json, and
+ * this is the reader.
+ */
+let unstandable = new Set();
+
+export function setUnstandableFlags(arrivals) {
+    unstandable = new Set((arrivals || []).map((a) => a.x + ',' + a.y));
+}
+
 export function setAuditFlags(problems) {
     audited = new Set(
         (problems || [])
@@ -523,9 +540,22 @@ export const STALE_Z = 20;
  * is still wrong and radar is where somebody is most likely to be looking at a list of them.
  */
 function drawZBadge(ctx, shape, sx, sy) {
-    if (!isStaleZ(shape)) {
+    // Two different faults, two glyphs, and a record can carry both.
+    //
+    //   z?  the marker is drawn somewhere the record is not      (measured here, from landz)
+    //   !   nothing can stand on this tile at any height          (measured by the shard)
+    //
+    // The second is the more serious of the two and reads that way: a stale Z is a record that
+    // needs correcting, an unstandable arrival is a record that can never work - the picker hands
+    // it out like any other and every bot sent to it is a walk that cannot finish.
+    const stale = isStaleZ(shape);
+    const solid = isUnstandable(shape);
+
+    if (!stale && !solid) {
         return;
     }
+
+    const glyph = solid ? (stale ? '!z?' : '!') : 'z?';
 
     ctx.save();
     ctx.font = 'bold 10px system-ui, sans-serif';
@@ -536,10 +566,24 @@ function drawZBadge(ctx, shape, sx, sy) {
     // with it would read as a different kind of record rather than as a flag on this one.
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
-    ctx.strokeText('z?', sx + 6, sy - 5);
-    ctx.fillStyle = '#ffd23f';
-    ctx.fillText('z?', sx + 6, sy - 5);
+    ctx.strokeText(glyph, sx + 6, sy - 5);
+    ctx.fillStyle = solid ? '#ff7a6b' : '#ffd23f';
+    ctx.fillText(glyph, sx + 6, sy - 5);
     ctx.restore();
+}
+
+/**
+ * Whether this record sits on a tile the shard reported as taking no mobile at any height.
+ *
+ * Arrivals only in practice, because that is all [NavAudit puts in the list - a destination's
+ * coordinate is a landmark and is often solid on purpose.
+ */
+export function isUnstandable(shape) {
+    if (!shape || shape.kind !== 'point' || !shape.points || !shape.points[0]) {
+        return false;
+    }
+
+    return unstandable.has(shape.points[0][0] + ',' + shape.points[0][1]);
 }
 
 /**

@@ -287,9 +287,31 @@ namespace Server.Custom
                 }
             }
 
+            // The record-placement half, which is about tiles rather than edges and is why it is
+            // counted separately. An unstandable arrival is not a blocked road - the road may be
+            // perfect - it is an authored stand tile nothing can stand on, handed out by a picker
+            // that does not check. Every bot sent to one is a walk that cannot finish.
+            NavResampleZ.Result placement = NavResampleZ.Scan();
+            int unstandable = 0;
+
+            foreach (NavResampleZ.Stranded stranded in placement.Cannot)
+            {
+                if (String.Equals(stranded.Kind, "arrival", StringComparison.Ordinal))
+                {
+                    unstandable++;
+                    lines.Add(String.Format("UNSTANDABLE arrival for '{0}' at {1},{2} - {3}",
+                        stranded.Id, stranded.X, stranded.Y, stranded));
+                }
+            }
+
+            foreach (NavResampleZ.Change change in placement.Changes)
+            {
+                lines.Add("STALE Z " + change);
+            }
+
             summary = String.Format(
                 "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
-                + "{4} adjacent (skipped){5}.",
+                + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z.",
                 checkedEdges,
                 blocked,
                 far,
@@ -297,7 +319,9 @@ namespace Server.Custom
                 adjacent,
                 islands.Count == 0
                     ? ""
-                    : String.Format(", {0} island(s) holding somewhere to go", islands.Count));
+                    : String.Format(", {0} island(s) holding somewhere to go", islands.Count),
+                unstandable,
+                placement.Changes.Count);
 
             report = lines;
             problems = found;
@@ -345,7 +369,58 @@ namespace Server.Custom
                 builder.Append("\n");
             }
 
-            builder.Append("  ]\n}\n");
+            builder.Append("  ],\n");
+
+            // ARRIVALS ON TILES NOTHING FITS ON, as their own array rather than as problems.
+            //
+            // Not a NavAuditProblem, deliberately: that record is edge-shaped - From, To, Distance
+            // - and an arrival has none of those. Squeezing one in would mean encoding a
+            // coordinate into a field named `to`, and every reader of nav-audit.json would then
+            // have to know which kinds mean what by their shape. A second array costs one key.
+            //
+            // The editor badges these on the marker, so the fix is by eye in the art view rather
+            // than from a list of coordinates. See NavResampleZ for how they are found.
+            NavResampleZ.Result resample = NavResampleZ.Scan();
+
+            builder.Append("  \"unstandable\": [\n");
+
+            var bad = new List<NavResampleZ.Stranded>();
+
+            foreach (NavResampleZ.Stranded stranded in resample.Cannot)
+            {
+                // Arrivals only. A destination's coordinate is the landmark - the forge tile, the
+                // bank counter - and being solid there is correct, so flagging one would send
+                // somebody to fix a forge for being a forge.
+                if (String.Equals(stranded.Kind, "arrival", StringComparison.Ordinal))
+                {
+                    bad.Add(stranded);
+                }
+            }
+
+            for (int i = 0; i < bad.Count; i++)
+            {
+                builder.Append("    {\"destination\":").Append(Json.Quote(bad[i].Id));
+                builder.Append(",\"x\":").Append(bad[i].X);
+                builder.Append(",\"y\":").Append(bad[i].Y);
+                builder.Append(",\"z\":").Append(bad[i].Z);
+                builder.Append(",\"landZ\":").Append(bad[i].LandZ);
+                builder.Append("}");
+
+                if (i < bad.Count - 1)
+                {
+                    builder.Append(",");
+                }
+
+                builder.Append("\n");
+            }
+
+            builder.Append("  ],\n");
+
+            // The stale-Z count, so [NavAudit answers "how many records are not where they say"
+            // without anybody having to run a second command. Zero after a resample, which makes
+            // it a regression guard rather than a status line.
+            builder.Append("  \"staleZ\": ").Append(resample.Changes.Count).Append("\n");
+            builder.Append("}\n");
 
             string error;
 
