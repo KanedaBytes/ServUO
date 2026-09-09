@@ -97,10 +97,15 @@ test('the browser module graph imports, app.js included', () => {
     // not knowing whether the editor loads.
     const shim = `
         const el = () => ({
-            style: {}, dataset: {}, children: [], value: '', textContent: '', innerHTML: '',
+            style: { setProperty() {}, getPropertyValue: () => '' },
+            dataset: {}, children: [], value: '', textContent: '', innerHTML: '', hidden: false,
+            offsetWidth: 260, offsetHeight: 24, clientWidth: 800, clientHeight: 600,
             classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-            appendChild() {}, removeChild() {}, remove() {}, addEventListener() {},
+            appendChild() {}, removeChild() {}, remove() {}, append() {}, addEventListener() {},
             removeEventListener() {}, setAttribute() {}, getAttribute() { return null; },
+            querySelector: () => el(), querySelectorAll: () => [], closest: () => null,
+            setPointerCapture() {}, releasePointerCapture() {},
+            get parentElement() { return el(); },
             getContext: () => ({ save() {}, restore() {}, clearRect() {}, fillRect() {} }),
             getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 })
         });
@@ -111,6 +116,7 @@ test('the browser module graph imports, app.js included', () => {
         };
         globalThis.window = {
             addEventListener() {}, removeEventListener() {}, devicePixelRatio: 1,
+            innerWidth: 1600, innerHeight: 900,
             location: { href: 'http://127.0.0.1:8081/', search: '' },
             matchMedia: () => ({ matches: false, addEventListener() {} }),
             localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -118,6 +124,10 @@ test('the browser module graph imports, app.js included', () => {
         };
         globalThis.localStorage = globalThis.window.localStorage;
         globalThis.requestAnimationFrame = () => 0;
+        globalThis.getComputedStyle = () => ({ getPropertyValue: () => '260px' });
+        // panels.js reopens a section when something inside it stops being hidden. The shim only
+        // has to let the constructor and observe() run; nothing here ever mutates.
+        globalThis.MutationObserver = class { observe() {} disconnect() {} };
         globalThis.fetch = async () => ({
             ok: true, status: 200, json: async () => ({}), text: async () => ''
         });

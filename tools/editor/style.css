@@ -333,8 +333,53 @@ button:disabled { opacity: .45; cursor: default; }
 #map.dragging { cursor: grabbing; }
 
 #sidebar h1 { font-size: 15px; margin: 0 0 12px; }
-#sidebar h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .6; margin: 16px 0 6px; }
-#sidebar section:first-of-type h2 { margin-top: 0; }
+
+/* ---- the collapsible sections ------------------------------------------ */
+/* Every section is a <details>. The summary keeps exactly the type the old
+   <h2> had, so collapsing changed the behaviour and not the look. The default
+   marker is replaced rather than merely hidden: `list-style: none` alone still
+   leaves the WebKit pseudo-element, which is why both rules are here. */
+
+details.grp { border-top: 1px solid var(--line); padding: 2px 0 6px; }
+details.grp:first-of-type { border-top: 0; }
+details.grp[open] { padding-bottom: 10px; }
+
+#sidebar summary {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    opacity: .6;
+    margin: 6px 0;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+#sidebar summary::-webkit-details-marker { display: none; }
+#sidebar summary::before { content: '\25b8'; margin-right: 6px; color: var(--muted); }
+#sidebar details[open] > summary::before { content: '\25be'; color: var(--accent); }
+#sidebar summary:hover { opacity: 1; }
+#sidebar summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* ---- the resize handle ------------------------------------------------- */
+/* Four pixels wide with a wider hit area from the negative margin, so it is
+   grabbable without being a visible bar down the middle of the window. */
+
+#sidebar-resize {
+    flex: 0 0 4px;
+    margin: 0 -2px;
+    z-index: 3;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 120ms;
+}
+#sidebar-resize:hover, #sidebar-resize.dragging { background: var(--accent); }
+
+/* A drag must not select text on the way past, and must not hand the pointer
+   to the canvas halfway through. The capture in panels.js does the second; this
+   does the first. */
+#sidebar-resize.dragging { cursor: col-resize; }
+body:has(#sidebar-resize.dragging) { user-select: none; }
+
 #sidebar .buttons { display: flex; gap: 6px; margin-bottom: 6px; }
 #sidebar .buttons button { flex: 1 1 0; }
 #filter { width: 100%; margin-top: 6px; box-sizing: border-box; }
@@ -383,7 +428,7 @@ button:disabled { opacity: .45; cursor: default; }
     padding-top: 6px;
 }
 
-#bot-detail .events {
+#bot-detail .events, #bot-card-body .events {
     list-style: none;
     margin: 6px 0 0;
     padding: 0;
@@ -393,9 +438,61 @@ button:disabled { opacity: .45; cursor: default; }
     opacity: .8;
 }
 
-#bot-detail .events li {
+#bot-detail .events li, #bot-card-body .events li {
     padding: 1px 0;
 }
+
+#bot-detail .name, #bot-card-body .name { font-weight: 600; }
+#bot-detail .kind, #bot-card-body .kind { color: var(--muted); margin-bottom: 4px; }
+
+/* ---- the bot card ------------------------------------------------------ */
+/* The selected bot, over the map. It exists because the Bots panel's detail
+   block can be a whole column's scroll away from the dot that was clicked -
+   and on the art view the dot is usually the only reason anybody is looking at
+   that part of the map at all.
+   Left/top are set by app.js and remembered; the defaults here are what a
+   first visit gets, clear of the toolbar (top-left) and the readout
+   (bottom-left). */
+
+#bot-card {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 4;
+    width: 260px;
+    max-height: calc(100% - 90px);
+    display: flex;
+    flex-direction: column;
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+
+/* Dragged by the header only. Dragging by the body would fight the event log's
+   own scrolling, which is the one thing in here you scroll. */
+#bot-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    cursor: move;
+    user-select: none;
+}
+
+#bot-card-title { flex: 1 1 auto; font-weight: 600; font-size: 12px; }
+
+#bot-card-close {
+    flex: 0 0 auto;
+    padding: 0 6px;
+    line-height: 1.4;
+    font-size: 14px;
+}
+
+#bot-card-body { padding: 8px; overflow-y: auto; }
+
+body:has(#bot-card.dragging) { user-select: none; }
 
 #health li { padding: 2px 0; cursor: help; }
 #health .ok { opacity: .5; }

@@ -41,6 +41,7 @@ import * as adopt from './adopt.js';
 import * as iso from './iso.js';
 import * as pickmap from './pickmap.js';
 import * as landz from './landz.js';
+import { initSections, initResize } from './panels.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -170,10 +171,20 @@ async function boot() {
         botDetail: $('bot-detail'),
         basemap: $('basemap'), basemapArt: $('basemap-art'),
         floorRow: $('floor-row'), floor: $('floor'), floorLabel: $('floor-label'),
-        artStatus: $('art-status')
+        artStatus: $('art-status'),
+        sidebar: $('sidebar'), sidebarResize: $('sidebar-resize'),
+        botCard: $('bot-card'), botCardHead: $('bot-card-head'),
+        botCardTitle: $('bot-card-title'), botCardBody: $('bot-card-body'),
+        botCardClose: $('bot-card-close')
     });
 
     initTools();
+
+    // Before anything else draws: a section restored closed must never flash open, and the column
+    // width has to be in place before the canvas is measured for the first time.
+    initSections(dom.sidebar);
+    initResize(dom.sidebarResize);
+    wireBotCard();
 
     try {
         const status = await api.status();
@@ -1092,8 +1103,138 @@ function selectBot(bot, centre) {
         view.centerOn(bot.x, bot.y);
     }
 
+    openBotCard(bot);
     renderBots();
     requestRender();
+}
+
+// --- the bot card -------------------------------------------------------------------------------
+//
+// The selected bot, floating over the map, with everything the Bots panel shows and the same
+// event log. It exists because the panel's detail block can be an entire column's scroll away
+// from the dot that was clicked - and on the art view that dot is usually the only reason
+// anybody is looking at that part of the map.
+//
+// It does NOT replace the panel selection. selectBot still calls renderBots, the row still
+// highlights and still scrolls itself into view, and clicking a row still opens the card. Two
+// views of one selection, never two selections.
+
+const CARD_KEY = 'gg-editor:bot-card';
+
+function wireBotCard() {
+    dom.botCardClose.addEventListener('click', closeBotCard);
+
+    let drag = null;
+
+    dom.botCardHead.addEventListener('pointerdown', (event) => {
+        // Not the close button: a drag started on it would swallow the click that closes.
+        if (event.button !== 0 || event.target === dom.botCardClose) {
+            return;
+        }
+
+        const box = dom.botCard.getBoundingClientRect();
+        const stage = dom.botCard.parentElement.getBoundingClientRect();
+
+        drag = {
+            id: event.pointerId,
+            dx: event.clientX - box.left,
+            dy: event.clientY - box.top,
+            stage
+        };
+
+        dom.botCardHead.setPointerCapture(event.pointerId);
+        dom.botCard.classList.add('dragging');
+        event.preventDefault();
+    });
+
+    dom.botCardHead.addEventListener('pointermove', (event) => {
+        if (!drag) {
+            return;
+        }
+
+        placeCard(
+            event.clientX - drag.stage.left - drag.dx,
+            event.clientY - drag.stage.top - drag.dy);
+    });
+
+    const end = (event) => {
+        if (!drag) {
+            return;
+        }
+
+        drag = null;
+        dom.botCard.classList.remove('dragging');
+
+        try {
+            dom.botCardHead.releasePointerCapture(event.pointerId);
+        } catch {
+            // Already released; the pointer left the window mid-drag.
+        }
+
+        try {
+            localStorage.setItem(CARD_KEY, JSON.stringify({
+                left: parseFloat(dom.botCard.style.left) || 0,
+                top: parseFloat(dom.botCard.style.top) || 0
+            }));
+        } catch {
+            // Storage unavailable. The card still moves; it just starts at the default next time.
+        }
+    };
+
+    dom.botCardHead.addEventListener('pointerup', end);
+    dom.botCardHead.addEventListener('pointercancel', end);
+}
+
+/**
+ * Puts the card at a stage-relative position, clamped so its header stays grabbable.
+ *
+ * Clamped on every placement rather than only on drag, because a remembered position is against
+ * a window that may since have been made smaller - and a card whose header is off the bottom of
+ * the stage cannot be moved or closed with the mouse at all.
+ */
+function placeCard(left, top) {
+    const stage = dom.botCard.parentElement;
+    const width = dom.botCard.offsetWidth;
+    const headHeight = dom.botCardHead.offsetHeight;
+
+    const x = Math.min(Math.max(0, left), Math.max(0, stage.clientWidth - width));
+    const y = Math.min(Math.max(0, top), Math.max(0, stage.clientHeight - headHeight));
+
+    dom.botCard.style.left = `${Math.round(x)}px`;
+    dom.botCard.style.top = `${Math.round(y)}px`;
+    dom.botCard.style.right = 'auto';
+    dom.botCard.style.bottom = 'auto';
+}
+
+function openBotCard(bot) {
+    const first = dom.botCard.hidden;
+
+    dom.botCard.hidden = false;
+    dom.botCardTitle.textContent = bot.name;
+    fillBotDetail(dom.botCardBody, bot);
+
+    if (!first) {
+        return;
+    }
+
+    // Only on the first open of a session: re-placing it every time would undo a drag the moment
+    // the next bot is picked.
+    let stored = null;
+
+    try {
+        stored = JSON.parse(localStorage.getItem(CARD_KEY) || 'null');
+    } catch {
+        stored = null;
+    }
+
+    if (stored && Number.isFinite(stored.left) && Number.isFinite(stored.top)) {
+        placeCard(stored.left, stored.top);
+    }
+}
+
+function closeBotCard() {
+    dom.botCard.hidden = true;
+    dom.botCardBody.innerHTML = '';
 }
 
 function renderBots() {
@@ -1164,10 +1305,30 @@ function renderBots() {
     renderBotDetail(bots.find((bot) => bot.serial === state.selectedBot) || null);
 }
 
-/** The selected bot's detail and its recent events. */
+/**
+ * The selected bot's detail and its recent events, in the panel and in the card.
+ *
+ * One function filling both, because they are the same answer to the same question and a second
+ * copy of it would be free to disagree - which is exactly the fault the Bots panel exists to
+ * prevent between a row and a dot.
+ */
 function renderBotDetail(bot) {
-    dom.botDetail.innerHTML = '';
     dom.botDetail.hidden = !bot;
+    fillBotDetail(dom.botDetail, bot);
+
+    // The card is closable independently: filling it does not reopen it. Only selectBot does.
+    if (!dom.botCard.hidden) {
+        dom.botCardTitle.textContent = bot ? bot.name : '';
+        fillBotDetail(dom.botCardBody, bot);
+
+        if (!bot) {
+            closeBotCard();
+        }
+    }
+}
+
+function fillBotDetail(host, bot) {
+    host.innerHTML = '';
 
     if (!bot) {
         return;
@@ -1188,7 +1349,7 @@ function renderBotDetail(bot) {
     status.className = 'muted';
     status.textContent = bot.status || '';
 
-    dom.botDetail.append(name, kind, status);
+    host.append(name, kind, status);
 
     // How it is moving, named rather than left as a number. The step delay is what
     // BaseAI.DoMoveImpl derives the run flag from, so 200 on foot IS running - but nobody reads
@@ -1202,7 +1363,7 @@ function renderBotDetail(bot) {
         pace.textContent = `${running ? 'running' : 'walking'}`
             + `${bot.mounted ? ', mounted' : ', on foot'} (${bot.stepMs}ms/step)`;
 
-        dom.botDetail.append(pace);
+        host.append(pace);
     }
 
     if (bot.dest) {
@@ -1210,7 +1371,7 @@ function renderBotDetail(bot) {
 
         dest.className = 'muted';
         dest.textContent = `heading for ${bot.dest}`;
-        dom.botDetail.append(dest);
+        host.append(dest);
     }
 
     const entry = (state.botLog && state.botLog.bots || [])
@@ -1238,7 +1399,7 @@ function renderBotDetail(bot) {
         }
     }
 
-    dom.botDetail.append(events);
+    host.append(events);
 }
 
 /**

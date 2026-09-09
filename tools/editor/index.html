@@ -14,6 +14,11 @@
   Everything hideable below uses the `hidden` attribute and has no display rule of its own. See
   the comment on [hidden] in style.css: an author display rule silently defeats the UA's hidden
   rule, and that once left a modal on screen with its hidden attribute correctly set.
+
+  EVERY SECTION IS A <details>, and its id is the localStorage key js/panels.js remembers it by.
+  The ids are therefore part of the interface: renaming one silently resets that section for
+  everybody who had already collapsed it. Taken from uo-offline's map.html, which does the same
+  thing for the same reason.
 -->
 </head>
 <body>
@@ -22,8 +27,8 @@
     <aside id="sidebar">
         <h1>Goblin Gang</h1>
 
-        <section>
-            <h2>View</h2>
+        <details class="grp" id="sec-view" open>
+            <summary>View</summary>
             <button id="go-britain" type="button">Britain</button>
 
             <!--
@@ -50,25 +55,25 @@
 
             <input id="filter" type="search" placeholder="Filter by name or id">
             <ul id="matches"></ul>
-        </section>
+        </details>
 
-        <section>
-            <h2>Create</h2>
+        <details class="grp" id="sec-create" open>
+            <summary>Create</summary>
             <div id="create-buttons"></div>
-        </section>
+        </details>
 
-        <section>
-            <h2>Layers</h2>
+        <details class="grp" id="sec-layers" open>
+            <summary>Layers</summary>
             <ul id="layers"></ul>
-        </section>
+        </details>
 
-        <section>
-            <h2>Selection</h2>
+        <details class="grp" id="sec-selection" open>
+            <summary>Selection</summary>
             <div id="properties"><p class="muted">Nothing selected.</p></div>
-        </section>
+        </details>
 
-        <section>
-            <h2>Shard</h2>
+        <details class="grp" id="sec-shard" open>
+            <summary>Shard</summary>
             <div class="buttons">
                 <button id="reload-nav" type="button">Reload nav</button>
                 <button id="reload-dailylife" type="button">Reload daily life</button>
@@ -82,23 +87,23 @@
                 <button id="resync-spawns" type="button" title="Delete and re-import every GG spawner">Resync all spawns</button>
             </div>
             <p id="live-status" class="muted">live: off</p>
-        </section>
+        </details>
 
-        <section>
-            <h2>Bots</h2>
+        <details class="grp" id="sec-bots" open>
+            <summary>Bots</summary>
             <input id="bot-filter" type="search" placeholder="name, class or behaviour"
                    autocomplete="off">
             <ul id="bots"></ul>
             <div id="bot-detail" hidden></div>
-        </section>
+        </details>
 
-        <section>
-            <h2>Health</h2>
+        <details class="grp" id="sec-health">
+            <summary>Health</summary>
             <ul id="health"></ul>
-        </section>
+        </details>
 
-        <section>
-            <h2>Keys</h2>
+        <details class="grp" id="sec-keys">
+            <summary>Keys</summary>
             <dl class="keys">
                 <dt>Click</dt><dd>select</dd>
                 <dt>Right-click</dt><dd>menu</dd>
@@ -113,20 +118,26 @@
                 <dt>Enter</dt><dd>finish a site, a road or a route</dd>
                 <dt>Esc</dt><dd>deselect, or cancel</dd>
             </dl>
-        </section>
+        </details>
 
         <!-- The two flows worth following step by step. They live in the README rather than
              here so there is one copy of them, and the README is the thing that gets updated
              when the tools change. -->
-        <section>
-            <h2>Help</h2>
+        <details class="grp" id="sec-help">
+            <summary>Help</summary>
             <ul class="help">
                 <li><a href="/README.md" target="_blank" rel="noopener">Authoring a work site</a></li>
                 <li><a href="/README.md" target="_blank" rel="noopener">Authoring a road</a></li>
                 <li><a href="/README.md" target="_blank" rel="noopener">Adopting a region</a></li>
             </ul>
-        </section>
+        </details>
     </aside>
+
+    <!-- The column's width, dragged. Its own element rather than a CSS resize on #sidebar,
+         because `resize: horizontal` needs `overflow: hidden` and the sidebar has to scroll.
+         Double-click resets it. -->
+    <div id="sidebar-resize" role="separator" aria-orientation="vertical"
+         title="Drag to resize the column. Double-click to reset."></div>
 
     <main id="stage">
         <canvas id="map"></canvas>
@@ -156,6 +167,22 @@
         </div>
 
         <ul id="context-menu" hidden></ul>
+
+        <!-- The selected bot, over the map. Same content as the Bots panel's detail block and
+             filled by the same function, so the two cannot disagree about what a bot is doing.
+             Dragged by its header; the position is remembered, the content is re-filled on every
+             entity poll. -->
+        <div id="bot-card" hidden>
+            <div id="bot-card-head">
+                <span id="bot-card-title"></span>
+                <!-- Not bound to Esc, deliberately. Esc already deselects and cancels a tool, and
+                     the card is open for most of the time anybody is watching bots - taking Esc
+                     for it would make the key mean the more useful thing only when the card
+                     happened to be shut. -->
+                <button id="bot-card-close" type="button" title="Close">&times;</button>
+            </div>
+            <div id="bot-card-body"></div>
+        </div>
 
         <!-- The active tool's instructions. Above the map, not in the readout strip in the
              bottom-left corner, where three steps of guidance sat in 12px text and were missed
