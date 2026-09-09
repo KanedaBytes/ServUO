@@ -25,6 +25,9 @@ namespace Server.Custom
         [JsonProperty("life")]
         public BotLifeConfig Life { get; set; }
 
+        [JsonProperty("population")]
+        public BotPopulationConfig Population { get; set; }
+
         [JsonConstructor]
         public BotStore()
         {
@@ -32,6 +35,7 @@ namespace Server.Custom
             Caps = new BotCapsConfig();
             Destinations = new BotDestinationConfig();
             Life = new BotLifeConfig();
+            Population = new BotPopulationConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -66,6 +70,13 @@ namespace Server.Custom
             }
 
             Life.Validate(errors);
+
+            if (Population == null)
+            {
+                Population = new BotPopulationConfig();
+            }
+
+            Population.Validate(errors);
         }
     }
 

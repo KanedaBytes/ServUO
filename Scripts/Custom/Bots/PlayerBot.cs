@@ -38,6 +38,7 @@
 // Deserialize, exactly as DailyLifePatron and DailyLifeTownsfolk do.
 
 using System;
+using System.Collections.Generic;
 
 using Server.Items;
 using Server.Mobiles;
@@ -119,6 +120,111 @@ namespace Server.Custom
         /// of this graph is tags, and this reads the ones the editor already writes.
         /// </summary>
         public string HomeTown { get; set; }
+
+        // ---- the spawner seed, and what a spawner is allowed to say ----
+        //
+        // Four properties rather than upstream's one string, because upstream packs the forced
+        // class into the behaviour name as "Crafter:Smith" (uo-offline PlayerBot.cs:614-623) and a
+        // colon cannot survive an <Objects2> entry - XmlSpawner splits on ":MX=" and friends and
+        // silently DISCARDS an entry containing one (XmlSpawner2.cs:12701-12704). So each part of
+        // the seed is its own property and the separator is the slash the spawn string already uses:
+        //
+        //     PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/trinsic/Seed/Crafter
+        //
+        // Every setter is order-independent. The work is deferred to a zero-delay timer, so it runs
+        // once, after the whole property string has been applied, however it was ordered - which
+        // matters because the class has to be re-derived BEFORE the brain attaches (a Crafter's
+        // OnAttached reads TradeClass to pick its profile) and nothing should depend on an author
+        // getting two fields the right way round.
+
+        /// <summary>Furniture or a session. See BotRole.</summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public BotRole Role { get; set; }
+
+        /// <summary>
+        /// Never re-rolled, never logged out, never counted toward the curve.
+        ///
+        /// Upstream keeps this as its own serialized bool alongside the spawner type test. Here it
+        /// is derived, so there is exactly one thing to be wrong: a bot is exempt because it is a
+        /// fixture, and it is a fixture because its Role says so.
+        /// </summary>
+        public bool LifecycleExempt
+        {
+            get { return Role == BotRole.Fixed; }
+        }
+
+        private string _seed;
+        private string _seedHome;
+        private string _seedStation;
+        private BotClass? _seedClass;
+        private bool _seedPending;
+
+        /// <summary>
+        /// The behaviour this bot should wake up in - a BotBehaviors name. Applied next tick.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string Seed
+        {
+            get { return _seed; }
+            set { _seed = value; ScheduleSeed(); }
+        }
+
+        /// <summary>
+        /// The nav destination a seeded Crafter or Gatherer works, when the spawner knows which.
+        ///
+        /// Without it CrafterBehavior.FindStation picks the nearest station by Chebyshev distance
+        /// (CrafterBehavior.cs:344-364), which is usually right - a spawner sits on its own
+        /// station's arrival point - but "usually right" is not a thing a probe can assert. Naming
+        /// it makes the recipe deterministic: the smith at trinsic-forge is at trinsic-forge
+        /// because it was told to be, and Bots.Recipe can say so.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string SeedStation
+        {
+            get { return _seedStation; }
+            set { _seedStation = value; ScheduleSeed(); }
+        }
+
+        /// <summary>
+        /// Force the class, replacing whatever the constructor rolled - skills, stats, title and
+        /// outfit with it. This is what makes a forge spawner produce a Smith rather than whoever
+        /// turned up, and it is upstream's ReinitializeAsClass by another name.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public BotClass SeedClass
+        {
+            get { return _seedClass ?? Class; }
+            set { _seedClass = value; ScheduleSeed(); }
+        }
+
+        /// <summary>
+        /// Force the home town, replacing the birth roll.
+        ///
+        /// A NAMED DEVIATION from uo-offline, and the population layer's own idea. Upstream leaves
+        /// HomeCity exactly as the constructor rolled it even for a pinned crafter - its
+        /// ReinitializeAsClass resets class, gear and skills and deliberately does not touch home
+        /// (uo-offline PlayerBot.cs:447-457) - so a Crafter:Smith pinned at a Vesper forge may be a
+        /// Yew resident who will never once go home. The generator sets this on every FIXED record
+        /// so the smith at trinsic-forge is a Trinsic resident, and leaves it alone on a lifecycle
+        /// seed, because a traveller genuinely should be from somewhere else.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string SeedHome
+        {
+            get { return _seedHome ?? HomeTown; }
+            set { _seedHome = value; ScheduleSeed(); }
+        }
+
+        // ---- the session, when one is running ----
+
+        /// <summary>
+        /// When this bot's play session ends and it says goodbye, or MinValue before BotSession has
+        /// stamped it. Transient, like everything else about a bot.
+        /// </summary>
+        public DateTime SessionEndsAt { get; set; }
+
+        /// <summary>Between "gtg" and vanishing. Nothing may draft a bot in this state.</summary>
+        public bool LoggingOut { get; set; }
 
         /// <summary>
         /// The phase expired while the behaviour was refusing to be interrupted; roll as soon as
@@ -497,6 +603,187 @@ namespace Server.Custom
             // is here for the spawner path that the population session adds, so a bot placed by a
             // spawner rather than by [SpawnBot is on the live map too.
             LiveRegistry.Register(this);
+
+            // UNTETHER, AGAIN. The constructor cleared Home and RangeHome (see the note there) so
+            // that BaseAI.DoActionWander cannot drag a bot back to wherever it was created every
+            // time it pauses. Every spawner on this engine then sets them right back, after the
+            // constructor and before this call: XmlSpawner at XmlSpawner2.cs:9317-9326 and stock
+            // Spawner at Scripts/Services/Spawner/Spawner.cs:498-508 both assign RangeHome from
+            // their home range and Home from the spawner's tile.
+            //
+            // So the whole population would be on a leash the length of its spawner's <Range>, and
+            // the symptom would be bots that walk out of town and turn round. This is the only
+            // place that can undo it, because it is the only hook that runs after both.
+            Home = Point3D.Zero;
+            RangeHome = 0;
+        }
+
+        // ---- applying a spawner's seed ----
+
+        /// <summary>
+        /// Queue the seed for the next tick, once, however many setters were written.
+        ///
+        /// Zero delay is not a hedge: XmlSpawner applies the whole property string inside one call
+        /// (BaseXmlSpawner.ApplyObjectStringProperties), so anything scheduled from a setter runs
+        /// after every setter in the string has run. That is what makes the fields order-free.
+        /// </summary>
+        private void ScheduleSeed()
+        {
+            if (_seedPending || Deleted)
+            {
+                return;
+            }
+
+            _seedPending = true;
+            Timer.DelayCall(TimeSpan.Zero, ApplySeed);
+        }
+
+        private void ApplySeed()
+        {
+            _seedPending = false;
+
+            if (Deleted)
+            {
+                return;
+            }
+
+            // Class first, always. A Crafter's OnAttached reads TradeClass to choose its profile
+            // and its chat categories, so attaching the brain to a bot that is about to become a
+            // Smith would pick the wrong ones and never look again.
+            if (_seedClass.HasValue && _seedClass.Value != Class)
+            {
+                ReinitializeAsClass(_seedClass.Value);
+            }
+
+            if (!String.IsNullOrEmpty(_seedHome))
+            {
+                string town;
+
+                if (BotHomeTowns.TryParse(_seedHome, out town))
+                {
+                    HomeTown = town;
+                }
+                else
+                {
+                    Log.Warn(
+                        "{0} was seeded home town '{1}', which is not in bots.json destinations.towns; keeping {2}.",
+                        Name,
+                        _seedHome,
+                        HomeTown ?? "none");
+                }
+            }
+
+            if (String.IsNullOrEmpty(_seed))
+            {
+                return;
+            }
+
+            if (!BotBehaviors.IsKnown(_seed))
+            {
+                // Loudly, and then Idle - which is what BotBehaviors.Create would give anyway.
+                // A silent fallback here would look exactly like a spawner that works.
+                Log.Warn("{0} was seeded behaviour '{1}', which no behaviour answers to.", Name, _seed);
+            }
+
+            PlayerBotBehavior brain = BotBehaviors.Create(_seed);
+
+            // A SEED IS A TRANSITION, and owes what a hand switch owes - the window, the station
+            // and the clock. BotCommands.TryHandSwitch is the same three obligations written out,
+            // and the comment there records what each one cost to discover.
+            TimeSpan? window = BotBehaviors.VisitWindowFor(brain);
+
+            // ...except that a FIXTURE gets no window, and that is the whole difference between
+            // the two roles. Upstream stamps one on a spawned Shopper precisely so it breaks off
+            // and travels on, and skips the fixed-role ones for the same reason (uo-offline
+            // PlayerBot.cs:647-661). Here it would be worse than pointless: a window that lapses
+            // hands the brain back to Traveler (PlayerBotBehavior.CheckVisitExpired), so a smith
+            // stamped with one walks away from its forge three hours into the shift.
+            if (window != null && Role != BotRole.Fixed)
+            {
+                brain.VisitExpiresAt = CustomTime.Now + window.Value;
+            }
+
+            if (!String.IsNullOrEmpty(_seedStation))
+            {
+                var crafter = brain as CrafterBehavior;
+
+                if (crafter != null)
+                {
+                    crafter.DestinationId = _seedStation;
+                }
+
+                var gatherer = brain as GathererBehavior;
+
+                if (gatherer != null)
+                {
+                    gatherer.DestinationId = _seedStation;
+                }
+            }
+
+            SetBehavior(brain, "spawner seed");
+
+            // The phase clock starts when the brain does. Without this a seeded bot carries the
+            // constructor's clock, is already part-way through its first phase, and is rolled off
+            // it early - the same fault the hand switch had, and it hid for three sessions.
+            PhaseStartedAt = CustomTime.Now;
+            TransitionPending = false;
+        }
+
+        /// <summary>
+        /// Become another class outright: skills, stats, title, gear and pack.
+        ///
+        /// Upstream's ReinitializeAsClass (uo-offline PlayerBot.cs:447-457), with one addition and
+        /// one deliberate omission. The addition is Title, which upstream leaves reading as the old
+        /// class. The omission is HomeTown, which upstream also leaves alone - but here that is a
+        /// decision taken one level up, in SeedHome, rather than an oversight: re-deriving a class
+        /// says nothing about where the bot lives, and the generator is the thing that knows.
+        /// </summary>
+        public void ReinitializeAsClass(BotClass cls)
+        {
+            Class = cls;
+
+            StripGearAndPack();
+
+            // ApplySkills zeroes every skill before laying down the template, so the old class
+            // cannot bleed through - see the note on that method.
+            ApplySkills();
+            ApplyStats();
+
+            Title = BuildTitle();
+
+            EquipmentTable.RollOutfit(this);
+        }
+
+        /// <summary>
+        /// Delete the constructor's outfit and pack contents, keeping the backpack itself.
+        ///
+        /// The bank layer is left alone: BaseCreature puts nothing there, but a bot that has been
+        /// to a bank might have, and losing it to a re-derive would be a silent theft.
+        /// </summary>
+        private void StripGearAndPack()
+        {
+            var equipped = new List<Item>();
+
+            foreach (Item item in Items)
+            {
+                if (item != Backpack && item.Layer != Layer.Bank)
+                {
+                    equipped.Add(item);
+                }
+            }
+
+            foreach (Item item in equipped)
+            {
+                item.Delete();
+            }
+
+            if (Backpack != null)
+            {
+                foreach (Item item in new List<Item>(Backpack.Items))
+                {
+                    item.Delete();
+                }
+            }
         }
 
         /// <summary>

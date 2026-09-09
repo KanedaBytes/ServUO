@@ -145,5 +145,20 @@
       "mine": 0.95,
       "lumber": 0.95
     }
+  },
+  "population": {
+    "comment": "How many bots the world holds, and how the day moves that number. target is the count at the curve peak; the shipped 60 is a starting point chosen against this graph rather than inherited - uo-offline ships 1600, and Bots.Recipe reports the tick cost beside the live count so the next value is arithmetic. perTown is DELIBERATELY EMPTY: with no entry a town gets its share of the graph destinations, which is the same rule BotHomeTowns uses to decide where a bot is born, so a bot is born where the population is and one number cannot drift from the other. curve is absent for the same kind of reason - with no value it is uo-offline HourCurve, dead at 05:00 and packed at 19:00, and a shard that wants a different day writes 24 fractions here. roles names the behaviour each recipe slot seeds; a value naming no behaviour fails the load rather than falling back to Idle, because a population that stands still looks exactly like a broken walker. FIXED-ROLE bots - the bank crowds and the staffed benches - are outside all of this: they never roll, never log out, and never count toward the target, so a forge has its smith at 05:00 exactly as it does at 19:00.",
+    "target": 60,
+    "perTown": {},
+    "perSpawner": 6,
+    "spawnerRange": 12,
+    "respawnMinutes": [5, 15],
+    "sessionMinutes": [60, 240],
+    "roles": {
+      "bank": "BankSitter",
+      "shop": "Shopper",
+      "station": "Crafter",
+      "roam": "Traveler"
+    }
   }
 }

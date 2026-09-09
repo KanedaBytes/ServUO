@@ -96,7 +96,15 @@ namespace Server.Custom
         /// </summary>
         protected bool CheckVisitExpired(PlayerBot bot)
         {
-            if (VisitExpiresAt == null || CustomTime.Now < VisitExpiresAt.Value)
+            // A FIXTURE'S VISIT NEVER LAPSES, because a fixture is not visiting.
+            //
+            // BotLifecycle already refuses to roll an exempt bot, but the roller is not the only
+            // thing that can take a brain away: a behaviour that stamps its own window - Gatherer
+            // does, at GathererBehavior.cs:217-219 - would hand a fixture back to Traveler on its
+            // own clock and walk the bank crowd out of the bank. The invariant belongs here, where
+            // every behaviour asks the question, rather than in each behaviour that might set one.
+            if (VisitExpiresAt == null || bot == null || bot.LifecycleExempt
+                || CustomTime.Now < VisitExpiresAt.Value)
             {
                 return false;
             }

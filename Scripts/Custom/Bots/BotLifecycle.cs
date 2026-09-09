@@ -209,6 +209,17 @@ namespace Server.Custom
                     continue;
                 }
 
+                // A fixture never re-rolls. It is the crowd at the bank and the smith at the
+                // bench, and the whole point of it is that it is still doing that tomorrow -
+                // upstream's LifecycleExempt (uo-offline BotLifecycleManager.cs:90), reached here
+                // through BotRole rather than through a spawner's type. Also skipped while a bot
+                // is on its way out: rolling a new brain onto somebody who has already said
+                // goodbye buys nothing and costs a confusing three seconds.
+                if (bot.LifecycleExempt || bot.LoggingOut)
+                {
+                    continue;
+                }
+
                 // First sight. Give it a personality and let it serve a full first phase rather
                 // than transitioning the instant it was born.
                 if (!bot.Personality.IsAssigned)
