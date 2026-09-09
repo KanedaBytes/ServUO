@@ -328,6 +328,10 @@ Two things follow, and both are already acted on:
 - **Author uphill hops short.** An edge whose straight-line length is 12 can have a 30-tile walk.
   `trinsic-alchemist-slope-1..4` exist for exactly this: they split `uo-wp-188-s3 -> uo-wp-188-s4`
   into five hops of at most six tiles, each verified with the engine.
+- **`NavWalker.MaxApproachDistance = 8`** is the named port of uo-offline's approach cap (theirs is
+  36, sized to the 38-tile box; ours is sized to the 300-expansion budget, which binds first). Past
+  it the walker gives up aiming at the goal and walks back to the waypoint behind it, once per hop.
+  The ladder's own nudges are what push a bot out of range, so without this the rescue is the cause.
 - **`NavAudit` cannot see this**, because `CanWalk` asks the same pathfinder. An edge it calls
   BLOCKED may be walkable in the other direction, and one it passes may be unreachable in practice
   from where a bot actually stands. `NavWalkFailures`' `cause` field is the instrument for that,

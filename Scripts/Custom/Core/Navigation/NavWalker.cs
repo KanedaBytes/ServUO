@@ -161,6 +161,32 @@ namespace Server.Custom
         /// </summary>
         private bool _shifted;
 
+        /// <summary>
+        /// A NAMED PORT of uo-offline's MaxApproachDistance (TravelerBehavior's approach cap,
+        /// lowered from 50 to 36 there so a leg stays inside FastAStar's 38-tile box).
+        ///
+        /// EIGHT, not 36, and the number is measured rather than copied. Their cap is sized to the
+        /// pathfinder's BOX; ours is sized to its BUDGET, which is the constraint that actually
+        /// binds here. FastAStar is greedy best-first with a squared heuristic against a linear
+        /// cost and stops after 300 expansions, so an uphill approach into a constriction fails
+        /// well inside the box: walking to the Trinsic alchemist arrival, 9 tiles found a path and
+        /// 10 did not, while the same pair reversed worked at 13. See the Navigation README.
+        ///
+        /// What it is for: the recovery ladder's own nudges walk a bot AWAY from its goal, and past
+        /// this range the goal stops being pathable at all - so the ladder that exists to rescue
+        /// the hop is what guarantees it fails. Measured over one 30-minute window, every terminal
+        /// failure at 9 tiles or more but one had an unreachable goal, 12 of 30 in total.
+        /// </summary>
+        public const int MaxApproachDistance = 8;
+
+        /// <summary>Where to walk back to before re-aiming at the goal, when one is set.</summary>
+        private Point3D _approach;
+
+        private bool _approaching;
+
+        /// <summary>Once per hop, so a bot cannot bounce between the waypoint and the goal.</summary>
+        private bool _reAnchored;
+
         public NavWalker(BaseCreature mobile)
         {
             _mobile = mobile;
@@ -599,6 +625,17 @@ namespace Server.Custom
             // This has to happen before the rung advances, or the first attempt has already cost a
             // Repath and twenty seconds.
             if (TryShiftWithinArrival(step))
+            {
+                return;
+            }
+
+            // AND A BOT THAT HAS DRIFTED OUT OF APPROACH RANGE IS NOT STUCK, IT IS LOST.
+            //
+            // Same reasoning as the shift above and for the same reason it goes first: repathing,
+            // sidestepping and door-opening are all answers to "something is in the way", and
+            // nothing is in the way - the goal has simply stopped being reachable from here, so
+            // each of those costs twenty seconds to learn nothing.
+            if (TryReAnchor(step))
             {
                 return;
             }
@@ -1222,8 +1259,92 @@ namespace Server.Custom
             return DefaultArrivalRange;
         }
 
+        /// <summary>
+        /// Walk back to the waypoint this hop started from, then try the goal again.
+        ///
+        /// Only once per hop, and only when there IS a waypoint behind us - a route that began at
+        /// the bot's own feet has nothing to go back to, and PreviousWaypointId returns null for
+        /// exactly that case. Measured: in 7 of the 12 far failures in one window, the previous
+        /// waypoint was reachable from where the bot stood while the goal was not, so this is a
+        /// real recovery rather than a hopeful one.
+        /// </summary>
+        private bool TryReAnchor(NavStep step)
+        {
+            if (_reAnchored || step == null || _mobile == null)
+            {
+                return false;
+            }
+
+            int distance = Math.Max(
+                Math.Abs(_mobile.X - step.Point.X),
+                Math.Abs(_mobile.Y - step.Point.Y));
+
+            if (distance <= MaxApproachDistance)
+            {
+                return false;
+            }
+
+            NavWaypoint previous = Nav.Waypoint(PreviousWaypointId());
+
+            if (previous == null)
+            {
+                return false;
+            }
+
+            int back = Math.Max(
+                Math.Abs(_mobile.X - previous.Location.X),
+                Math.Abs(_mobile.Y - previous.Location.Y));
+
+            // Going back has to be an improvement. If we are already on the waypoint, or it is no
+            // closer than the goal, walking to it teaches nothing and burns the one attempt.
+            if (back <= 2 || back >= distance)
+            {
+                return false;
+            }
+
+            _reAnchored = true;
+            _approaching = true;
+            _approach = previous.Location;
+            _goal = null;
+
+            LogRung(step, String.Format(
+                "{0} tiles from the goal, past the {1}-tile approach cap - walking back to '{2}'",
+                distance,
+                MaxApproachDistance,
+                previous.Id));
+
+            ResetHopDeadline();
+
+            return true;
+        }
+
         private void EnsureGoal(NavStep step)
         {
+            // AIM AT THE WAYPOINT BEHIND US FIRST, when the ladder has walked us out of range of
+            // the one ahead. Checked before the normal path so it cannot be overwritten: the goal
+            // does not match step.Point while re-anchoring, which is exactly the condition the
+            // test below would use to rebuild it.
+            if (_approaching)
+            {
+                int back = Math.Max(
+                    Math.Abs(_mobile.X - _approach.X),
+                    Math.Abs(_mobile.Y - _approach.Y));
+
+                if (back > 2)
+                {
+                    if (_goal == null || _goal.X != _approach.X || _goal.Y != _approach.Y)
+                    {
+                        _goal = new NavGoal(_approach.X, _approach.Y, _approach.Z);
+                    }
+
+                    return;
+                }
+
+                // Back on the road. Fall through and aim at the real goal again.
+                _approaching = false;
+                _goal = null;
+            }
+
             if (_goal != null && _goal.X == step.Point.X && _goal.Y == step.Point.Y)
             {
                 return;
@@ -1522,6 +1643,8 @@ namespace Server.Custom
             // Per HOP, so a route with several arrivals gets one shift each rather than one in
             // total - and so a fresh walk to the same crowded bank is not born already spent.
             _shifted = false;
+            _reAnchored = false;
+            _approaching = false;
 
             ResetHopDeadline();
         }
