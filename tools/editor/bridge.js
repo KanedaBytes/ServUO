@@ -44,7 +44,8 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 // livemap-on is NOT here: it parses its whole body, and a nonce would be an argument it did not
 // ask for.
 const NONCED = new Set([
-    'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload'
+    'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
+    'botpop-audit', 'botpop-gen'
 ]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a

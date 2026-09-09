@@ -338,6 +338,24 @@ namespace Server.Custom
 
         // ---- construction ----
 
+        /// <summary>
+        /// [Constructable] IS LOAD-BEARING, and its absence was a silent failure.
+        ///
+        /// XmlSpawner will not construct a type whose constructor is not marked with it:
+        /// CreateObject defaults requireconstructable to true (XmlSpawner2.cs:11263-11265) and
+        /// IsConstructable is a bare attribute test (:2283-2286). A spawner pointed at a type
+        /// without it sets status_str to "invalid type specification" and RETURNS TRUE - so the
+        /// spawner reports success, its timer keeps rescheduling, and its count sits at zero for
+        /// ever with nothing in any log.
+        ///
+        /// Verified by reproduction: thirty-seven bot spawners imported cleanly, ran for eight
+        /// minutes, and produced no bots at all.
+        ///
+        /// Note this is NOT the rule VocabularySnapshot filters on - its comment says
+        /// [Constructable] "gates [Add, not the spawner", which is true of the stock Spawner and
+        /// false of XmlSpawner2. See the tech-debt note in SHARD.md.
+        /// </summary>
+        [Constructable]
         public PlayerBot()
             : this(BotClassHelper.RollRandom(), BotSkillTierHelper.RollRandom())
         {

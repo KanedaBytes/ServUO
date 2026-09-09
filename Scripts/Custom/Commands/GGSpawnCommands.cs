@@ -157,6 +157,11 @@ namespace Server.Custom
             // their shops until dawn, because the only thing that ever moves them is a phase
             // transition - and they were not there for the last one.
             DailyLifeCommands.Reconcile();
+            // And fill the bot spawners now rather than on their own five-to-fifteen minute
+            // timers. Same argument BotStartupManager makes upstream, in the same words: a
+            // reimport that leaves the towns empty for a quarter of an hour reads as a
+            // reimport that did not work. RespawnAll only touches GG_BotPop_ spawners.
+            BotPopulation.RespawnAll();
 
             // Same reason the per-file path writes one: without it the editor's view of the world
             // is up to a minute stale immediately after the one command that changed it most.
@@ -251,6 +256,11 @@ namespace Server.Custom
             // Same reason [GG_Reimport does it: the spawners are new, so their NPCs know nothing
             // about the phase the town is currently in.
             DailyLifeCommands.Reconcile();
+            // And fill the bot spawners now rather than on their own five-to-fifteen minute
+            // timers. Same argument BotStartupManager makes upstream, in the same words: a
+            // reimport that leaves the towns empty for a quarter of an hour reads as a
+            // reimport that did not work. RespawnAll only touches GG_BotPop_ spawners.
+            BotPopulation.RespawnAll();
 
             SpawnerSnapshot.Write();
 

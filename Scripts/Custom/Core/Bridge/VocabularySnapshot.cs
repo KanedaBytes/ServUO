@@ -117,13 +117,22 @@ namespace Server.Custom
         /// Every type a spawner could name, split into the one bucket reflection can decide.
         ///
         /// The filter is exactly what XmlSpawner needs to spawn one: a concrete BaseCreature
-        /// subclass with a public parameterless constructor. XmlSpawner2.cs:11346 calls
-        /// Activator.CreateInstance(type) with no arguments for a bare type name, so a type
-        /// without that constructor is one the editor would let you author and the shard would
-        /// then refuse - which is the whole class of mistake this list exists to prevent.
+        /// subclass with a public parameterless constructor MARKED [Constructable].
         ///
-        /// [Constructable] is deliberately NOT the filter. It gates the [Add command, not the
-        /// spawner, and requiring it here would hide types that spawn perfectly well.
+        /// That attribute used to be excluded here, with a comment saying it "gates the [Add
+        /// command, not the spawner". That is true of ServUO's stock Spawner and FALSE of
+        /// XmlSpawner2, which is the only spawner this shard uses:
+        /// CreateObject(type, itemtypestring) defaults requireconstructable to true
+        /// (XmlSpawner2.cs:11263-11265) and IsConstructable is a bare attribute test (:2283-2286).
+        ///
+        /// The failure it produces is silent in both directions. A spawner pointed at an
+        /// unmarked type sets status_str to "invalid type specification" and RETURNS TRUE, so it
+        /// reports success, reschedules its timer, and sits at a count of zero for ever with
+        /// nothing in any log - and the editor's dropdown was the thing that offered the type.
+        /// Found by reproduction: thirty-seven bot spawners imported cleanly, ran for eight
+        /// minutes and produced no bots, because PlayerBot's constructor was unmarked.
+        ///
+        /// So the list now offers what the spawner can actually call, which was always the point.
         /// </summary>
         private static void CollectTypes(out List<string> creatures, out List<string> vendors)
         {
@@ -166,7 +175,10 @@ namespace Server.Custom
                         continue;
                     }
 
-                    if (type.GetConstructor(Type.EmptyTypes) == null)
+                    ConstructorInfo constructor = type.GetConstructor(Type.EmptyTypes);
+
+                    if (constructor == null
+                        || !constructor.IsDefined(typeof(ConstructableAttribute), false))
                     {
                         continue;
                     }

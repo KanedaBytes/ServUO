@@ -987,8 +987,14 @@ namespace Server.Custom
 
             if (done > 0)
             {
-                Log.Info("Filled {0} bot spawner(s) at startup.", done);
+                Log.Info("Filled {0} bot spawner(s).", done);
             }
+
+            // Re-arm the probe's settling window. Every fill is a fresh population that has to
+            // walk to its benches before Bots.Recipe can fairly ask whether it is at them - and a
+            // reimport mid-session is exactly the moment it would otherwise assert too early and
+            // report eight empty stations that are simply still on their way.
+            BotPopulationProbe.NoteFilled();
 
             return done;
         }

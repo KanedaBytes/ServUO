@@ -204,7 +204,7 @@ namespace Server.Custom
 
                 if (!Staffed(slot.Station))
                 {
-                    unstaffed.Add(slot.Station);
+                    unstaffed.Add(slot.Station + WhereItWent(slot));
                 }
             }
 
@@ -304,6 +304,58 @@ namespace Server.Custom
             }
 
             return HealthResult.Ok(detail.ToString());
+        }
+
+        /// <summary>
+        /// Where the crafter that should be here went instead, when it is findable.
+        ///
+        /// "Nobody clocked in" on its own is a puzzle; nine times in ten the answer is that the
+        /// bot IS working, at the other bench of its trade in the same town, because
+        /// CrafterBehavior.TakeUpStation moves to one when reach at the authored station holds no
+        /// standable tile at all. That is a documented rule and not a fault - but it means the
+        /// FAULT is in the arrival point, not in the bot, and the message should say so rather
+        /// than leaving somebody to work it out from the live map.
+        ///
+        /// Found on this check's first real run: trinsic-shop-tailor-2 sits at Z 35 with its only
+        /// adopted arrival at Z 15, twenty below the shop floor, so its tailor walks to
+        /// trinsic-shop-tailor and works there instead.
+        /// </summary>
+        private static string WhereItWent(BotSlot slot)
+        {
+            if (slot.Class == null)
+            {
+                return String.Empty;
+            }
+
+            var elsewhere = new List<string>();
+
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (!crafter.IsAtStation || String.IsNullOrEmpty(crafter.DestinationId)
+                    || Insensitive.Equals(crafter.DestinationId, slot.Station))
+                {
+                    continue;
+                }
+
+                NavDestination where = Nav.Destination(crafter.DestinationId);
+
+                // Same trade, same town: that is the relocation rule's own scope, so anything
+                // outside it is a different bot doing a different job and says nothing here.
+                if (where != null && where.HasTag(slot.Town)
+                    && Insensitive.Equals(where.Type, Nav.Destination(slot.Station) == null
+                        ? where.Type
+                        : Nav.Destination(slot.Station).Type)
+                    && !elsewhere.Contains(crafter.DestinationId))
+                {
+                    elsewhere.Add(crafter.DestinationId);
+                }
+            }
+
+            return elsewhere.Count == 0
+                ? " (nobody of that trade is working in the town at all)"
+                : " (its crafter is at " + String.Join(" / ", elsewhere.ToArray())
+                    + " instead - check the arrival points, a station with no standable tile in "
+                    + "reach hands its crafter to the next one of its kind)";
         }
 
         /// <summary>

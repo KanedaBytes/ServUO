@@ -265,6 +265,57 @@ namespace Server.Custom
                     message = summary;
                     return true;
 
+                // The population recipe, read-only. Answers what each town would get and whether
+                // GG_BotPop.xml still matches - a recipe is derived from the graph and the file is
+                // not, so authoring a destination changes the recipe's mind while the file goes on
+                // saying the old thing.
+                case "botpop-audit":
+                {
+                    Map facet = BotPopulation.Facet;
+                    BotRecipe recipe = BotPopulation.Build(facet);
+                    var report = new List<string>(BotPopulation.Describe(facet, recipe));
+                    List<string> differences = BotPopulation.DiffAgainstFile(facet, recipe);
+
+                    foreach (string line in differences)
+                    {
+                        report.Add("regen: " + line);
+                    }
+
+                    // Never a failure, for the same reason nav-audit is not: an audit that finds
+                    // something has done its job.
+                    warnings = report;
+                    message = String.Format(
+                        "{0} spawner(s) for {1} bot(s); {2}",
+                        recipe.Slots.Count,
+                        recipe.TotalBots,
+                        differences.Count == 0 ? "the file matches" : differences.Count + " difference(s)");
+                    return true;
+                }
+
+                // Write the recipe out. Deliberately does NOT reimport: gg-reimport deletes every
+                // GG_ spawner in the world along with its spawned mobiles, and the editor already
+                // puts that behind a confirmation. Two requests, two decisions.
+                case "botpop-gen":
+                {
+                    Map facet = BotPopulation.Facet;
+                    BotRecipe recipe = BotPopulation.Build(facet);
+
+                    if (!BotPopulation.Write(facet, recipe, out error))
+                    {
+                        message = error;
+                        return false;
+                    }
+
+                    warnings = recipe.Notes;
+                    message = String.Format(
+                        "wrote {0}: {1} spawner(s) for {2} bot(s), {3} fixed. Now gg-reimport.",
+                        BotPopulation.GeneratedPath(facet),
+                        recipe.Slots.Count,
+                        recipe.TotalBots,
+                        recipe.FixedBots);
+                    return true;
+                }
+
                 case "livemap-on":
                     return StartLiveMap(body, out message);
 
