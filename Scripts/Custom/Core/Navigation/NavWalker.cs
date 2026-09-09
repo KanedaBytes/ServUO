@@ -673,6 +673,20 @@ namespace Server.Custom
                             ? String.Format(" and {0} watched cycle(s)", _watchedCycles)
                             : " with nobody watching");
 
+                    // BEFORE the teleport, because the teleport is what destroys the evidence: it
+                    // moves the mobile onto the goal tile, so anything asked afterwards about who
+                    // was standing there gets an answer that includes the bot itself.
+                    //
+                    // This is the only place the terminal failure is recorded with the goal tile
+                    // and the mobiles around it. The console line above names the edge and nothing
+                    // else - see NavWalkFailures for what that cost.
+                    NavWalkFailures.Record(
+                        _mobile,
+                        _mobile.Map,
+                        new Point3D(step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point)),
+                        DescribeHop(step),
+                        _watchedCycles > 0);
+
                     Teleport(step);
                     Advance();
                     return;

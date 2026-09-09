@@ -253,6 +253,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
+| `[NavResampleZ [apply]` | Administrator | Report every record whose stored Z is not where a mobile would stand, and with `apply` correct them. Records it cannot place are reported and never moved (token: `nav-resample-z`) |
 | `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
 | `[Vocabulary` | Administrator | Write what the shard actually loaded - every spawnable creature type, which are vendors, and the C# enums - for the editor's dropdowns |
 
@@ -300,6 +301,29 @@ against real map data and is the check that keeps the file honest; set
 
 See `Scripts/Custom/Core/Navigation/README.md`, and `Scripts/Custom/Core/Navigation/nav-format-comparison.md`
 for how the schema maps onto the `uo-offline-server` bot navigation format.
+
+### A record's Z, and the two different right answers
+
+Half the Z values in the file were stale — 388 of 772 records sat at `z: 0`, because the editor's
+create path wrote a flat zero for its whole life (`js/build.js:22-28`) and a drag only sometimes
+wrote a new one. Britain's upper town stands at Z 20–30, so those records drew about 2.7 tiles off
+along the isometric diagonal, which is how a marker comes to look wrong when the record is right.
+
+**`[NavResampleZ`** corrects them, and writes `NavWalker.TryResolveZ`'s answer — where a mobile
+carrying the stored Z as a hint would actually stand — **not** the pick map's `StandingZ`, which is
+one line of `map.GetAverageZ` and would have dragged every upper-floor record, bridge deck and
+second storey to the ground. `TryResolveZ`'s **return value** draws the line the repair needs: false
+means nothing standable was found near the stored Z, and those records are **reported and left
+alone**, because they are misplaced rather than stale and moving them would bury the fault.
+
+The editor asks the *other* question and so uses the *other* function. A `z?` badge on a marker
+means the record disagrees with `StandingZ` by more than a storey — that the marker is being drawn
+somewhere the record is not, which is what `landz.at()` answers from the same accessor the pick map
+uses. Same record, two questions, two right answers.
+
+**Neither finds a record authored on the wrong storey.** `trinsic-shop-tailor-2`'s tile has two
+standable levels and the resample *confirmed* the upper one, because a hint wrong by more than the
+window is ratified rather than corrected. Only a person spots that, which is what the badge is for.
 
 ## 5d-1b — uo-offline's navigation as a base
 

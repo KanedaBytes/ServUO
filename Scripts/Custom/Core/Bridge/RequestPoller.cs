@@ -253,6 +253,26 @@ namespace Server.Custom
                     return true;
                 }
 
+                // Walks that climbed the whole ladder and were teleported, with the goal tile and
+                // who was standing near it. Body "clear" starts the ledger again, which is how a
+                // measurement run gets a clean window without a restart.
+                case "walk-failures":
+                {
+                    if (Insensitive.Equals(FirstWord(body), "clear"))
+                    {
+                        NavWalkFailures.Clear();
+                        message = "walk-failure ledger cleared";
+                        return true;
+                    }
+
+                    if (!NavWalkFailures.TryWrite(out message))
+                    {
+                        return false;
+                    }
+
+                    return true;
+                }
+
                 // The Z resample. Body "apply" writes; anything else is a dry run.
                 //
                 // Never a failure for finding something, as nav-audit is not: a record the walker

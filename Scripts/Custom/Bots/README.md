@@ -462,6 +462,48 @@ points of the skill budget: the boot audit caught it as four classes over cap on
 Clearing beats subtracting the two known skills, because any future engine change or upstream merge
 lands in the same trap.
 
+## The engine does not refuse a double-equip, it just tells you about it
+
+`Mobile.AddItem` (`Server/Mobile.cs:6779`) notices that a layer is taken, writes `LayerConflict.log`
+and a red console line — **and then equips the item anyway**, falling through to `m_Items.Add(item)`
+at `:6807`. Nothing is dropped and nothing is refused. Both items sit on the layer,
+`FindItemOnLayer` returns whichever is first in list order, and the other is an invisible ghost that
+still carries weight and resistances and still drops on the corpse. (`DailyLifeWatchman.cs:26` says
+the engine "drops one". It does not.)
+
+The log had **107 records — 92 of them bots**, in three families:
+
+| n | offending | equipped | layer | why |
+| --- | --- | --- | --- | --- |
+| 55 | `FullApron` | `Doublet` | MiddleTorso | the apron roll did not know what `CommonerUp` had just put on |
+| 32 | a shield | `Halberd` / `BattleAxe` / `ExecutionersAxe` | TwoHanded | weapon and shield rolled independently |
+| 5 | `HalfApron` | `HalfApron` | Waist | a guard that tested the wrong layer, on classes it excluded |
+
+**Everything now goes through `BaseCreature.SetWearable`** (`:5706`), which `PlayerBot` already
+inherited: it runs `CheckEquip` and `PackItem`s the loser instead of ghosting it. `EquipmentTable`'s
+`Add` and `AddArmor` carried about thirty call sites straight to `AddItem`; they carry them here
+instead. Stock `BaseVendor.InitOutfit` dresses every vendor the same way.
+
+That is also the only thing that knows a shield and a halberd cannot share a bot, because
+**`Layer` is not knowable from a `Type`**: clothing takes it as a constructor argument
+(`BaseClothing.cs:846`), and armour and weapons read it from tiledata at `(Layer)ItemData.Quality`
+(`BaseArmor.cs:2373`, `BaseWeapon.cs:5167`) from an ItemID that is itself a constructor literal.
+There is no table to pre-check against, and `BotItemFactory` builds by reflection where the ItemID
+is invisible. **Construct, then ask.**
+
+**The three rolls are fixed at source as well**, and that is not redundancy. `SetWearable` stops a
+conflict becoming a ghost; the rolls stop the outfit quietly losing the piece it rolled. A bot that
+rolled an apron and a doublet should end up in one of them *on purpose*, not in whichever the engine
+happened to accept first. So `AddApron` picks the apron that fits — `HalfApron` is `Layer.Waist`, so
+the aproned look survives a taken torso — the accessory apron asks about `Layer.Waist` instead of
+`Layer.OuterTorso` and stops excluding the gatherers who already have one, and a shield is rolled
+only when `HasFreeHand()`, which the comment beside it always claimed and nothing enforced.
+
+`[BotSmoke` asserts the file does not grow across its run. That is the only assertion available: a
+conflict leaves **no trace on the bot** to inspect afterwards, because both items are equipped and
+one of them is simply invisible. Seventeen classes at Grandmaster, a sixty-bot population fill and
+the full probe chain now leave `LayerConflict.log` byte-identical.
+
 ## Equipment is still T2A-flavoured
 
 `EquipmentTable.cs` is ported as-is, and its tables are the ones upstream curated for 1998-99 — no
