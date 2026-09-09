@@ -48,7 +48,12 @@ namespace Server.Custom
         private const int FaceRange = 6;
 
         /// <summary>How far off the arrival point a sitter settles. Bank floors are large.</summary>
-        private const int ScatterRadius = 4;
+        /// <summary>
+        /// How far a sitter may settle from the arrival it walked to. Public because the walk probe
+        /// judges a settled sitter by this rather than by the arrival range: standing off the point
+        /// is the DESIGN here, not a miss - see PickScatteredHome.
+        /// </summary>
+        public const int ScatterRadius = 4;
 
         private const int ScatterAttempts = 12;
 

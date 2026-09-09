@@ -41,6 +41,81 @@ namespace Server.Custom
         private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2.0);
         private static bool _running;
 
+        /// <summary>
+        /// Bots that took an arrival handoff but settled outside the arrival's own range.
+        ///
+        /// The shopper assertion, and the only one in the tree that checks a settled bot is ON its
+        /// destination rather than somewhere near it. Arrivals became places for every kind of
+        /// destination precisely so a bot could choose its tile inside that circle; a bot that
+        /// committed to a shop and stopped six tiles short has taken the handoff without taking
+        /// the place, which is the failure the range was meant to end and would otherwise look
+        /// exactly like success.
+        /// </summary>
+        private static readonly List<string> _settledOff = new List<string>();
+
+        /// <summary>
+        /// Is this bot standing within its destination's arrival range, and say so if not.
+        ///
+        /// Measured against every arrival of the destination rather than the one it was sent to:
+        /// the walker may shift to a free tile inside the range, and the stand-tile sweep may pick
+        /// a different arrival's apron entirely. Either is correct behaviour; being outside all of
+        /// them is not.
+        /// </summary>
+        private static void NoteSettled(PlayerBot bot)
+        {
+            // Each visit behaviour names its own destination; there is no shared interface for it,
+            // and inventing one for a probe would be the probe reshaping the code it tests.
+            var shopper = bot.Behavior as ShopperBehavior;
+            var sitter = bot.Behavior as BankSitterBehavior;
+            var crafter = bot.Behavior as CrafterBehavior;
+
+            string destinationId = shopper != null ? shopper.DestinationId
+                : sitter != null ? sitter.DestinationId
+                : crafter != null ? crafter.DestinationId
+                : null;
+
+            if (String.IsNullOrEmpty(destinationId))
+            {
+                return;
+            }
+
+            NavDestination destination = Nav.Destination(destinationId);
+
+            if (destination == null || destination.ArrivalList == null
+                || destination.ArrivalList.Count == 0)
+            {
+                return;
+            }
+
+            // A BANK SITTER IS SUPPOSED TO STAND OFF ITS ARRIVAL, so it is judged by its own rule.
+            //
+            // PickScatteredHome deliberately puts a sitter up to ScatterRadius tiles from where it
+            // arrived, and the comment there says exactly why: an uncontrolled BaseCreature cannot
+            // walk through another mobile, so sitters parked ON the arrival points make those tiles
+            // unreachable for the next bot - "a bank with a crowd floor" became "a traffic jam".
+            // Measuring that scatter against the arrival's range would fail the crowd for working
+            // as designed, which is how a probe teaches people to ignore it. Caught on this
+            // assertion's first real run, by exactly that case.
+            int slack = sitter != null ? BankSitterBehavior.ScatterRadius : 1;
+
+            foreach (NavArrival arrival in destination.ArrivalList)
+            {
+                // The apron of the circle, not only its inside: the stand-tile sweep is allowed
+                // the ring just outside the authored range.
+                if (bot.InRange(arrival.Location, arrival.Range + slack))
+                {
+                    return;
+                }
+            }
+
+            _settledOff.Add(String.Format(
+                "{0} settled at {1},{2} for '{3}', outside every arrival's range",
+                bot.Name,
+                bot.X,
+                bot.Y,
+                destinationId));
+        }
+
         /// <summary>True while this probe is mid-run. Read by [BotSmoke to advance the chain.</summary>
         public static bool IsRunning
         {
@@ -70,6 +145,7 @@ namespace Server.Custom
             try
             {
                 _running = true;
+                _settledOff.Clear();
 
                 List<NavDestination> destinations = Nav.Destinations(map, null, null);
 
@@ -331,6 +407,19 @@ namespace Server.Custom
                         alive,
                         rungs));
                 }
+                else if (_settledOff.Count > 0)
+                {
+                    // Above the stuck warning: a bot standing still in the wrong place reads as
+                    // success everywhere else in this probe, so if it is not said here it is not
+                    // said at all. A bot still mid-recovery is at least visibly unfinished.
+                    result = HealthResult.Warn(String.Format(
+                        "in {0} - {1} bot(s) took an arrival handoff but settled outside every "
+                        + "arrival's range: {2}. {3}",
+                        _clock.Describe(),
+                        _settledOff.Count,
+                        String.Join("; ", _settledOff.ToArray()),
+                        rungs));
+                }
                 else if (stuck > 0)
                 {
                     result = HealthResult.Warn(String.Format(
@@ -473,6 +562,15 @@ namespace Server.Custom
                 // which is the arrival handoff working. For the probe's purposes that is a bot
                 // that needs putting back on the road: without this the disperse phase silently
                 // did nothing for every bot that had committed, and they read as stuck.
+                //
+                // BEFORE putting it back: is it standing where an arrival-as-a-place says it
+                // should be? This is the only assertion in the tree that a shopper or a sitter
+                // ends up ON its destination rather than merely near it, and it exists because
+                // arrivals became places for every kind of destination. A bot that committed to a
+                // shop and settled six tiles away has taken the handoff without taking the tile,
+                // which is exactly the failure the range was meant to end.
+                NoteSettled(bot);
+
                 bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
 
                 traveler = bot.Behavior as TravelerBehavior;

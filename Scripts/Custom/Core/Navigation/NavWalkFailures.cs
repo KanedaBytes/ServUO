@@ -263,6 +263,9 @@ namespace Server.Custom
                 builder.Append(",\"x\":").Append(failure.GoalX);
                 builder.Append(",\"y\":").Append(failure.GoalY);
                 builder.Append(",\"z\":").Append(failure.GoalZ);
+                builder.Append(",\"fromX\":").Append(failure.FromX);
+                builder.Append(",\"fromY\":").Append(failure.FromY);
+                builder.Append(",\"fromZ\":").Append(failure.FromZ);
                 builder.Append(",\"watched\":").Append(failure.Watched ? "true" : "false");
                 builder.Append(",\"goalUnstandable\":").Append(failure.GoalUnstandable ? "true" : "false");
                 builder.Append(",\"near\":[");

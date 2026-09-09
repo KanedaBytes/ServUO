@@ -562,6 +562,13 @@ namespace Server.Custom
                     // A warning rather than a failure: the floor is a pull, not a guarantee, and on a
                     // graph with one bank and twelve wandering bots it can legitimately be short at
                     // any given instant.
+                    //
+                    // IT STAYS A WARNING NOW THAT ARRIVALS ARE PLACES, and the reason is worth
+                    // writing down because the temptation was to promote it. A bank's crowd is a
+                    // floor its own fixtures already satisfy - the population recipe pins
+                    // life.crowds.bank sitters at every bank - so anything this reports is the
+                    // LIFECYCLE half being somewhere else, which is what a lifecycle bot is for.
+                    // Failing on it would be failing on bots doing their job.
                     result = HealthResult.Warn(String.Format(
                         "the crowd floor is not met ({0}). {1}",
                         String.Join(", ", belowFloor.ToArray()),
