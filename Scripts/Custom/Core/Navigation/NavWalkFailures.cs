@@ -56,6 +56,20 @@ namespace Server.Custom
         public int GoalX;
         public int GoalY;
         public int GoalZ;
+
+        /// <summary>
+        /// Where the bot actually was when it gave up.
+        ///
+        /// Not the same as the hop's authored start, and that difference is the whole reason it is
+        /// recorded: a bot that has been sidestepping for eighty seconds is somewhere the route
+        /// never named, so "walk this hop with the engine" has to start from HERE to reproduce the
+        /// failure. Reconstructing it from the from-waypoint asks a different question and can
+        /// answer it "walkable" about a hop the bot could not walk.
+        /// </summary>
+        public int FromX;
+        public int FromY;
+        public int FromZ;
+
         public bool Watched;
 
         /// <summary>Nothing fits on the goal tile at any height. See the header.</summary>
@@ -125,6 +139,9 @@ namespace Server.Custom
                 GoalX = goal.X,
                 GoalY = goal.Y,
                 GoalZ = goal.Z,
+                FromX = mobile.X,
+                FromY = mobile.Y,
+                FromZ = mobile.Z,
                 Watched = watched
             };
 

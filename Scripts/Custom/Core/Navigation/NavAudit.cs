@@ -229,8 +229,37 @@ namespace Server.Custom
 
                 if (distance <= 1)
                 {
-                    // MovementPath returns no path at all for an adjacent goal
-                    // (MovementPath.cs:34), so this would be a guaranteed false positive.
+                    // AN ADJACENT HOP IS ONE STEP, SO ASK THE THING THAT TAKES STEPS.
+                    //
+                    // This used to `continue` outright, on the grounds that MovementPath returns
+                    // no path for an adjacent goal (MovementPath.cs:34) and would be a guaranteed
+                    // false positive. True of the pathfinder, and it left a hole: twenty edges on
+                    // this graph are one tile long and NONE of them was ever checked.
+                    //
+                    // One of them was broken. 'uo-wp-188-s4' -> 'uo-trinsic-shop-alchemist-s1' is
+                    // 1840,2711 -> 1840,2710, the engine refuses the step, and it produced repeat
+                    // walk failures in every measurement run while the audit reported 0 blocked.
+                    //
+                    // uo-offline hit the same wall from the other side and drew the right
+                    // conclusion: their [auditedges floods with Movement.CheckMovement through a
+                    // probe mobile rather than approximating, because the approximation "rejects
+                    // legs the game allows (Vesper canal bridges, dock ramps, low arches), which
+                    // made the audit cry BLOCKED on edges bots walk every day" (uo-offline
+                    // Nav/DistanceField.cs:100-109). The same call answers an adjacent hop exactly
+                    // and in one step - no flood needed for a distance of one.
+                    if (!Steps(a.Map, Surface(a.Map, a.Location), Surface(a.Map, b.Location)))
+                    {
+                        blocked++;
+                        lines.Add(String.Format(
+                            "BLOCKED  '{0}' -> '{1}' - adjacent, and the engine refuses the step",
+                            a.Id,
+                            b.Id));
+
+                        found.Add(new NavAuditProblem(
+                            a.Id, b.Id, a.Map == null ? "" : a.Map.Name, NavAuditKind.Blocked,
+                            distance, "adjacent tiles, but Movement.CheckMovement refuses the step"));
+                    }
+
                     adjacent++;
                     continue;
                 }
@@ -335,6 +364,48 @@ namespace Server.Custom
         /// The ack caps its arrays at forty and carries prose; this carries every finding as a
         /// record. A layer needs the edge, not a sentence about the edge.
         /// </summary>
+        /// <summary>
+        /// Can a mobile take the single step from a to b? The engine's own answer.
+        ///
+        /// `Movement.CheckMovement` is the call `Mobile.Move` makes (`Server/Mobile.cs:3138`), so
+        /// this is the truth rather than an approximation of it. A throwaway probe carries the
+        /// flags: a land walker, blessed and frozen so nothing can happen to it and it never takes
+        /// an AI tick, deleted in a finally. Upstream's [auditedges builds the same kind of probe
+        /// for the same reason (uo-offline AuditEdgesCommand.cs:76-79).
+        ///
+        /// Mobiles are not a consideration here and must not be: the audit asks whether the EDGE
+        /// is walkable, and who happens to be standing on it this second is the walk-failure
+        /// ledger's question, not this one.
+        /// </summary>
+        private static bool Steps(Map map, Point3D from, Point3D to)
+        {
+            if (map == null || map == Map.Internal)
+            {
+                return true;
+            }
+
+            Direction direction = Utility.GetDirection(from, to);
+            var probe = new Server.Mobiles.Rat { Blessed = true, Frozen = true, Controlled = true };
+
+            try
+            {
+                probe.MoveToWorld(from, map);
+
+                int z;
+
+                return Movement.Movement.CheckMovement(probe, map, from, direction, out z);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Adjacent-step probe failed for {0},{1}.", from.X, from.Y);
+                return true;
+            }
+            finally
+            {
+                probe.Delete();
+            }
+        }
+
         public static void WriteSnapshot(IList<NavAuditProblem> problems)
         {
             var builder = new StringBuilder(512);
