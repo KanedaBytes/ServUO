@@ -236,9 +236,13 @@ namespace Server.Custom
                     // false positive. True of the pathfinder, and it left a hole: twenty edges on
                     // this graph are one tile long and NONE of them was ever checked.
                     //
-                    // One of them was broken. 'uo-wp-188-s4' -> 'uo-trinsic-shop-alchemist-s1' is
-                    // 1840,2711 -> 1840,2710, the engine refuses the step, and it produced repeat
-                    // walk failures in every measurement run while the audit reported 0 blocked.
+                    // It found none broken, and that is itself the finding. The suspect was
+                    // 'uo-wp-188-s4' -> 'uo-trinsic-shop-alchemist-s1' (1840,2711 -> 1840,2710),
+                    // four repeat walk failures in one 30-minute window - and CheckMovement ALLOWS
+                    // that step. The edge is sound; what fails is reaching it from ten tiles out,
+                    // which is FastAStarAlgorithm's budget rather than this graph's geometry (see
+                    // NavWalkFailures for the measurement). Worth keeping the check anyway: it is
+                    // what turned a guess about the geometry into a measurement of the pathfinder.
                     //
                     // uo-offline hit the same wall from the other side and drew the right
                     // conclusion: their [auditedges floods with Movement.CheckMovement through a
@@ -360,7 +364,8 @@ namespace Server.Custom
                     ? ""
                     : String.Format(", {0} island(s) holding somewhere to go", islands.Count),
                 unstandable,
-                placement.Changes.Count);
+                placement.Changes.Count,
+                struck.Count);
 
             report = lines;
             problems = found;
