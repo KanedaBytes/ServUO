@@ -253,6 +253,39 @@ namespace Server.Custom
                     return true;
                 }
 
+                // The Z resample. Body "apply" writes; anything else is a dry run.
+                //
+                // Never a failure for finding something, as nav-audit is not: a record the walker
+                // cannot place is exactly what this exists to surface, and it comes back in
+                // warnings alongside the corrections.
+                case "nav-resample-z":
+                {
+                    bool applyZ = Insensitive.Equals(FirstWord(body), "apply");
+                    NavResampleZ.Result resample;
+
+                    if (applyZ)
+                    {
+                        if (!NavResampleZ.Apply(out resample, out error))
+                        {
+                            message = "rolled back, nothing written: " + error;
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        resample = NavResampleZ.Scan();
+                    }
+
+                    warnings = NavResampleZ.Describe(resample, applyZ);
+                    message = String.Format(
+                        "{0} {1} of {2} record(s); {3} could not be placed",
+                        applyZ ? "corrected" : "would correct",
+                        resample.Changes.Count,
+                        resample.Scanned,
+                        resample.Cannot.Count);
+                    return true;
+                }
+
                 case "gg-reimport":
                     string summary;
 
