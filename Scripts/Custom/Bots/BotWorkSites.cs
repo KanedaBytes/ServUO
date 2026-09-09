@@ -264,12 +264,31 @@ namespace Server.Custom
             return thin;
         }
 
+        /// <summary>
+        /// The wilderness site types a gatherer works — the ones the editor's Site tool authors.
+        ///
+        /// Named here rather than left as two string literals because the editor asks for it:
+        /// VocabularySnapshot reports this array, and the Site tool's type dropdown is exactly
+        /// these. A type offered there that this file does not recognise would author a site
+        /// nobody ever works, which reads as a broken bot rather than as a bad type.
+        ///
+        /// A forge is deliberately not one of them. It is a station a bot stands at, authored as
+        /// an ordinary destination with arrivals, not a face with a zone to wander inside.
+        /// </summary>
+        public static readonly string[] GathererSiteTypes = { "mine", "lumber" };
+
         /// <summary>Every destination type this file governs — the ones a bot goes to in order to work.</summary>
         public static bool IsWorkType(string type)
         {
-            return Insensitive.Equals(type, "mine")
-                || Insensitive.Equals(type, "lumber")
-                || Insensitive.Equals(type, "forge");
+            for (int i = 0; i < GathererSiteTypes.Length; i++)
+            {
+                if (Insensitive.Equals(type, GathererSiteTypes[i]))
+                {
+                    return true;
+                }
+            }
+
+            return Insensitive.Equals(type, "forge");
         }
 
         /// <summary>The site type a gatherer class works, or none.</summary>

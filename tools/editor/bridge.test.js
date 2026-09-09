@@ -592,10 +592,48 @@ test('every reload the editor can ask for exists in the shard dispatcher', async
         wanted.add(match[1]);
     }
 
+    // And every token the BRIDGE drops on its own account. `vocabulary` is asked for by the
+    // bridge rather than by the browser - nothing in app.js names it - so without this it would
+    // sit entirely outside the guard, which is precisely where a name spelled one way here and
+    // another way in the shard goes unnoticed until a form is mysteriously empty.
+    const bridgeSource = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
+
+    for (const match of bridgeSource.matchAll(/writeToken\(\s*'([a-z-]+)'/g)) {
+        wanted.add(match[1]);
+    }
+
     for (const name of wanted) {
         assert.ok(poller.includes(`case "${name}":`),
             `the editor asks for '${name}' and RequestPoller.Dispatch has no case for it`);
     }
+});
+
+test('the vocabulary answers with the shard down, and never with a hand-kept list', async () => {
+    // The temp root has no Data/Live/vocabulary.json and no Scripts/Mobiles, which is the shard
+    // down and nothing scanned. The route still has to answer: a create form that refuses to open
+    // without the shard is a worse editor than one with free-text fields.
+    const { status, body } = await call('GET', '/api/vocabulary');
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.shardSeen, false);
+
+    // The half that comes from the files is real, and it came from the files rather than from a
+    // list in the editor.
+    const types = body.destinationTypes.map((entry) => entry.value);
+    const nav = JSON.parse(fs.readFileSync(NAV, 'utf8'));
+
+    for (const destination of nav.destinations) {
+        assert.ok(types.includes(destination.type),
+            `${destination.type} is in navigation.json and must be offered`);
+    }
+
+    // The spawn files are the directory's, not the viewport's - which is what the old
+    // spawnfile-list could never be, since it was built from whichever files had been loaded.
+    assert.deepStrictEqual(body.spawnFiles.sort(), whitelist.listSpawnFiles().sort());
+
+    // Every kind is present at zero rather than absent. An absent kind reads as a form still
+    // loading; `Monster (0)` reads as what it is.
+    assert.deepStrictEqual(body.spawnKinds.map((kind) => kind.key), ['Monster', 'NPC', 'Vendor']);
 });
 
 // ---- the isometric art tiles ------------------------------------------------------------------

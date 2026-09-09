@@ -743,6 +743,149 @@ test('a point placed with no Z at all is still written at zero, not undefined', 
     assert.strictEqual(built.points[0][2], 0);
 });
 
+test('an arrival written with a range keeps it, and one at zero does not write the key', async () => {
+    // The form has asked for a range since the arrival tool existed, and buildShape dropped it -
+    // so every arrival the editor created stood on its exact tile whatever was typed. The zero
+    // case matters just as much: `range` is Ignore-on-default in the C# record, so writing 0
+    // explicitly would put a key on 115 shipped arrivals that have never had one.
+    const { buildShape } = await import('./js/build.js');
+
+    const withRange = buildShape(
+        'arrival', { range: '2', waypoints: '' }, 'Trammel',
+        { points: [[12, 22, 0]] }, { ownerId: 'brit-forge', arrivalIndex: 0 });
+
+    assert.strictEqual(withRange.props.range, 2);
+
+    const onTheTile = buildShape(
+        'arrival', { range: '0', waypoints: '' }, 'Trammel',
+        { points: [[12, 22, 0]] }, { ownerId: 'brit-bank', arrivalIndex: 0 });
+
+    assert.ok(!('range' in onTheTile.props), 'range 0 is absent, not written');
+});
+
+test('a corridor edge carries the corridor tags, and a hand-drawn one carries none', async () => {
+    const { buildShape } = await import('./js/build.js');
+
+    const fromCorridor = buildShape(
+        'edge', { tags: 'road wilderness' }, 'Trammel',
+        { points: [[0, 0, 0], [1, 1, 0]] }, { ids: ['a', 'b'] });
+
+    assert.strictEqual(fromCorridor.props.tags, 'road wilderness');
+
+    const byHand = buildShape(
+        'edge', {}, 'Trammel', { points: [[0, 0, 0], [1, 1, 0]] }, { ids: ['a', 'b'] });
+
+    assert.strictEqual(byHand.props.tags, '', 'unchanged from what a hand-drawn edge always had');
+});
+
+test('GG_ is applied to a spawner name rather than typed, and never doubled', async () => {
+    // The prefix is what [XmlLoad and [XmlUnLoad filter on with an ordinal StartsWith, so a
+    // spawner without it is invisible to [GG_Reimport for ever - never swept, never replaced.
+    const { buildShape, ggName } = await import('./js/build.js');
+
+    assert.strictEqual(ggName('Bakers'), 'GG_Bakers');
+    assert.strictEqual(ggName('GG_Bakers'), 'GG_Bakers', 'typed out of habit, not doubled');
+    assert.strictEqual(ggName('  Bakers  '), 'GG_Bakers');
+
+    // Ordinal, like the filter itself: gg_ is not the prefix as far as [XmlLoad is concerned.
+    assert.strictEqual(ggName('gg_Bakers'), 'GG_gg_Bakers');
+
+    const built = buildShape(
+        'spawner',
+        { Name: 'Bakers', file: 'spawn:trammel/GG_Test.xml', Objects2: 'Baker', MaxCount: '1' },
+        'Trammel', { points: [[10, 20, 0]] }, { uniqueId: 'x' });
+
+    assert.strictEqual(built.props.Name, 'GG_Bakers');
+    assert.strictEqual(built.label, 'GG_Bakers', 'the label is the name that will be written');
+});
+
+test('every tool declares its steps, and the site tool still has three', async () => {
+    // The step counter used to be `tool.kind === 'site' ? 3 : 0` in app.js, so every other tool
+    // ran with no step guidance at all. It now comes off the tool, which means a tool that grows
+    // a phase and forgets to say so is the failure to catch.
+    const { TOOLS } = tools;
+
+    for (const [key, tool] of Object.entries(TOOLS)) {
+        // Adopt is the exception and stays one: it collects a box and asks the shard a question,
+        // and its own hint says the whole of it.
+        if (key === 'adopt') {
+            continue;
+        }
+
+        assert.ok(Array.isArray(tool.steps) && tool.steps.length > 0, `${key} declares its steps`);
+    }
+
+    assert.strictEqual(TOOLS.site.steps.length, 3);
+    assert.strictEqual(TOOLS.corridor.steps.length, 2);
+});
+
+test('no tool field carries its own list of shard values', async () => {
+    // The fault this whole arrangement removes: `value: 'shop'` for a destination type, and
+    // 'mine or lumber' in a label, are copies of the shard's vocabulary that nothing updates.
+    // A field with a finite set names a vocabulary key instead.
+    const { TOOLS } = tools;
+
+    const mustBeFed = [
+        ['destination', 'type'], ['destination', 'tags'],
+        ['site', 'type'], ['site', 'tags'],
+        ['waypoint', 'tags'], ['navzone', 'tags'], ['corridor', 'tags'],
+        ['route', 'mode'],
+        ['spawner', 'kind'], ['spawner', 'Objects2'], ['spawner', 'file']
+    ];
+
+    for (const [toolKey, fieldKey] of mustBeFed) {
+        const field = TOOLS[toolKey].fields.find((f) => f.key === fieldKey);
+
+        assert.ok(field, `${toolKey}.${fieldKey} exists`);
+        assert.ok(field.optionsFrom, `${toolKey}.${fieldKey} is fed from the vocabulary`);
+        assert.ok(!field.options, `${toolKey}.${fieldKey} carries no literal list`);
+    }
+
+    // The spawner's type list is filtered by the kind above it, the way uo-offline's is
+    // (map.html:1102-1107). Without the dependency it is 1,400 names in one combo.
+    const type = TOOLS.spawner.fields.find((f) => f.key === 'Objects2');
+
+    assert.strictEqual(type.dependsOn, 'kind');
+    assert.strictEqual(type.combo, true, 'typeable: even one kind is hundreds of entries');
+});
+
+test('a field is a select only where the shard has a closed set', async () => {
+    const { TOOLS } = tools;
+
+    // NavRecords.cs makes a destination type a free token deliberately, so a control stricter
+    // than the file format would refuse a type the shard would have accepted. uo-offline reached
+    // the same answer: map.html:126 is an <input list>, not a <select>.
+    const open = [
+        ['destination', 'type'], ['site', 'type'], ['waypoint', 'tags'],
+        ['destination', 'tags'], ['navzone', 'tags'], ['corridor', 'tags']
+    ];
+
+    for (const [toolKey, fieldKey] of open) {
+        const field = TOOLS[toolKey].fields.find((f) => f.key === fieldKey);
+
+        assert.strictEqual(field.combo, true, `${toolKey}.${fieldKey} stays typeable`);
+    }
+
+    // Closed: a fourth route mode is a file the shard refuses to load.
+    const mode = TOOLS.route.fields.find((f) => f.key === 'mode');
+
+    assert.ok(!mode.combo, 'route mode is a select');
+});
+
+test('the corridor asks its form before the first click, and the site after it', async () => {
+    // The corridor names every waypoint it mints, so the name has to exist before there is
+    // anything to name. The site's id is generated from the zone its centre tile lands in, so its
+    // form cannot open until that tile is known.
+    const { TOOLS } = tools;
+
+    assert.strictEqual(TOOLS.corridor.formAtStart, true);
+    assert.ok(!TOOLS.site.formAtStart);
+
+    const name = TOOLS.corridor.fields.find((f) => f.key === 'name');
+
+    assert.ok(name && name.required, 'the corridor name is required');
+});
+
 // --- the seam between the tools and the writer --------------------------------------------------
 
 test('every tool produces a shape unproject can write, with the right fields in the right order', async () => {

@@ -42,6 +42,7 @@ import * as iso from './iso.js';
 import * as pickmap from './pickmap.js';
 import * as landz from './landz.js';
 import { initSections, initResize } from './panels.js';
+import * as vocab from './vocab.js';
 
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
@@ -205,6 +206,21 @@ async function boot() {
     } catch (error) {
         setStatus(`Cannot reach the bridge: ${error.message}`, 'error');
         return;
+    }
+
+    // Before any form can be opened, so a field's list is never empty merely because the fetch
+    // had not finished. A failure here is not fatal: the forms fall back to free text, which is
+    // what every one of them was before this existed.
+    try {
+        await vocab.load(api);
+
+        if (!vocab.shardSeen()) {
+            setStatus(
+                'The shard has not reported its types yet - the creature and class lists will be'
+                + ' empty until it has. Everything else is from the files.', 'warn');
+        }
+    } catch (error) {
+        setStatus(`Could not read the vocabulary: ${error.message}. Forms stay free text.`, 'warn');
     }
 
     buildLayerList();
@@ -1783,6 +1799,22 @@ function entryEditor(shape) {
     heading.textContent = 'Spawns';
     box.append(heading);
 
+    // Every spawnable type, whatever kind: there is no kind selected here to narrow by, because
+    // an existing spawner's type is being CHANGED rather than chosen. Minted with the panel
+    // rather than declared in index.html, so it cannot be stale relative to the vocabulary.
+    const types = document.createElement('datalist');
+
+    types.id = 'entry-type-list';
+
+    for (const name of vocab.allSpawnTypes()) {
+        const option = document.createElement('option');
+
+        option.value = name;
+        types.append(option);
+    }
+
+    box.append(types);
+
     const editable = isWritable(shape);
 
     shape.entries.forEach((entry, index) => {
@@ -1792,7 +1824,7 @@ function entryEditor(shape) {
         const type = document.createElement('input');
         type.value = entry.type;
         type.readOnly = !editable;
-        type.setAttribute('list', 'creature-list');
+        type.setAttribute('list', types.id);
 
         const max = document.createElement('input');
         max.value = entry.max;
@@ -1880,15 +1912,49 @@ function readonlyRow(pairs) {
 function editableField(shape, field) {
     const label = document.createElement('label');
     const caption = document.createElement('span');
-    const input = document.createElement('input');
+
+    // The same vocabulary the create form for this record used. A dropdown on create and free
+    // text on edit would teach, one form at a time, that the vocabulary is optional.
+    const source = vocab.fieldVocabulary(shape.layer, field.key);
+    const values = source ? vocab.optionsFor(source.key) : [];
+
+    const input = source && source.closed && values.length > 0
+        ? document.createElement('select')
+        : document.createElement('input');
 
     caption.textContent = field.label;
-    input.value = shape.props[field.key] === undefined ? '' : String(shape.props[field.key]);
-    input.autocomplete = 'off';
 
-    if (field.type === 'navid') {
-        input.setAttribute('list', 'navid-list');
+    if (input.tagName === 'SELECT') {
+        for (const value of values) {
+            const option = document.createElement('option');
+
+            option.value = value;
+            option.textContent = value;
+            input.append(option);
+        }
+    } else {
+        input.autocomplete = 'off';
+
+        if (field.type === 'navid') {
+            input.setAttribute('list', 'navid-list');
+        } else if (values.length > 0) {
+            const datalist = document.createElement('datalist');
+
+            datalist.id = `prop-list-${shape.layer}-${field.key}`;
+            input.setAttribute('list', datalist.id);
+
+            for (const value of values) {
+                const option = document.createElement('option');
+
+                option.value = value;
+                datalist.append(option);
+            }
+
+            label.append(datalist);
+        }
     }
+
+    input.value = shape.props[field.key] === undefined ? '' : String(shape.props[field.key]);
 
     input.addEventListener('change', () => {
         const before = { ...shape.props };
@@ -2136,10 +2202,37 @@ function startTool(key, placeAt = null) {
     showProperties(null);
     updateToolbar();
 
+    // The corridor asks its form before the first click: its name is what every waypoint the road
+    // mints is called, so it has to exist before there is anything to name.
+    if (tool.formAtStart) {
+        askAtStart(state.tool);
+        return;
+    }
+
     if (placeAt && tool.kind === 'point') {
         toolClick(placeAt, placeAt.x, placeAt.y);
     }
 
+    requestRender();
+}
+
+/** The form a formAtStart tool opens before collecting anything. */
+async function askAtStart(tool) {
+    const values = await askFor(tool, {});
+
+    // Esc closed the modal, or another tool was started while it was open.
+    if (!state.tool || state.tool !== tool) {
+        return;
+    }
+
+    if (!values) {
+        cancelTool();
+        return;
+    }
+
+    tool.props = values;
+    setHint(tool.hint);
+    setToolStep();
     requestRender();
 }
 
@@ -2189,9 +2282,17 @@ function toolClick(tile, worldX, worldY, screenX = null, screenY = null) {
     if (tool.kind === 'point-chain') {
         state.draft.points.push([x, y, z]);
 
-        setHint(state.draft.points.length === 1
-            ? tool.hint2
-            : `${state.draft.points.length} point(s). Click more, or press Enter to route it.`);
+        // Steering, from the first click on. The step number has to move with it or the guidance
+        // reads "Step 1 of 2" for the whole of a road being drawn.
+        tool.phase = 1;
+        setToolStep();
+
+        // The running count beats the static wording once there is a count to give: how many
+        // points are down is the thing you cannot see from the map, because the via points look
+        // exactly like the ends.
+        if (state.draft.points.length > 1) {
+            setHint(`${state.draft.points.length} point(s). Click more, or press Enter to route it.`);
+        }
 
         requestRender();
         return true;
@@ -2291,7 +2392,7 @@ async function confirmModal(title, detail) {
  * A road the shard could not finish still draws. "It reaches the gate and stops" is a different
  * problem from "it never leaves town", and seeing where it stopped is most of the diagnosis.
  */
-async function proposeCorridor(points) {
+async function proposeCorridor(points, corridor = {}) {
     if (!(await confirmReplaceProposal())) {
         return;
     }
@@ -2354,7 +2455,7 @@ async function proposeCorridor(points) {
         return;
     }
 
-    createProposal(hops);
+    createProposal(hops, corridor);
 }
 
 /**
@@ -2375,11 +2476,26 @@ function waypointNear(x, y, slack) {
         || null;
 }
 
-/** Turn a verified hop list into unsaved waypoint and edge records. */
-function createProposal(hops) {
+/**
+ * Turn a verified hop list into unsaved waypoint and edge records.
+ *
+ * THE IDS ARE THE CORRIDOR'S, not the enclosing zone's. `<name>-WP-0001` upward in walk order,
+ * which is the one place this tool departs from js/ids.js - and it departs deliberately, because
+ * a road is a thing rather than a scattering of points. Named that way it reads as one set in the
+ * filter, in a navigation.json diff and in an audit finding, exactly as a work site's three
+ * records already do. Letters of any case, digits, `-`, `_` and `.` are all legal in an id
+ * (NavIds.IsValid), so the shard takes it as written.
+ *
+ * Waypoints JOINED at the ends keep their own ids. Renaming a record the author did not ask to
+ * touch would be worse than a mixed-looking road, and the join is what stops the road becoming an
+ * island in the first place.
+ */
+function createProposal(hops, corridor = {}) {
     const created = [];
     const reused = [];
+    const tags = corridor.tags || 'road';
     let previous = null;
+    let minted = 0;
 
     for (let i = 0; i < hops.length; i++) {
         const [x, y, z] = hops[i];
@@ -2395,9 +2511,11 @@ function createProposal(hops) {
             waypoint = existing;
             reused.push(existing.props.id);
         } else {
-            const id = nextId(x, y, state.facet.name, [...state.shapes, ...created]);
+            const id = corridor.name
+                ? corridorId(corridor.name, ++minted, [...state.shapes, ...created])
+                : nextId(x, y, state.facet.name, [...state.shapes, ...created]);
 
-            waypoint = buildShape('waypoint', { id, tags: 'road', arrivalRange: '0' },
+            waypoint = buildShape('waypoint', { id, tags, arrivalRange: '0' },
                 state.facet.name, { points: [[x, y, z]] }, {});
 
             // buildShape flattens Z to 0 for a click; a walked road carries the real one, and the
@@ -2407,7 +2525,7 @@ function createProposal(hops) {
         }
 
         if (previous) {
-            created.push(buildShape('edge', {}, state.facet.name,
+            created.push(buildShape('edge', { tags }, state.facet.name,
                 { points: [previous.points[0], waypoint.points[0]] },
                 { ids: [previous.props.id, waypoint.props.id] }));
         }
@@ -2435,6 +2553,36 @@ function createProposal(hops) {
         'ok');
 
     requestRender();
+}
+
+/**
+ * `<corridor>-WP-0001`, skipping any number already taken.
+ *
+ * Zero-padded to four so the ids sort in walk order as text - which is how they appear in the
+ * filter, in the file and in every message that lists them, and `WP-10` sorting between `WP-1`
+ * and `WP-2` is the sort of thing that makes a road look shuffled.
+ *
+ * The collision skip counts across kinds, the way js/ids.js does, because Nav.TryRoute accepts an
+ * id naming a waypoint OR a destination and a clash between the two is genuinely ambiguous. It
+ * matters here for a second corridor authored under a name already used: the numbering continues
+ * past the existing ones rather than colliding with them.
+ */
+function corridorId(name, ordinal, shapes) {
+    const taken = new Set(shapes.map((shape) => (shape.props && shape.props.id) || '')
+        .filter(Boolean)
+        .map((id) => id.toLowerCase()));
+
+    let n = ordinal;
+
+    for (;;) {
+        const id = `${name}-WP-${String(n).padStart(4, '0')}`;
+
+        if (!taken.has(id.toLowerCase())) {
+            return id;
+        }
+
+        n++;
+    }
 }
 
 /**
@@ -2773,9 +2921,10 @@ function finishTool() {
         }
 
         const points = state.draft.points.map(([x, y]) => [x, y]);
+        const corridor = tool.props || {};
 
         cancelTool();
-        proposeCorridor(points);
+        proposeCorridor(points, corridor);
         return;
     }
 
@@ -4210,10 +4359,23 @@ function setToolStep() {
         return;
     }
 
-    const steps = tool.kind === 'site' ? 3 : 0;
+    // Every tool declares its steps in tools.js now, rather than the site tool being the only one
+    // with a count hardcoded here. The wording tracks the README's own walkthroughs, so a tool
+    // that changes changes in one place and the two cannot end up saying different things.
+    const steps = Array.isArray(tool.steps) ? tool.steps : [];
 
     dom.toolGuide.hidden = false;
-    dom.toolStep.textContent = steps > 0 ? `Step ${tool.phase + 1} of ${steps}` : '';
+    dom.toolStep.textContent = steps.length > 1
+        ? `Step ${Math.min(tool.phase, steps.length - 1) + 1} of ${steps.length}`
+        : '';
+
+    // The step's own wording, where the tool gave one. The site tool's third step is computed
+    // below instead, because it counts tiles that are still being taken.
+    const step = steps[Math.min(tool.phase, steps.length - 1)];
+
+    if (step && !(tool.kind === 'site' && tool.phase === 2)) {
+        dom.toolHint.textContent = `${step}. Esc cancels.`;
+    }
 
     if (tool.kind === 'site' && tool.phase === 2) {
         const offered = worksites.candidates().length;

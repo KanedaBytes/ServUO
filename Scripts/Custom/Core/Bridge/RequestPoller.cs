@@ -289,6 +289,12 @@ namespace Server.Custom
                     message = "health snapshot written";
                     return true;
 
+                // What the shard actually loaded, so the editor's create forms can be dropdowns
+                // rather than free text typed from memory. No body: it reports everything, and
+                // the answer only changes when Scripts.dll does.
+                case "vocabulary":
+                    return VocabularySnapshot.TryWrite(out message);
+
                 // Per-arrival harvest reach, for the editor's work-site layer and its Site tool.
                 //
                 // The body is optional and is "<mine|lumber> x,y x,y ..." - points that are NOT in

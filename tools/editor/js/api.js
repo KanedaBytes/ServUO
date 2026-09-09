@@ -67,6 +67,16 @@ export const api = {
             + (bbox ? `&bbox=${bbox.x},${bbox.y},${bbox.width},${bbox.height}` : '')),
 
     entities: () => request('GET', '/api/entities'),
+
+    /**
+     * Every list the create forms offer.
+     *
+     * Half the shard's report of what it loaded, half derived by the bridge from the files here -
+     * see vocabulary.js. It answers with the shard down, with `shardSeen: false`, so a form still
+     * opens and can say which half of a list is missing.
+     */
+    vocabulary: () => request('GET', '/api/vocabulary'),
+
     audit: () => request('GET', '/api/audit'),
     adopt: () => request('GET', '/api/adopt'),
     reach: () => request('GET', '/api/reach'),

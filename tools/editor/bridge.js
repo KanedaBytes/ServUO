@@ -23,6 +23,7 @@ const compact = require('./compact.js');
 const { project, unproject } = require('./project.js');
 const spawners = require('./spawners.js');
 const reference = require('./reference.js');
+const vocabulary = require('./vocabulary.js');
 const whitelist = require('./whitelist.js');
 const { ArtRenderer, parseTilePath, EMPTY_PNG } = require('./artrenderer.js');
 
@@ -545,8 +546,63 @@ const ROUTES = {
         const health = readJson(whitelist.FILES.health);
 
         sendJson(response, 200, health || { utc: null, worst: 'Unknown', checks: [] });
+    },
+
+    /**
+     * Every list the create forms offer, so no form has to carry one.
+     *
+     * Half of it is the shard's report of what it loaded and half is derived from the files here;
+     * see vocabulary.js for which is which and why the split falls there. It answers with the
+     * shard down, marking `shardSeen` false rather than refusing - the same rule the art view
+     * follows.
+     */
+    '/api/vocabulary': (request, response) => {
+        refreshVocabulary();
+        sendJson(response, 200, vocabulary.build(readJson));
     }
 };
+
+/**
+ * Asks the shard for a fresh type list when the one on disk is older than the assembly.
+ *
+ * Fire and forget, and deliberately not awaited: this request must answer at boot whether the
+ * shard is up or not, and the answer it can give right now is the previous run's list - which is
+ * correct unless Scripts.dll has been rebuilt, which is the one case this checks for. The fresh
+ * copy is there by the next fetch.
+ *
+ * Scripts.dll rather than a timer because that is exactly when the answer can change: a type is
+ * added or removed by a build, and a build means a restart.
+ */
+function refreshVocabulary() {
+    let assembly;
+    let snapshot;
+
+    try {
+        assembly = fs.statSync(path.join(whitelist.REPO_ROOT, 'Scripts.dll')).mtimeMs;
+    } catch {
+        // No assembly to compare against - a source checkout that has never been built. Nothing
+        // to ask for.
+        return;
+    }
+
+    try {
+        snapshot = fs.statSync(path.join(whitelist.REPO_ROOT, 'Data', 'Live', 'vocabulary.json')).mtimeMs;
+    } catch {
+        snapshot = 0;
+    }
+
+    if (snapshot >= assembly) {
+        return;
+    }
+
+    try {
+        writeToken('vocabulary', '');
+    } catch (error) {
+        // The shard may be down, the directory may not exist yet. Neither is worth failing the
+        // request over: the editor gets the derived half and says the shard has not answered.
+        console.log(`vocabulary: could not ask the shard (${error.message})`);
+    }
+}
 
 function handleRequest(request, response) {
     const url = new URL(request.url, `http://${HOST}`);

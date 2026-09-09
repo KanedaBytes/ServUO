@@ -74,11 +74,18 @@ export function buildShape(key, props, map, draft, context = {}) {
                     destination: context.ownerId,
                     exclusive: props.exclusive === true,
                     ...(props.exact === true || props.exact === 'true' ? { exact: true } : {}),
+                    // The form has always asked for a range and this has always dropped it, so
+                    // every arrival the editor created stood on its exact tile whatever was
+                    // typed. `range` is Ignore-on-default in the C# record and omitWhenZero in the
+                    // template, so it is written only when it is not 0 - which is also what keeps
+                    // the 115 shipped arrivals byte-identical.
+                    ...(Number(props.range) > 0 ? { range: Number(props.range) } : {}),
                     waypoints: props.waypoints || ''
                 },
                 fields: [
                     { key: 'exclusive', label: 'Exclusive', type: 'string' },
                     { key: 'exact', label: 'Exact (no scatter)', type: 'string' },
+                    { key: 'range', label: 'Arrival range (0 = the tile)', type: 'int' },
                     { key: 'waypoints', label: 'Approach waypoints', type: 'string' }
                 ]
             };
@@ -89,7 +96,9 @@ export function buildShape(key, props, map, draft, context = {}) {
             return {
                 ...common, id: `edge:${from}>${to}`, kind: 'polyline', label: `${from} - ${to}`,
                 points: draft.points.map((p) => [...p]),
-                props: { from, to, kind: 'walk', tags: '' }
+                // Tags come from the corridor that minted the edge, when one did. An edge drawn
+                // by hand has none, which is what it has always had.
+                props: { from, to, kind: 'walk', tags: props.tags || '' }
             };
         }
 
@@ -192,12 +201,13 @@ export function buildShape(key, props, map, draft, context = {}) {
             // is what [XmlLoad replaces on, and a row without one is ADDED with a fresh GUID on
             // every load instead - which is exactly how 47 stock spawners came to exist twice.
             const id = context.uniqueId;
+            const name = ggName(props.Name);
 
             return {
-                ...common, id: `spawner:${props.file}#${id}`, kind: 'point', label: props.Name,
+                ...common, id: `spawner:${props.file}#${id}`, kind: 'point', label: name,
                 map, points: [[point[0], point[1], point[2] === undefined ? 0 : point[2]]],
                 props: {
-                    Name: props.Name,
+                    Name: name,
                     UniqueId: id,
                     Map: map,
                     Range: props.Range || '0',
@@ -214,6 +224,25 @@ export function buildShape(key, props, map, draft, context = {}) {
         default:
             return null;
     }
+}
+
+/**
+ * The GG_ prefix, applied rather than typed.
+ *
+ * [XmlLoad and [XmlUnLoad both take an optional prefix filter matched with an ordinal StartsWith,
+ * so GG_ is what makes this shard's spawners addressable as a set without touching the ~2,500
+ * stock ones. A spawner that is missing it is invisible to [GG_Reimport for ever - it will not be
+ * swept and it will not be replaced - and it is the kind of thing nobody notices until a re-import
+ * leaves an orphan behind.
+ *
+ * Idempotent, so a name typed with the prefix out of habit does not become GG_GG_. Case-sensitive
+ * on the way in, because the filter that matters is ordinal: `gg_Foo` is NOT prefixed as far as
+ * [XmlLoad is concerned, so it gets the real prefix added.
+ */
+export function ggName(name) {
+    const trimmed = String(name || '').trim();
+
+    return trimmed.startsWith('GG_') ? trimmed : `GG_${trimmed}`;
 }
 
 /** Mirrors spawners.js FIELDS; editor.test.js asserts the two agree. */

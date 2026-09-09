@@ -214,13 +214,17 @@
 
 <!-- A datalist rather than a select: these run to hundreds of entries, and typing a few letters
      beats scrolling. They also degrade to free text, which is what lets an id be typed before the
-     record it names exists. -->
+     record it names exists.
+
+     These four are the ID pickers, filled by fillLists from the shapes already loaded. Every
+     other list in the editor is now a vocabulary key on the field itself, and its datalist is
+     minted with the form - see the header of js/tools.js. The spawn-file and creature lists that
+     used to be here went that way: one was the files the viewport happened to have loaded and the
+     other was whatever was already spawning, so neither could ever offer something new. -->
 <datalist id="waypoint-list"></datalist>
 <datalist id="destination-list"></datalist>
 <datalist id="route-list"></datalist>
 <datalist id="navid-list"></datalist>
-<datalist id="spawnfile-list"></datalist>
-<datalist id="creature-list"></datalist>
 
 <script type="module" src="js/app.js"></script>
 </body>

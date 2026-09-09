@@ -178,6 +178,20 @@ button:disabled { opacity: .45; cursor: default; }
 
 #modal label span { display: block; color: var(--muted); margin-bottom: 3px; }
 
+/* The one line saying what a field decides, under the control rather than in the
+   label - the label stays scannable and the explanation is where your eye already
+   is once you have stopped on the field. Narrower than the input on purpose: it is
+   prose, and prose the full width of a dialog is a paragraph nobody reads. */
+#modal label .field-help {
+    display: block;
+    margin-top: 3px;
+    max-width: 46ch;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.4;
+    opacity: .85;
+}
+
 #modal input, #modal select {
     width: 100%;
     padding: 6px 9px;
