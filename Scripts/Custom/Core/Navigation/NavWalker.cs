@@ -710,6 +710,17 @@ namespace Server.Custom
                         DescribeHop(step),
                         _watchedCycles > 0);
 
+                    // AND THE EDGE TAKES A STRIKE, so the next bot routes around it.
+                    //
+                    // Here and nowhere else: this is the only moment that knows both that the hop
+                    // failed completely and which two waypoints it lay between. Striking on a rung
+                    // instead would penalise every busy road in Britain within the hour, because
+                    // rungs 2 to 4 firing is the ladder working rather than the road failing.
+                    //
+                    // An arrival step has no waypoint id and is not an edge - the tile is the
+                    // problem there, and NavWalkFailures is what records that.
+                    NavEdgeHealth.Strike(PreviousWaypointId(), step.WaypointId);
+
                     Teleport(step);
                     Advance();
                     return;
@@ -1526,6 +1537,19 @@ namespace Server.Custom
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// The waypoint this hop started from, or null when the route began where the bot stood.
+        ///
+        /// Null is the right answer for the first step and NavEdgeHealth.Strike refuses it: a walk
+        /// that begins at the bot's own feet has no authored edge behind it to blame.
+        /// </summary>
+        private string PreviousWaypointId()
+        {
+            return _index > 0 && _route != null && _index - 1 < _route.Steps.Count
+                ? _route.Steps[_index - 1].WaypointId
+                : null;
         }
 
         private string DescribeHop(NavStep step)

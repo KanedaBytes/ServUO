@@ -338,9 +338,19 @@ namespace Server.Custom
                 lines.Add("STALE Z " + change);
             }
 
+            // What the fleet has learned the hard way. Upstream's note on the same table is that
+            // it "doubles as the data-fix backlog: an edge that keeps re-earning strikes needs a
+            // geometry pass" - so it belongs in the audit's report rather than only in a log.
+            List<string> struck = NavEdgeHealth.Describe();
+
+            foreach (string line in struck)
+            {
+                lines.Add("STRUCK " + line);
+            }
+
             summary = String.Format(
                 "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
-                + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z.",
+                + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z, {8} struck edge(s).",
                 checkedEdges,
                 blocked,
                 far,

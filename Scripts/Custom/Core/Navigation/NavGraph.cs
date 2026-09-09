@@ -638,7 +638,18 @@ namespace Server.Custom
                         continue;
                     }
 
-                    double candidate = cost[current] + link.Cost;
+                    // The edge's authored cost, times whatever the fleet has learned about it.
+                    //
+                    // Applied HERE and not at build time on purpose: an edge's cost is computed
+                    // once when the graph is built, and a penalty that decays has to be read on
+                    // every search or it would be frozen into the graph until the next reload.
+                    // Upstream reads its equivalent inside FindPath for the same reason
+                    // (uo-offline WaypointGraph.EdgePenalty, NavEdgeHealth.cs:349-352).
+                    //
+                    // A multiplier, never a removal: a penalised edge still connects, so no
+                    // destination can be cut off by a road having a bad afternoon.
+                    double candidate = cost[current]
+                        + (link.Cost * NavEdgeHealth.Penalty(_nodes[current].Id, _nodes[link.To].Id));
 
                     if (candidate >= cost[link.To])
                     {
