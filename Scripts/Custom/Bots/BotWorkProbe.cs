@@ -83,6 +83,15 @@ namespace Server.Custom
         /// </summary>
         private static GathererBehavior _walkIn;
 
+        /// <summary>
+        /// The forge under test, and what its whole bench had already received and made when the
+        /// probe started. Baselines, because the population's own fixed-role Smith stands at this
+        /// forge with counters that have been running since it clocked in.
+        /// </summary>
+        private static string _forgeId;
+        private static int _forgeReceivedBefore;
+        private static int _forgeMadeBefore;
+
         /// <summary>The second smith's brain and the two smiths themselves, for the packed-forge assertion.</summary>
         private static CrafterBehavior _second;
         private static PlayerBot _secondBot;
@@ -165,6 +174,12 @@ namespace Server.Custom
                 // tile if this shard has no bank on the graph, which still tests the walk-in.
                 NavDestination town = Nav.NearestDestination(location, map, "bank", Int32.MaxValue);
                 Point3D start = town == null ? location : town.Location;
+
+                // Baseline the whole bench before anything of ours stands at it. A fixed-role
+                // Smith is already there and already counting.
+                _forgeId = forge.Id;
+                _forgeReceivedBefore = ReceivedAtForge();
+                _forgeMadeBefore = MadeAtForge();
 
                 // The smith first, and standing at the forge, so it is already working when the
                 // ore arrives.
@@ -449,13 +464,59 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Did the ore reach a smith at the forge? Either of them: FindBuyer takes the first
-        /// crafter of the trade within twelve tiles, and with two at the bench which one is a
-        /// coin toss that says nothing about the hand-over.
+        /// Did the ore reach a smith at the forge? ANY of them.
+        ///
+        /// It was "either of the probe's two" - FindBuyer takes the first crafter of the trade
+        /// within twelve tiles, and with two at the bench which one is a coin toss that says
+        /// nothing about the hand-over. The population session adds a third: the recipe pins a
+        /// fixed-role Smith at every forge, so the bench the probe chooses is already staffed and
+        /// the fixture may well be the one FindBuyer meets. Asserting on the probe's own two would
+        /// then fail a run in which everything worked.
+        ///
+        /// So the assertion is now the one the ECONOMY actually cares about - the ore reached the
+        /// forge - measured as a delta over every crafter clocked in there, because a fixture's
+        /// own counter has been running since it attached and says nothing about this run.
         /// </summary>
         private static bool OreReachedASmith(CrafterBehavior first)
         {
-            return (first != null && first.Received > 0) || (_second != null && _second.Received > 0);
+            if ((first != null && first.Received > 0) || (_second != null && _second.Received > 0))
+            {
+                return true;
+            }
+
+            return ReceivedAtForge() > _forgeReceivedBefore;
+        }
+
+        /// <summary>Sum of Received across every crafter clocked in at the probe's forge.</summary>
+        private static int ReceivedAtForge()
+        {
+            int total = 0;
+
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (Insensitive.Equals(crafter.DestinationId, _forgeId))
+                {
+                    total += crafter.Received;
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>Sum of Made across every crafter clocked in at the probe's forge.</summary>
+        private static int MadeAtForge()
+        {
+            int total = 0;
+
+            foreach (CrafterBehavior crafter in CrafterBehavior.Live())
+            {
+                if (Insensitive.Equals(crafter.DestinationId, _forgeId))
+                {
+                    total += crafter.Made;
+                }
+            }
+
+            return total;
         }
 
         /// <summary>
@@ -471,7 +532,14 @@ namespace Server.Custom
                 return first.Made > firstMadeBefore;
             }
 
-            return _second != null && _second.Received > 0 && _second.Made > 0;
+            if (_second != null && _second.Received > 0)
+            {
+                return _second.Made > 0;
+            }
+
+            // Neither of ours took it, so a fixture at this forge did - see OreReachedASmith.
+            // Same delta, same reason.
+            return MadeAtForge() > _forgeMadeBefore;
         }
 
         /// <summary>

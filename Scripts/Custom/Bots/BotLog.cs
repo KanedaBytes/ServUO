@@ -71,7 +71,10 @@ namespace Server.Custom
         Speech,
 
         /// <summary>[BotPace measured its stepping.</summary>
-        Pace
+        Pace,
+
+        /// <summary>Logged in, or said goodbye and logged out. See BotSession.</summary>
+        Session
     }
 
     /// <summary>One entry. A struct so a fifty-deep ring is one allocation, not fifty.</summary>

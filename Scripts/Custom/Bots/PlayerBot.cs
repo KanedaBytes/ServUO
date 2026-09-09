@@ -727,6 +727,20 @@ namespace Server.Custom
             // it early - the same fault the hand switch had, and it hid for three sessions.
             PhaseStartedAt = CustomTime.Now;
             TransitionPending = false;
+
+            // THE CURVE'S WAY UP, and the last thing the seed does.
+            //
+            // Upstream refuses the spawn before construction, in an override of Spawner.Spawn
+            // (uo-offline PlayerBotSpawner.cs:75-82). XmlSpawner has no such hook, and until the
+            // seed has been applied nothing knows whether this bot is a fixture or a session - so
+            // the refusal has to happen here, after the fact. See BotSession.AllowSpawn for what
+            // that costs and why it is worth paying.
+            //
+            // A fixture is never refused: the bank crowd exists at 05:00 as it does at noon.
+            if (Role != BotRole.Fixed && Spawner != null && !BotSession.AllowSpawn())
+            {
+                Delete();
+            }
         }
 
         /// <summary>

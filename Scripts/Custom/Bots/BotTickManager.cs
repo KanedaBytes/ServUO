@@ -115,6 +115,8 @@ namespace Server.Custom
                 return;
             }
 
+            long startedAt = Core.TickCount;
+
             _plansLeft = PlansPerTick;
             _noDestination = 0;
             _noRoute = 0;
@@ -139,6 +141,8 @@ namespace Server.Custom
 
                 _scratch.Add(bot);
             }
+
+            int live = _scratch.Count;
 
             for (int i = 0; i < _scratch.Count; i++)
             {
@@ -180,10 +184,107 @@ namespace Server.Custom
                 Log.Error(ex, "The bot lifecycle pass faulted.");
             }
 
+            // And so does the session curve, for the same reason and at a third cadence. Upstream
+            // gives it a timer of its own and sweeps World.Mobiles from it every 60 seconds
+            // (uo-offline BotSessionManager.cs:134) - which is the walk CLAUDE.md section 15
+            // exists to forbid, and the scan is already in hand here.
+            try
+            {
+                BotSession.Pass(_scratch);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "The bot session pass faulted.");
+            }
+
             _scratch.Clear();
 
             NoDestinationLastTick = _noDestination;
             NoRouteLastTick = _noRoute;
+
+            Measure(Core.TickCount - startedAt, live);
+        }
+
+        // ---- what the population costs, per tick ----
+        //
+        // This exists so a population target is raised on a number rather than on nerve. The whole
+        // per-tick cost of the bot layer is this method: the LiveRegistry sweep, every behaviour's
+        // Tick, the lifecycle pass and the session pass. Bots.Recipe and Bots.Population report the
+        // mean and the max against the Custom.BotTickSeconds budget beside the live bot count, so
+        // "61 bots, 8.4 ms mean / 19 ms max of 2000 ms" is the answer to "can we run more?".
+        //
+        // Upstream measures nothing and ships a target of 1600 behind a comment reading "with <500
+        // bots this is trivially cheap" (BehaviorTickManager.cs) - two numbers that cannot both be
+        // considered opinions about the same code.
+
+        private static double _passMeanMs;
+        private static long _passMaxMs;
+        private static int _passes;
+        private static int _passBots;
+
+        /// <summary>Mean milliseconds per pass since boot, or since the last reset.</summary>
+        public static double PassMeanMs
+        {
+            get { return _passMeanMs; }
+        }
+
+        /// <summary>The worst pass since boot, in milliseconds.</summary>
+        public static long PassMaxMs
+        {
+            get { return _passMaxMs; }
+        }
+
+        /// <summary>How many bots the last measured pass covered.</summary>
+        public static int PassBots
+        {
+            get { return _passBots; }
+        }
+
+        public static int PassCount
+        {
+            get { return _passes; }
+        }
+
+        /// <summary>Start the cost measurement again - the probe does this before it measures.</summary>
+        public static void ResetCost()
+        {
+            _passMeanMs = 0.0;
+            _passMaxMs = 0;
+            _passes = 0;
+        }
+
+        /// <summary>
+        /// A running mean rather than a stored series: the question is "what does a pass cost at
+        /// this population", and a mean plus a max answers it in two numbers that cost nothing to
+        /// keep. Wraparound-safe by construction - the caller subtracts two TickCounts.
+        /// </summary>
+        private static void Measure(long elapsedMs, int bots)
+        {
+            if (elapsedMs < 0)
+            {
+                return;
+            }
+
+            _passes++;
+            _passBots = bots;
+            _passMeanMs += (elapsedMs - _passMeanMs) / _passes;
+
+            if (elapsedMs > _passMaxMs)
+            {
+                _passMaxMs = elapsedMs;
+            }
+        }
+
+        /// <summary>Mean and max against the configured tick budget, for a health line.</summary>
+        public static string DescribeCost()
+        {
+            return String.Format(
+                "tick {0:0.0} ms mean / {1} ms max of {2:0} ms over {3} pass(es) at {4} bot(s)",
+                _passMeanMs,
+                _passMaxMs,
+                Interval.TotalMilliseconds,
+                _passes,
+                _passBots);
         }
     }
 }

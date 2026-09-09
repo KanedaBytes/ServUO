@@ -89,8 +89,33 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Population", BuildHealthResult);
             HealthCheck.Register("Bots.Chat", ChatLibrary.BuildHealthResult);
             HealthCheck.Register("Bots.Work", BuildWorkHealthResult);
+            HealthCheck.Register("Bots.Recipe", BotPopulationProbe.BuildHealthResult);
 
             BotTickManager.Initialize();
+
+            BotSession.Enabled = Config.Get("Custom.BotSessionsEnabled", true);
+
+            // FILL THE SPAWNERS AT STARTUP, which is the whole of the boot behaviour we owe.
+            //
+            // Upstream's BotStartupManager.Initialize does two things: it sweeps World.Mobiles
+            // deleting stale bots, and it forces every spawner to Respawn "rather than waiting up
+            // to 15 minutes" (uo-offline BotStartupManager.cs:43-87). Only the second half is
+            // ported. The first is already done, better, and elsewhere: PlayerBot.Deserialize ends
+            // in Timer.DelayCall(Delete), so every bot deletes itself on load however it got into
+            // the save - which for this engine is the mechanism rather than a mop, because ServUO
+            // writes every mobile in World.Mobiles and ModernUO wrote none of them.
+            //
+            // ServerStarted rather than Initialize, for the reason the smoke is deferred just
+            // below: spawning during Initialize puts mobiles in the world before the map and the
+            // regions have settled.
+            if (Config.Get("Custom.BotPopulationFillOnStart", true))
+            {
+                EventSink.ServerStarted += () =>
+                {
+                    BotPopulation.RespawnAll();
+                    BotPopulationProbe.NoteFilled();
+                };
+            }
 
             if (Config.Get("Custom.BotSmokeOnStart", false))
             {
@@ -284,6 +309,18 @@ namespace Server.Custom
                 NavWalker.DescribeRungTotals(),
                 caps,
                 loaded);
+
+            // The target this population is aiming at, and what a tick of it costs.
+            //
+            // Both here as well as in Bots.Recipe, because this is the check somebody reads when
+            // they ask "how many bots are there?" and the honest answer to that includes what the
+            // number is supposed to be and what it is costing. Upstream reports neither: its
+            // target is a code literal and nothing measures the tick at all.
+            detail += String.Format(
+                ". target {0} now (peak {1}); {2}",
+                BotSession.TargetNow,
+                _store.Population.Target,
+                BotTickManager.DescribeCost());
 
             // Residents of a town with no station of their kind. Not a fault and not a rule -
             // upstream's home is a multiplier with no fallback, and so is ours - but a number
