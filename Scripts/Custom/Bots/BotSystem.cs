@@ -401,18 +401,48 @@ namespace Server.Custom
 
             // AND THE OTHER DIRECTION, which is the one that actually happened.
             //
-            // This check watched only for a leak, so a census reading LOW was invisible to it -
-            // and PickUnique's last resort used to hand out a name without claiming it, which is
-            // exactly that. Sixty live bots reported fifty-nine claimed names for a whole session
-            // and nothing said a word. The count is load-bearing now: BotSession's curve is built
-            // on it precisely because it is O(1) and exact.
+            // This check watched only for a leak, so a census reading LOW was invisible to it.
+            // With sixty bots and a logout/refill cycle running, the claim count drifts DOWN -
+            // three short after ten minutes - and it did so silently for a whole session.
+            //
+            // ONE PATH TO IT IS FIXED (PickUnique's last resort used to hand out a name without
+            // claiming it) AND THE REST IS NOT. What is known: the bots wearing an unclaimed name
+            // are named below, they are ordinary bots, and no two live bots share a name at the
+            // moment of measurement - so a claim is being removed while its wearer still lives.
+            //
+            // Worth being exact about the blast radius, because it is smaller than it looks:
+            // NOTHING IN THE POPULATION LAYER READS InUseCount. BotSession.AllowSpawn counts
+            // LiveRegistry instead, deliberately, because a separately-maintained tally is a
+            // thing that can drift - and this is that drift, arriving on schedule to prove the
+            // point. So this is a reported number that is wrong, not a decision that is wrong.
+            // Upstream's AllowSpawn does read its equivalent tally.
             if (NamePool.InUseCount < count)
             {
+                // Name them. The count alone says a fault exists; the list says which bots are
+                // wearing a name the registry does not hold, which is the whole of what somebody
+                // chasing it needs and is otherwise an afternoon with the live map.
+                var unclaimed = new List<string>();
+
+                foreach (Mobile mobile in LiveRegistry.Snapshot())
+                {
+                    var bot = mobile as PlayerBot;
+
+                    if (bot != null && !NamePool.IsClaimed(bot.Name) && unclaimed.Count < 6)
+                    {
+                        unclaimed.Add(String.Format(
+                            "{0} ({1}, {2})",
+                            bot.Name ?? "(unnamed)",
+                            bot.Role,
+                            bot.Behavior == null ? "no brain" : bot.Behavior.SerializableName));
+                    }
+                }
+
                 return HealthResult.Warn(String.Format(
-                    "{0} live bot(s) but only {1} claimed name(s) - a bot was named without "
-                    + "claiming it, so the census reads low. {2}",
+                    "{0} live bot(s) but only {1} claimed name(s) - the census reads low. "
+                    + "Unclaimed: {2}. {3}",
                     count,
                     NamePool.InUseCount,
+                    unclaimed.Count == 0 ? "none found, so a name is claimed twice" : String.Join(", ", unclaimed.ToArray()),
                     detail));
             }
 

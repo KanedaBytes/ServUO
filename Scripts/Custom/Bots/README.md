@@ -2207,6 +2207,19 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
+- **The name census drifts DOWN under a real population, and the cause is not fully found.**
+  With sixty bots and the logout/refill cycle running, `NamePool.InUseCount` falls behind the live
+  count — three short after ten minutes. One path to it is fixed: `PickUnique`'s last resort used to
+  return a name without claiming it. The rest is open. What is known: `Bots.Population` now **names
+  the bots wearing an unclaimed name** (`Dyson (Lifecycle, Traveler)`, …), they are ordinary bots
+  with no pattern to their role or brain, and no two live bots share a name at the moment of
+  measurement — so a claim is being removed while its wearer still lives, and `NamePool.Release` in
+  `OnDelete` is the only caller.
+  **The blast radius is smaller than it looks**: nothing in the population layer reads
+  `InUseCount`. `BotSession.AllowSpawn` counts `LiveRegistry` instead — deliberately, because a
+  separately-maintained tally is a thing that can drift, which is precisely what this is. It is a
+  reported number that is wrong, not a decision that is wrong. Upstream's `AllowSpawn` *does* read
+  its equivalent tally, which is worth knowing before anyone ports more of that file.
 - **`trinsic-shop-tailor-2`'s arrival is on the wrong floor.** The shop stands at Z 35; its only
   adopted arrival is at Z 15, twenty below it. So the tailor the recipe pins there finds no
   standable tile in reach and `TakeUpStation` hands it to `trinsic-shop-tailor` instead — which is

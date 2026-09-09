@@ -267,6 +267,19 @@ namespace Server.Custom
             return !String.IsNullOrEmpty(name) && _inUse.Add(name);
         }
 
+        /// <summary>
+        /// Is this name in the registry?
+        ///
+        /// Here so `Bots.Population` can NAME the bots whose claim is missing rather than only
+        /// report that the two numbers disagree. A count that is one short says there is a fault;
+        /// a list of who is unclaimed says where it is, and that is the difference between a check
+        /// somebody can act on and one they learn to scroll past.
+        /// </summary>
+        public static bool IsClaimed(string name)
+        {
+            return !String.IsNullOrEmpty(name) && _inUse.Contains(name);
+        }
+
         public static void Release(string name)
         {
             if (!String.IsNullOrEmpty(name))
