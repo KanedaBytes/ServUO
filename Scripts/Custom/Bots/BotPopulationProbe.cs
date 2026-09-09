@@ -316,9 +316,15 @@ namespace Server.Custom
         /// FAULT is in the arrival point, not in the bot, and the message should say so rather
         /// than leaving somebody to work it out from the live map.
         ///
-        /// Found on this check's first real run: trinsic-shop-tailor-2 sits at Z 35 with its only
-        /// adopted arrival at Z 15, twenty below the shop floor, so its tailor walks to
-        /// trinsic-shop-tailor and works there instead.
+        /// Found on this check's first real run: trinsic-shop-tailor-2's tailor was working at
+        /// trinsic-shop-tailor instead, because its arrival was authored inside a display case.
+        ///
+        /// The diagnosis written here originally - "the shop is at Z 35 and the arrival is twenty
+        /// below the floor" - was backwards, and is corrected in the README. The floor is Z 15, the
+        /// arrival's Z was right and its X,Y was wrong, and the destination's Z 35 pointed at the
+        /// upper of two standable storeys on its tile. Worth keeping as a caution about this
+        /// message: it can say WHERE the crafter went, which is a fact, and it cannot say why,
+        /// which is a guess somebody will believe.
         /// </summary>
         private static string WhereItWent(BotSlot slot)
         {

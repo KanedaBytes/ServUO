@@ -589,11 +589,13 @@ original when the editing UI lands.
 - **`NotifyStaff` is copied privately in three systems** (`RestrictedZoneSystem`,
   `NavigationSystem`, `DailyLifeSystem`). Three is tolerable; the fourth should become a
   `Custom/Core` helper rather than a fourth copy.
-- **`trinsic-shop-tailor-2` cannot be staffed**, and `Bots.Recipe` says so on every `[CoreSmoke`.
-  The shop stands at Z 35 and its only adopted arrival is at Z 15, twenty below the floor, so the
-  tailor the recipe pins there finds no standable tile in reach and walks to `trinsic-shop-tailor`
-  instead. The fix is an arrival point on the shop's own floor, authored in the editor; the
-  warning is deliberately left standing until it is, and it names where the crafter went.
+- **21 authored arrival points sit on tiles nothing can stand on** — `brit-bank`, `brit-square`,
+  both taverns, `brit-inn`, five shops, a guard post. `NavArrivals.TryPick` chooses among a
+  destination's arrivals at random and tests occupancy only for `exclusive` ones, so an unstandable
+  arrival is handed out like any other and every bot sent to it is a walk that cannot finish.
+  `[NavAudit` counts them, `nav-audit.json` carries them, and the editor badges each one with `!`
+  so they can be placed by eye. The stand-tile sweep in the arrivals-as-places work will stop them
+  mattering; the badge is what will get them actually fixed.
 - **`Data/Live/vocabulary.json` shrank when `[Constructable]` became the filter**, which is
   correct — it now lists what a spawner can actually construct — but nothing has audited which
   types left. If a type that used to be offered turns out to be spawnable some other way, the

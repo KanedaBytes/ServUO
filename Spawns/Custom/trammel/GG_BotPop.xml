@@ -1053,12 +1053,12 @@
     <Name>GG_BotPop_trinsic_station_trinsic-shop-tailor-2</Name>
     <UniqueId>822af186-e4d6-551d-d503-8dc31d26c7be</UniqueId>
     <Map>Trammel</Map>
-    <X>1988</X>
-    <Y>2837</Y>
+    <X>1987</X>
+    <Y>2841</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1988</CentreX>
-    <CentreY>2837</CentreY>
+    <CentreX>1987</CentreX>
+    <CentreY>2841</CentreY>
     <CentreZ>15</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>

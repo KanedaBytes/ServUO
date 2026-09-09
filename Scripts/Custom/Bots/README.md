@@ -1644,10 +1644,23 @@ Four questions, in the order they are worth asking:
 4. **Are the towns within 25% of their share, and what does a tick cost?** The share is measured
    against the *curve's* target, not the peak, or every night would report as a fault.
 
-Its first real run found `trinsic-shop-tailor-2`: the shop stands at Z 35 and its only adopted
-arrival is at Z 15, twenty below the floor, so its tailor walks to `trinsic-shop-tailor` and works
-there instead. That is a real fault in an adopted record, located precisely, by a check that had
-existed for an afternoon.
+Its first real run found `trinsic-shop-tailor-2`, and the first diagnosis of it — recorded here —
+was **backwards**. It read: the shop stands at Z 35 and its arrival is twenty below the floor. The
+truth is the other way round. The shop floor is **Z 15**; the arrival's Z was right all along and
+its **X,Y** was inside a display case, and the *destination*'s stored Z 35 was the wrong value. The
+tile at `1982,2832` has two standable storeys, 15 and 36, and the record was pointing at the upper
+one.
+
+Fixed: the arrival moved to `1987,2841` — open floor, eleven tiles from `uo-wp-170` and so inside
+the hop cap — and the destination dropped to Z 15. The tailor clocks in.
+
+**The lesson is about the resample, not the record.** `[NavResampleZ` *confirmed* Z 36 rather than
+correcting it, because `TryResolveZ` searches a window around the stored Z and 36 is a real
+standable surface there. **A hint that is wrong by more than the window is not detected — it is
+ratified.** The resample can find a Z that has gone stale under a record; it cannot find a record
+that was authored on the wrong storey to begin with. Only a person can, which is why the `z?` badge
+draws against the pick map instead: that answers "is this marker where I think it is", which is the
+question a wrong storey actually fails.
 
 ## The event log
 
@@ -2220,12 +2233,10 @@ simply does not model a bot whose job is to stay put.
   separately-maintained tally is a thing that can drift, which is precisely what this is. It is a
   reported number that is wrong, not a decision that is wrong. Upstream's `AllowSpawn` *does* read
   its equivalent tally, which is worth knowing before anyone ports more of that file.
-- **`trinsic-shop-tailor-2`'s arrival is on the wrong floor.** The shop stands at Z 35; its only
-  adopted arrival is at Z 15, twenty below it. So the tailor the recipe pins there finds no
-  standable tile in reach and `TakeUpStation` hands it to `trinsic-shop-tailor` instead — which is
-  the documented relocation rule working correctly on a broken record. `Bots.Recipe` reports it on
-  every `[CoreSmoke`, naming where the crafter went. The fix is one arrival point on the shop's own
-  floor, authored in the editor.
+- **~~`trinsic-shop-tailor-2`'s arrival is on the wrong floor.~~** *Fixed, and the diagnosis in this
+  bullet had it backwards — see the note under `Bots.Recipe` above. The shop floor is Z 15, the
+  arrival's Z was correct and its X,Y was inside a display case, and it was the destination's Z 35
+  that was wrong.* The arrival now sits at `1987,2841` and the tailor clocks in.
 - **Trinsic has no work sites at all** — no mine, no lumber — and no `plaza`, `wander` or `gate`
   destination to anchor a roaming spawner on, so its roamers fall back to the bank. Both are data,
   not code: author a Trinsic square with a `plaza` tag and the recipe picks it up with no code
