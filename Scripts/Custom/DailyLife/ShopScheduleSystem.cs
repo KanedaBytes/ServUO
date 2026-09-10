@@ -426,6 +426,29 @@ namespace Server.Custom
         /// list walk rather than a sector query - and it finds the vendor wherever it currently
         /// is, which a range search around the shop cannot.
         /// </summary>
+        /// <summary>
+        /// The shopkeeper this config means, out of everything its spawner produced.
+        ///
+        /// A SPAWNER IS NOT ONE VENDOR, which is what this used to assume. It took the first
+        /// BaseVendor whose spawner name matched and ignored `entry.Vendor` entirely - fine while
+        /// every GG_ spawner held exactly one thing, and wrong the moment one did not.
+        /// `[GG_MigrateVendors` hands over a stock spawn POINT, and two of Britain's six carry the
+        /// whole roster that point always had: GG_Carpenter is GGCarpenter + Architect +
+        /// RealEstateBroker at MaxCount 3, GG_Provisioner is GGProvisioner + Cobbler + Fisherman.
+        /// Whichever of the three the spawner happened to make first won the lookup, which is where
+        ///
+        ///     [DailyLife] Shopkeeper 'carpenter' is a Architect, which is not a daily-life vendor
+        ///
+        /// came from - a true statement about the wrong NPC. The Architect is not the shopkeeper
+        /// and never was; the config named GGCarpenter all along.
+        ///
+        /// Three passes, narrowest first. The type name is what the config actually says, so it
+        /// wins. An IDailyLifeActor from the same spawner is the fallback for a config whose
+        /// `vendor` has been renamed in code and not in the file - it still walks home, and the
+        /// mismatch is worth surviving rather than stalling on. The last pass is the old behaviour,
+        /// kept so a genuinely unmigrated spawner still resolves to SOMETHING and still trips the
+        /// IDailyLifeActor warning in Walk, which is the right complaint in that case.
+        /// </summary>
         private static BaseVendor FindVendor(ShopkeeperConfig entry)
         {
             List<BaseVendor> all = BaseVendor.AllVendors;
@@ -434,6 +457,9 @@ namespace Server.Custom
             {
                 return null;
             }
+
+            BaseVendor actor = null;
+            BaseVendor any = null;
 
             for (int i = 0; i < all.Count; i++)
             {
@@ -446,13 +472,39 @@ namespace Server.Custom
 
                 var spawner = vendor.Spawner as XmlSpawner;
 
-                if (spawner != null && !spawner.Deleted && Insensitive.Equals(spawner.Name, entry.Spawner))
+                if (spawner == null || spawner.Deleted || !Insensitive.Equals(spawner.Name, entry.Spawner))
+                {
+                    continue;
+                }
+
+                if (Insensitive.Equals(vendor.GetType().Name, entry.Vendor))
                 {
                     return vendor;
                 }
+
+                if (actor == null && vendor is IDailyLifeActor)
+                {
+                    actor = vendor;
+                }
+
+                if (any == null)
+                {
+                    any = vendor;
+                }
             }
 
-            return null;
+            if (actor != null)
+            {
+                Log.Warn(
+                    "Shopkeeper '{0}' names vendor '{1}', which spawner '{2}' did not produce; "
+                    + "using the {3} it did.",
+                    entry.Id,
+                    entry.Vendor,
+                    entry.Spawner,
+                    actor.GetType().Name);
+            }
+
+            return actor ?? any;
         }
 
         private static void StopAll()

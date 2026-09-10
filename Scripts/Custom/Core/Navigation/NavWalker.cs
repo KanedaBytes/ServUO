@@ -207,6 +207,12 @@ namespace Server.Custom
         /// <summary>Once per hop, so a bot cannot bounce between the waypoint and the goal.</summary>
         private bool _reAnchored;
 
+        /// <summary>Where the mobile stood when Follow was called. See Follow.</summary>
+        private Point3D _startedAt;
+
+        /// <summary>How many waypoints this route has skipped rather than walked. See Follow.</summary>
+        private int _skips;
+
         public NavWalker(BaseCreature mobile)
         {
             _mobile = mobile;
@@ -289,6 +295,16 @@ namespace Server.Custom
             _route = route;
             _index = 0;
             _goal = null;
+
+            // Where this walk began, and how many waypoints it has skipped rather than walked.
+            //
+            // PER ROUTE, NOT PER HOP, which is the whole reason they are set here and not in
+            // ResetHop: a skip calls ResetHop, so anything reset there cannot count skips. A
+            // terminal failure reports the distance from the mobile to the step it was on, and on
+            // a ten-tile edge that number has come back as 33 - which is either the mobile having
+            // travelled or the index having marched without it. These two say which.
+            _startedAt = _mobile.Location;
+            _skips = 0;
 
             ResetHop();
             Register(this);
@@ -825,8 +841,27 @@ namespace Server.Custom
                         Math.Abs(_mobile.Y - step.Point.Y));
                     bool arrived = reach <= Math.Max(arrivalRange, 1);
 
+                    // SAYING WHERE THE WALKER IS, not only how far it is. "It stopped 33 tiles
+                    // SHORT" on an edge authored at ten tiles is not a statement about the edge,
+                    // and "check that edge" was the wrong advice: 33 is the distance from the
+                    // MOBILE to the step, so it is either a mobile that travelled or an index that
+                    // marched without it. The line now carries the mobile's own tile, where the
+                    // route began, which step of how many, and how many of those were skipped
+                    // rather than walked - which distinguishes the two on sight.
+                    string progress = String.Format(
+                        " [at {0},{1},{2}; started {3},{4},{5}; step {6}/{7}, {8} skipped]",
+                        _mobile.X,
+                        _mobile.Y,
+                        _mobile.Z,
+                        _startedAt.X,
+                        _startedAt.Y,
+                        _startedAt.Z,
+                        _index + 1,
+                        _route == null ? 0 : _route.Count,
+                        _skips);
+
                     Log.Warn(
-                        "{0} could not walk {1} after the whole recovery ladder{2}; it was moved. {3}",
+                        "{0} could not walk {1} after the whole recovery ladder{2}; it was moved. {3}{4}",
                         Who(),
                         DescribeHop(step),
                         _watchedCycles > 0
@@ -838,8 +873,12 @@ namespace Server.Custom
                                 reach,
                                 Math.Max(arrivalRange, 1))
                             : String.Format(
-                                "It stopped {0} tile(s) SHORT of the goal - check that edge.",
-                                reach));
+                                "It stopped {0} tile(s) SHORT of the goal{1}.",
+                                reach,
+                                _skips > 0
+                                    ? " - and it SKIPPED its way there, so the edge is not the suspect"
+                                    : " - check that edge"),
+                        progress);
 
                     // BEFORE the teleport, because the teleport is what destroys the evidence: it
                     // moves the mobile onto the goal tile, so anything asked afterwards about who
@@ -856,7 +895,11 @@ namespace Server.Custom
                         _watchedCycles > 0,
                         ArrivalRangeFor(step),
                         step.Kind == NavStepKind.Arrival ? "arrival" : "waypoint",
-                        _index == 0);
+                        _index == 0,
+                        _index,
+                        _route == null ? 0 : _route.Count,
+                        _skips,
+                        _startedAt);
 
                     // AND THE EDGE TAKES A STRIKE, so the next bot routes around it.
                     //
@@ -1572,6 +1615,13 @@ namespace Server.Custom
                 step,
                 String.Format("skipping to '{0}'", next.WaypointId ?? "(next)"));
 
+            // Counted BEFORE ResetHop, which is what clears everything else, and outside it,
+            // because a skip is a fact about the ROUTE. A walker that cannot take a single step
+            // climbs the ladder, skips, resets, and climbs again - marching its index down the
+            // route while standing still - and the failure it eventually reports names a hop it
+            // never approached. This is the counter that makes that visible rather than inferred.
+            _skips++;
+
             _index++;
             _goal = null;
 
@@ -1670,6 +1720,29 @@ namespace Server.Custom
                     + "{6},{7} would take a landing.",
                     Who(),
                     previous.Id,
+                    landing.X,
+                    landing.Y,
+                    landing.Z,
+                    MaxRescueRing,
+                    step.Point.X,
+                    step.Point.Y);
+            }
+            else
+            {
+                // THE ORDINARY RESCUE WAS THE ONE THAT SAID NOTHING. Both failure paths above log;
+                // the successful one moved the mobile in silence, so a bot that reappeared on an
+                // upper floor twenty tiles from anywhere had no line naming who put it there - and
+                // 2026,2832 z 20, the first floor of a Trinsic provisioner, turned up twice in one
+                // window as the tile a walk BEGAN from with nothing authored anywhere near it.
+                // Every walker-initiated MoveToWorld now says where from, where to, and on whose
+                // authority.
+                Log.Debug(
+                    "{0} was rescued from {1},{2},{3} to {4},{5},{6} - the nearest landing within "
+                    + "{7} tiles of {8},{9}.",
+                    Who(),
+                    _mobile.X,
+                    _mobile.Y,
+                    _mobile.Z,
                     landing.X,
                     landing.Y,
                     landing.Z,

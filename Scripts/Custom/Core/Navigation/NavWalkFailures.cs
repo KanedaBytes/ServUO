@@ -114,6 +114,32 @@ namespace Server.Custom
         /// <summary>The arrival range in force, so "within range" is reproducible from the file.</summary>
         public int ArrivalRange;
 
+        /// <summary>
+        /// HOW FAR ALONG THE ROUTE the walker had got, and how much of that it walked.
+        ///
+        /// The field that answers "where did the 33 come from". A terminal failure prints the
+        /// distance from the mobile to `step.Point`, and on a hop authored at ten tiles that number
+        /// came back as 33 - which cannot be the edge, so it is either the mobile or the step. Both
+        /// are here now:
+        ///
+        ///   Index / RouteCount   which step of how many. A route whose index has run to the end
+        ///                        while the mobile stood still is TrySkipWaypoint marching it:
+        ///                        each skip advances the index and calls ResetHop, so the ladder
+        ///                        starts again and the reported hop is one the walker never
+        ///                        approached.
+        ///   Skips                how many of those there were on this route, counted rather than
+        ///                        inferred from the index, because Advance moves it too.
+        ///   StartX/Y/Z           where the mobile was when Follow was called. If that is far from
+        ///                        FromX/Y/Z the mobile travelled; if it is the same tile, it never
+        ///                        moved and the index is the whole story.
+        /// </summary>
+        public int Index;
+        public int RouteCount;
+        public int Skips;
+        public int StartX;
+        public int StartY;
+        public int StartZ;
+
         /// <summary>"Name (type) at x,y" for everything within two tiles of the GOAL.</summary>
         public readonly List<string> Near = new List<string>();
     }
@@ -162,7 +188,7 @@ namespace Server.Custom
         /// </summary>
         public static void Record(
             Mobile mobile, Map map, Point3D goal, string hop, bool watched, int arrivalRange,
-            string hopKind, bool fromStart)
+            string hopKind, bool fromStart, int index, int routeCount, int skips, Point3D start)
         {
             if (mobile == null || map == null || map == Map.Internal)
             {
@@ -185,7 +211,13 @@ namespace Server.Custom
                 Watched = watched,
                 ArrivalRange = arrivalRange,
                 HopKind = hopKind,
-                FromStart = fromStart
+                FromStart = fromStart,
+                Index = index,
+                RouteCount = routeCount,
+                Skips = skips,
+                StartX = start.X,
+                StartY = start.Y,
+                StartZ = start.Z
             };
 
             // Mobiles deliberately not counted: the question is whether the TILE can take anybody,
@@ -340,6 +372,12 @@ namespace Server.Custom
                 builder.Append(",\"hopKind\":").Append(Json.Quote(failure.HopKind));
                 builder.Append(",\"fromStart\":").Append(failure.FromStart ? "true" : "false");
                 builder.Append(",\"range\":").Append(failure.ArrivalRange);
+                builder.Append(",\"index\":").Append(failure.Index);
+                builder.Append(",\"routeCount\":").Append(failure.RouteCount);
+                builder.Append(",\"skips\":").Append(failure.Skips);
+                builder.Append(",\"startX\":").Append(failure.StartX);
+                builder.Append(",\"startY\":").Append(failure.StartY);
+                builder.Append(",\"startZ\":").Append(failure.StartZ);
                 builder.Append(",\"near\":[");
 
                 for (int n = 0; n < failure.Near.Count; n++)
