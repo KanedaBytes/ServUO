@@ -108,12 +108,20 @@ namespace Server.Custom
                 Id = "brit-mine-west", Name = "The West Cliff",
                 Type = "mine", Tag = "mine-west", Prefix = "brit-minewest",
                 Worker = BotClass.Miner,
+                // RE-MEASURED against navigation.json, which had moved out from under this table.
+                // Sean's editor pass re-placed the west cliff's arrivals and the file is where the
+                // bots read them from, so a table still naming the old tiles made [BotWorkScout
+                // report two arrivals DROPPED that are not in the file at all - and miss the two
+                // that are. Reach figures are `site-reach`'s, taken at the tiles below, and the two
+                // southern ones sit on flat forest on the FAR side of the cliff: the scout could
+                // find no walkable hop down the face to them, and their road comes round from the
+                // east through brit-minewest-1/-2 instead.
                 Arrivals = new[]
                 {
                     new Point3D(1192, 1750, 2),   // reach 15
-                    new Point3D(1196, 1756, 4),   // reach 13
-                    new Point3D(1197, 1763, 2),   // reach 13
-                    new Point3D(1197, 1774, 2),   // reach 13
+                    new Point3D(1195, 1754, 7),   // reach 14
+                    new Point3D(1196, 1776, 1),   // reach 14
+                    new Point3D(1193, 1779, 2),   // reach 14
                 },
             },
             new Site
