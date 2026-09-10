@@ -21,8 +21,12 @@ const path = require('path');
 
 const REPO = path.join(__dirname, '..', '..');
 
-const SOURCE = path.join(
-    'C:', 'Users', 'sean.GEKKOSTATE', 'uo-modernuo', 'ModernUO', 'Distribution', 'Data');
+// The uo-offline git clone, pinned at 7f38c7c - see CLAUDE.md's reference-install table. This
+// used to read the INSTALLED copy under uo-modernuo\ModernUO\Distribution\Data, whose bot content
+// is untracked and so carries no history and no per-file dates. The clone has both, and its
+// navigation data is record-for-record identical to that snapshot's, so re-pointing it changed
+// nothing in the output - which is the check to run whenever this line moves.
+const SOURCE = path.join('E:', path.sep, 'dev', 'UO', 'uo-offline', 'playerbots', 'data');
 
 const OUT = path.join(REPO, 'Data', 'Custom', 'reference', 'uo-offline-nav.trammel.json');
 

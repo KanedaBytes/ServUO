@@ -11,15 +11,25 @@ Four trees on this machine get confused for one another. Only the first is curre
 
 | Path | What it is |
 | --- | --- |
-| `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` | **The uo-offline bot reference — read this one.** `Projects/UOContent/CustomBots/` is the bot source, `Distribution/Data/` the data (`PlayerBotChat/`, `Destinations/`, `Waypoints/`, `Zones/`) |
+| `E:\dev\UO\uo-offline` | **The uo-offline reference — read this one.** A git clone at `7f38c7c`. `playerbots/source/CustomBots/` is the bot source, `playerbots/data/` the data (`PlayerBotChat/`, `Destinations/`, `Waypoints/`, `Zones/`), `tools/` and `install.ps1` the authoring and install machinery |
+| `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` | The **`fe18a469` snapshot** — an *installed* copy, with the bot source deployed to `Projects/UOContent/CustomBots/` and the data to `Distribution/Data/`. Cite it only where a Deviations row already cites it; new work reads the clone above |
 | `E:\dev\UO\ModernUO` | This shard's **previous engine**. The systems in `Scripts/Custom/` were ported from here; it is history, and still the right reference for how a ported system used to work |
 | `E:\dev\UO\uo-offline-server` | **Stale — do not read.** The previous installed copy, `91848d8`, 2026-09-05 |
-| `E:\dev\UO\uo-offline` | **Stale — do not read.** The installer/source repo (`playerbots/source/CustomBots`). Sessions up to 7e quote this tree, which is why it is named here rather than left to be rediscovered |
 
-Version in force: **uo-offline (`Klein187/uo-offline`) @ `fe18a469`, installed 2026-09-06**, on
-ModernUO `0.15.6.145-4-ge7f85d404` (2026-08-23). The stamp lives in
-`uo-modernuo\uo-offline-version.json`; the engine pin is that clone's detached HEAD. The bot
-content is **untracked** in that repo, so there is no git history for it and no per-file dates.
+Version in force: **uo-offline (`Klein187/uo-offline`) @ `7f38c7c`** ("Update window and README for
+the September 8 update", 2026-09-08), on ModernUO `0.15.6.145-4-ge7f85d404` (2026-08-23).
+
+The two trees are the same project at two pins, and the difference between them is smaller than it
+looks. **The navigation data is identical at both**: `waypoints.json` and `destinations.json` are
+record-for-record the same at `fe18a469` and `7f38c7c` — 3952 waypoints, 8554 `Connects`, 488
+destinations, nothing added, removed or changed — because `git log` on those two paths last touches
+them at `f20a96e`, which predates `fe18a46`. Their bytes differ only in line endings (the snapshot
+is LF, the clone CRLF from `core.autocrlf`). Everything that changed under `playerbots/data/`
+between the pins is `PlayerBotChat` text.
+
+The snapshot's own stamp lives in `uo-modernuo\uo-offline-version.json`; the engine pin is that
+clone's detached HEAD. The bot content is **untracked** in that repo, so there is no git history
+for it and no per-file dates — which is why the clone is now the reference: it has both.
 
 ---
 

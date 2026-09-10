@@ -171,6 +171,17 @@ path the population session adds is already covered.
 Places where this port deliberately does something else. **Each is a decision, not a gap** - if one
 looks like a mistake later, read the reason before "fixing" it back.
 
+> **Which upstream a row is talking about.** Every row below was written against the `fe18a469`
+> snapshot at `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO`, and its file:line citations are
+> paths in *that* tree - bot source under `Projects/UOContent/CustomBots/`, data under
+> `Distribution/Data/`. **The reference has moved.** New work reads the git clone at
+> `E:\dev\UO\uo-offline`, pinned at `7f38c7c`, where the same files live under
+> `playerbots/source/CustomBots/` and `playerbots/data/` - and which, unlike the snapshot, carries
+> real history for them. A row is only re-pinned when it is next revisited: rewriting them all at
+> once would restate seventy citations nobody had re-checked. The navigation data itself is
+> identical at both pins (`Data/Custom/reference/README.md` has the record-level comparison), so no
+> row that turns on waypoints or destinations is affected by the move.
+
 ### A haul goes to the nearest STAFFED bench, not to any bench of the trade
 
 Upstream's haul weighting is a pure type switch (`DestinationCatalog.cs:191-206`): `Bank => 2.0`,

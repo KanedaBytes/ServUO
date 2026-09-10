@@ -8,10 +8,22 @@ here has been verified against this shard's map.
 ## Source and licence
 
 Converted from **[Klein187/uo-offline](https://github.com/Klein187/uo-offline)**, branch `main`,
-commit **`fe18a469a47e1617579c216f68f4e433e3138ebf`**, installed 2026-09-06 — the version pinned in
-`C:\Users\sean.GEKKOSTATE\uo-modernuo\uo-offline-version.json` and named in `CLAUDE.md`.
+commit **`7f38c7cd586dc67dc96a4857754e65987351fe2e`** ("Update window and README for the September 8
+update", 2026-09-08) — the git clone at `E:\dev\UO\uo-offline`, named in `CLAUDE.md`'s
+reference-install table.
 
-Source files, under that tree's `Distribution/Data/`:
+**Re-pointed from the `fe18a469` snapshot, and the conversion did not move.** This file was first
+converted from the *installed* copy under `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO\Distribution\Data`,
+whose bot content is untracked and so has no history and no per-file dates. The clone has both. The
+two pins carry **identical navigation data** — 3952 waypoints, 8554 `Connects` and 488 destinations
+on each side, with nothing added, removed or changed, because `git log` on `Waypoints/waypoints.json`
+and `Destinations/destinations.json` last touches them at `f20a96e`, which predates `fe18a46`. Their
+bytes differ only in line endings. Re-running the converter after the re-point produced this file
+**byte-for-byte unchanged**, which is the check to repeat whenever `SOURCE` moves: a re-point that
+changes the output is either a real upstream change or converter non-determinism, and both need
+looking at before anything is adopted from it.
+
+Source files, under that tree's `playerbots/data/`:
 
 | file | records |
 | --- | --- |
@@ -21,8 +33,11 @@ Source files, under that tree's `Distribution/Data/`:
 
 **uo-offline is GPL-3.** This converted data is derived from it and carries the same licence; see
 `LICENSE-BOTS` at the repository root, which covers the bot sources ported from the same tree.
-`Distribution/Data/Navigation/fields_cache.bin` (55 MB of precomputed flow fields) is deliberately
-not imported — see `nav-format-comparison.md` §5.
+`Data/Navigation/fields_cache.bin` (55 MB of precomputed flow fields) is deliberately not imported —
+see `nav-format-comparison.md` §5. It is not in the clone at all and never was: `install.ps1:507-508`
+calls it "a generated cache the bots rebuild on first run", and
+`playerbots/source/CustomBots/Nav/DestinationFieldCache.cs:73` writes it on their side from the
+destination catalog plus live map geometry. There is nothing upstream to import even if we wanted it.
 
 ## Regenerating
 
