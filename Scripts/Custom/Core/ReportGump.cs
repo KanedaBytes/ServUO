@@ -32,21 +32,11 @@ namespace Server.Custom
         private readonly string _title;
         private readonly string _body;
 
-        /// <summary>
-        /// The same report as one selectable line. See the copy row in AddGumpLayout.
-        ///
-        /// NOT escaped, unlike the body: a text entry carries a string rather than markup, so an
-        /// angle bracket in a mobile's name is a character here and a half-open tag there. Passing
-        /// the escaped version would put a literal "&amp;lt;" into whatever somebody pasted.
-        /// </summary>
-        private readonly string _copy;
-
         public ReportGump(PlayerMobile user, string title, IList<string> lines)
             : base(user, 100, 100)
         {
             _title = title ?? "Report";
             _body = ToHtml(lines);
-            _copy = ToCopyLine(lines);
         }
 
         public override void AddGumpLayout()
@@ -62,30 +52,22 @@ namespace Server.Custom
                 false, false);
 
             // The scrollbar is the feature. Everything else on this gump is a frame around it.
-            AddHtml(14, 38, Width - 28, Height - 118, _body, true, true);
-
-            // THE COPY ROW - an experiment, kept only if it works in the client.
             //
-            // An AddHtml area cannot be selected: you can read a report and you cannot get it out
-            // of the client, which is why every report worth quoting has been retyped or
-            // screenshotted. A gump TEXT ENTRY is the only widget in the protocol that takes focus
-            // and a caret, so it is the only place Ctrl+A and Ctrl+C have anything to act on.
+            // THERE WAS A COPY ROW HERE and it is gone. The idea was that an AddHtml area cannot be
+            // selected, so a gump TEXT ENTRY - the only widget in the protocol that takes focus and
+            // a caret - could hold the whole report on one line for Ctrl+A and Ctrl+C. It was
+            // written down as an experiment kept only if it worked in the client. Tested in the
+            // client: it TRUNCATES. A text entry is a single-line widget with a length the client
+            // enforces, so a report long enough to need this gump is exactly a report the entry
+            // cannot hold - and a copy row that silently returns the first part of an answer is
+            // worse than no copy row, because the part it returns looks complete.
             //
-            // IT IS ADDED BESIDE THE HTML RATHER THAN INSTEAD OF IT, and that is a trade rather
-            // than timidity. There is no scrollable container for text entries - AddHtml's
-            // scrollbar is the only one the protocol has - so replacing the body with a stack of
-            // entries would page a forty-line [NavAudit into something you operate rather than
-            // read, which is the exact fault this gump was built to remove. One entry holding the
-            // whole report costs one row and loses nothing.
-            //
-            // The lines are joined with ' | ' because a gump text entry is a single-line widget:
-            // a newline in the string is not rendered, so the alternative to a separator is a
-            // report whose line breaks silently become nothing at all.
-            AddHtml(14, Height - 76, 120, 20,
-                "<basefont color=#9A8C98>Copy:</basefont>", false, false);
-
-            AddImageTiled(58, Height - 78, Width - 158, 22, 2624);
-            AddTextEntry(60, Height - 76, Width - 162, 20, 0, 0, _copy);
+            // There is no fix inside the protocol. AddHtml's scrollbar is the only scrollable
+            // container it has, so a stack of entries would page a forty-line report into something
+            // you operate rather than read, which is the fault this gump exists to remove. Getting
+            // a report OUT of the shard is the editor's job instead: [BotInfo's card carries the
+            // full text as selectable HTML, pulled through the `botinfo` token.
+            AddHtml(14, 38, Width - 28, Height - 78, _body, true, true);
 
             AddButton(Width - 100, Height - 40, 4017, 4019, 0, GumpButtonType.Reply, 0);
             AddHtml(Width - 68, Height - 38, 60, 20,
@@ -120,42 +102,6 @@ namespace Server.Custom
             }
 
             builder.Append("</basefont>");
-
-            return builder.ToString();
-        }
-
-        /// <summary>
-        /// The report as one line, for the copy row.
-        ///
-        /// Trimmed per line and joined with ' | ' - a text entry is single-line, so the indentation
-        /// [BotInfo uses to align its skill column would arrive as a run of spaces separating
-        /// nothing. The separator is what carries the structure once the line breaks cannot.
-        /// </summary>
-        private static string ToCopyLine(IList<string> lines)
-        {
-            if (lines == null || lines.Count == 0)
-            {
-                return "";
-            }
-
-            var builder = new StringBuilder(lines.Count * 48);
-
-            for (int i = 0; i < lines.Count; i++)
-            {
-                string line = (lines[i] ?? "").Trim();
-
-                if (line.Length == 0)
-                {
-                    continue;
-                }
-
-                if (builder.Length > 0)
-                {
-                    builder.Append(" | ");
-                }
-
-                builder.Append(line);
-            }
 
             return builder.ToString();
         }
