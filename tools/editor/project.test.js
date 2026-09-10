@@ -162,6 +162,35 @@ function navGolden() {
     return fs.readFileSync(path.join(GOLDEN, 'navigation.golden.json'), 'utf8');
 }
 
+/**
+ * Real ids, read out of the golden rather than typed in.
+ *
+ * THESE TESTS NEED A RECORD THAT EXISTS, and for a long time they named one: `brit-plaza-1`, and
+ * `brit-plaza-4/5` beside it. Then the Britain rebase replaced the town's road with uo-offline's
+ * and every one of those ids went, taking eight tests with it - tests about deleting a line, about
+ * batch ordering, about refusing a duplicate, none of which have anything to do with Britain.
+ *
+ * What they actually need is "some waypoint" and "some edge", so that is what they ask for. A test
+ * that names a live id is a test that fails the next time somebody edits the map, and the failure
+ * says nothing about the thing under test.
+ */
+function sample() {
+    const nav = JSON.parse(navGolden());
+
+    // An edge whose ends are both real, and a waypoint that is not one of that edge's ends, so a
+    // delete case and an edge case in the same file cannot interfere.
+    const ids = nav.waypoints.map((waypoint) => waypoint.id);
+    const edge = nav.edges.find((e) => ids.includes(e.from) && ids.includes(e.to));
+    const spare = ids.filter((id) => id !== edge.from && id !== edge.to);
+
+    return {
+        waypoint: spare[0],
+        second: spare[1],
+        third: spare[2],
+        edge: `edge:${edge.from}>${edge.to}`
+    };
+}
+
 /** Which whole lines a write added and removed. A save should touch as few as it possibly can. */
 function lineDiff(before, after) {
     const was = before.split('\n');
@@ -231,18 +260,20 @@ test('creating a record adds exactly one line and changes no other byte', () => 
 
 test('deleting a record removes exactly one line and changes no other byte', () => {
     const before = navGolden();
-    const after = unproject('navigation', before, { deletes: ['wp:brit-plaza-1'] });
+    const { waypoint } = sample();
+    const after = unproject('navigation', before, { deletes: [`wp:${waypoint}`] });
     const { added, removed } = lineDiff(before, after);
 
     assert.deepStrictEqual(added, []);
     assert.strictEqual(removed.length, 1);
-    assert.match(removed[0], /"id":"brit-plaza-1"/);
+    assert.ok(removed[0].includes(`"id":"${waypoint}"`));
 });
 
 test('a batch applies the same however the editor happened to order it', () => {
+    const { second, third } = sample();
     const edits = {
-        deletes: ['wp:brit-plaza-4'],
-        updates: [{ id: 'wp:brit-plaza-5', kind: 'point', map: 'Trammel', points: [[1, 2, 3]] }],
+        deletes: [`wp:${second}`],
+        updates: [{ id: `wp:${third}`, kind: 'point', map: 'Trammel', points: [[1, 2, 3]] }],
         creates: [{
             id: 'wp:test-a', kind: 'point', map: 'Trammel', points: [[7, 8, 9]],
             props: { id: 'test-a' }
@@ -319,7 +350,7 @@ test('a polyline drag writes nothing, because its line is derived from its ids',
 
     for (const shape of [
         { id: 'route:brit-watch-north', kind: 'polyline', map: 'Trammel', points: [[1, 1, 1], [2, 2, 2]] },
-        { id: 'edge:brit-plaza-1>brit-plaza-2', kind: 'polyline', map: 'Trammel', points: [[1, 1, 1], [2, 2, 2]] }
+        { id: sample().edge, kind: 'polyline', map: 'Trammel', points: [[1, 1, 1], [2, 2, 2]] }
     ]) {
         assert.strictEqual(unproject('navigation', before, { updates: [shape] }), before,
             `${shape.id} wrote geometry it does not own`);
@@ -329,7 +360,7 @@ test('a polyline drag writes nothing, because its line is derived from its ids',
 test('a prop the shard has never heard of is refused here rather than by Newtonsoft', () => {
     assert.throws(
         () => unproject('navigation', navGolden(), {
-            updates: [{ id: 'wp:brit-plaza-1', kind: 'point', props: { closesAt: 9 } }]
+            updates: [{ id: `wp:${sample().waypoint}`, kind: 'point', props: { closesAt: 9 } }]
         }),
         /waypoints has no field 'closesAt'/);
 });
@@ -375,14 +406,16 @@ test('the daily life singleton writes the anchor and both tavern values', () => 
 });
 
 test('creating a record that is already there is refused', () => {
+    const taken = sample().waypoint;
+
     assert.throws(
         () => unproject('navigation', navGolden(), {
             creates: [{
-                id: 'wp:brit-plaza-1', kind: 'point', map: 'Trammel', points: [[1, 2, 3]],
-                props: { id: 'brit-plaza-1' }
+                id: `wp:${taken}`, kind: 'point', map: 'Trammel', points: [[1, 2, 3]],
+                props: { id: taken }
             }]
         }),
-        /wp:brit-plaza-1 already exists/);
+        new RegExp(`wp:${taken} already exists`));
 });
 
 test('the first restricted zone flips its empty array to the expanded form', () => {

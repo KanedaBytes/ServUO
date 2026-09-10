@@ -392,7 +392,8 @@ the four canal bridges and the pier as well.
 | key | default | what it does |
 | --- | --- | --- |
 | `Custom.NavAdoptJoinReach` | 100 | How far a join may reach for one of our waypoints. Not the hop cap: a join is walked and subdivided like any edge, so it never has to fit in one hop. At the cap, one adopt made a single join and left 372 waypoints floating. |
-| `Custom.NavHomeWaypoint` | `brit-bank-2` | Which component is "the main graph". Was the *largest* component, which held only while we were the biggest thing in the file — one adopt of 481 waypoints against Britain's 231 inverted it and reported Britain as the island. |
+| `Custom.NavHomeWaypoint` | `uo-britain-bank` | Which component is "the main graph". Was the *largest* component, which held only while we were the biggest thing in the file — one adopt of 481 waypoints against Britain's 231 inverted it and reported Britain as the island. It is Britain's bank plaza, not a particular record: the default was `brit-bank-2` until the Britain rebase found uo-offline's waypoint on the same tile and merged ours into it. |
+| `Custom.NavAdoptMergeRadius` | 6 | In a **rebase** adopt, how close one of our waypoints has to be to the road being proposed before it counts as the same road and is removed in favour of it. Half the hop cap, so a merged route end never moves by more than half a leg — and measured to the nearest point on a proposed **edge**, not the nearest proposed waypoint. That is the calibration: uo-offline authored on a 38-tile leg so their nodes stand ~16 apart with ours between them, and Britain has 44 of its 93 within six tiles of one of their *nodes* against 73 within six tiles of one of their *roads*. |
 
 ### Sending a bot somewhere
 

@@ -137,13 +137,26 @@ async function call(method, url, body, headers) {
     return { status: response.status, body: await response.json() };
 }
 
+/**
+ * Some waypoint that is really in navigation.json, read rather than typed.
+ *
+ * This used to be the literal `brit-plaza-1`, and the Britain rebase - which replaced the town's
+ * road with uo-offline's - deleted it, failing seven tests about .bak files, reload acks and stale
+ * hashes. None of those tests is about Britain. What they need is a record that exists.
+ */
+function someWaypoint() {
+    return JSON.parse(fs.readFileSync(NAV, 'utf8')).waypoints[0].id;
+}
+
 /** A save that moves one waypoint, which is the smallest real edit there is. */
 function moveWaypoint(hash, extra) {
+    const id = someWaypoint();
+
     return {
         baseHash: hash,
         updates: [{
-            id: 'wp:brit-plaza-1', kind: 'point', map: 'Trammel', points: [[1500, 1500, 0]],
-            props: { id: 'brit-plaza-1' }
+            id: `wp:${id}`, kind: 'point', map: 'Trammel', points: [[1500, 1500, 0]],
+            props: { id }
         }],
         ...extra
     };
@@ -183,6 +196,7 @@ test('a save from a stale editor is refused and writes nothing', async () => {
 
 test('a save writes a .bak, the new file, a token, and reads its own ack', async () => {
     const before = fs.readFileSync(NAV, 'utf8');
+    const moved = someWaypoint();
 
     runShard(() => ({ ok: true, message: '75 waypoint(s), 27 destination(s), 0 warning(s)' }));
 
@@ -200,7 +214,7 @@ test('a save writes a .bak, the new file, a token, and reads its own ack', async
     const after = fs.readFileSync(NAV, 'utf8');
 
     assert.notStrictEqual(after, before);
-    assert.match(after, /"id":"brit-plaza-1","map":"Trammel","x":1500,"y":1500,"z":0/);
+    assert.ok(after.includes(`"id":"${moved}","map":"Trammel","x":1500,"y":1500,"z":0`));
     assert.strictEqual(body.hash, hashOf(after));
 
     assert.deepStrictEqual(shard.seen.map((t) => t.name), ['nav-reload']);
@@ -291,12 +305,16 @@ test('the same save twice in one process gets two different answers', async () =
 test('a dry run reports problems and touches nothing', async () => {
     const before = fs.readFileSync(NAV, 'utf8');
 
+    // The id has to be one that really exists, or the collision this test is about never happens
+    // and the bad facet gets all the way to the validator instead (a 422, not a 400).
+    const taken = someWaypoint();
+
     const { status, body } = await call('POST', '/api/save/navigation', {
         baseHash: hashOf(before),
         dryRun: true,
         creates: [{
-            id: 'wp:brit-plaza-1', kind: 'point', map: 'Sosaria', points: [[1, 2, 3]],
-            props: { id: 'brit-plaza-1' }
+            id: `wp:${taken}`, kind: 'point', map: 'Sosaria', points: [[1, 2, 3]],
+            props: { id: taken }
         }]
     });
 

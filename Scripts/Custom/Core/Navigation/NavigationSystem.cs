@@ -91,10 +91,18 @@ namespace Server.Custom
         /// Britain's bank plaza, because it is the one place this shard is certainly built around.
         /// The island check used to call the LARGEST component the mainland, which held only while
         /// we were the biggest thing in the file - a single adopt inverted it.
+        ///
+        /// IT IS THE BANK PLAZA, NOT A PARTICULAR RECORD, and the default moved once for that
+        /// reason. It was `brit-bank-2` at 1434,1697; the Britain rebase found uo-offline's
+        /// `uo-britain-bank` standing on the same tile - zero tiles apart - and merged ours into
+        /// theirs with the rest of the road. The place did not move, the id did. Anything that
+        /// replaces the road under this waypoint again has to bring this line with it: a
+        /// HomeWaypoint naming a record that no longer exists makes the island check answer about
+        /// nothing, and it answers quietly.
         /// </summary>
         public static string HomeWaypoint
         {
-            get { return Config.Get("Custom.NavHomeWaypoint", "brit-bank-2"); }
+            get { return Config.Get("Custom.NavHomeWaypoint", "uo-britain-bank"); }
         }
 
         public static int RecordIntervalTiles

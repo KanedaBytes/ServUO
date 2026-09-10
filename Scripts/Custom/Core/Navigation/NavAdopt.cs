@@ -1015,6 +1015,25 @@ namespace Server.Custom
                     return false;
                 }
 
+                // A WAYPOINT THE PROPOSAL JOINS ONTO IS NEVER MERGED, and the reason is circular
+                // rather than cautious. A join maps their edge's outside end onto our nearest
+                // waypoint and then subdivides the walk, so the subdivisions on that edge exist
+                // BECAUSE our waypoint does. Merge our waypoint into one of them and the edge
+                // becomes a self-edge, the self-edge is dropped, and the subdivision is left with
+                // no road at all - so the record every rewrite now points at is one the save never
+                // writes. Britain produced it exactly: town-7 merged into uo-town-7-s1, one hop
+                // along town-7's own join, and brit-shop-tinker came back naming a waypoint that
+                // did not exist. The proposal is deliberately attaching to these; they stay.
+                var joinTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < Pending.Count; i++)
+                {
+                    if (Pending[i].IsJoin && Pending[i].OurId != null)
+                    {
+                        joinTargets.Add(Pending[i].OurId);
+                    }
+                }
+
                 foreach (NavWaypoint ours in NavigationSystem.Graph.NodesOn(Map))
                 {
                     if (!Region.Contains(new Point2D(ours.X, ours.Y)))
@@ -1023,7 +1042,7 @@ namespace Server.Custom
                     }
 
                     // An id this proposal itself minted is not one of ours to remove.
-                    if (Waypoints.ContainsKey(ours.Id))
+                    if (Waypoints.ContainsKey(ours.Id) || joinTargets.Contains(ours.Id))
                     {
                         continue;
                     }
@@ -1035,11 +1054,28 @@ namespace Server.Custom
                     {
                         double distance = hops[i].DistanceTo(ours.X, ours.Y);
 
-                        if (distance < best)
+                        if (distance >= best)
                         {
-                            best = distance;
-                            onto = hops[i].NearerEnd(ours.X, ours.Y);
+                            continue;
                         }
+
+                        // THE TARGET HAS TO BE A PROPOSED WAYPOINT, and this is not a formality.
+                        // A join edge's far end is one of OURS, so the nearer end of a hop can be
+                        // a waypoint of ours - and the first run of the Britain box merged
+                        // brit-tink-1 into town-7 on exactly that path. Collapsing two of ours into
+                        // one is a different decision from rebasing ours onto their road: it is
+                        // legal, it preserves connectivity, and nobody asked for it. The rule is
+                        // ours-into-theirs, so a hop whose nearer end is ours offers its other end,
+                        // and a hop with no proposed end at all offers nothing.
+                        NavWaypoint target = ProposedEnd(hops[i], ours.X, ours.Y);
+
+                        if (target == null)
+                        {
+                            continue;
+                        }
+
+                        best = distance;
+                        onto = target;
                     }
 
                     if (onto == null || best > radius || Insensitive.Equals(onto.Id, ours.Id))
@@ -1211,8 +1247,75 @@ namespace Server.Custom
                     Removals.RemoveAt(i);
                 }
 
+                RepointProposedEdges();
                 PlanRewrites();
                 PlanEdgeRemovals();
+            }
+
+            /// <summary>
+            /// A PROPOSED edge may name a waypoint of ours that a merge has just removed, and it
+            /// has to be re-pointed or dropped before the proposal is offered.
+            ///
+            /// This is the join, biting back. An edge crossing into authored ground is mapped onto
+            /// our nearest waypoint and walked - so the proposal contains edges whose far end is
+            /// one of OURS - and a merge can then remove exactly that waypoint. The Britain box
+            /// produced the case in its purest form: `town-7 -> uo-town-7-s1`, a join from town-7
+            /// subdivided one hop out, and town-7 then merged into that very subdivision at zero
+            /// tiles. Saved as it stood, the edge named a record the same save was deleting, and
+            /// the reload dropped it with a warning.
+            ///
+            /// So every proposed edge is re-pointed through the merge map, an edge that becomes a
+            /// self-edge is dropped - a self-edge REFUSES the reload, it is not a warning - and a
+            /// pair that ends up duplicated is folded to one.
+            /// </summary>
+            private void RepointProposedEdges()
+            {
+                if (_merged.Count == 0)
+                {
+                    return;
+                }
+
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = Edges.Count - 1; i >= 0; i--)
+                {
+                    NavEdge edge = Edges[i];
+                    string from = MergedId(edge.From);
+                    string to = MergedId(edge.To);
+
+                    if (Insensitive.Equals(from, to))
+                    {
+                        Edges.RemoveAt(i);
+                        continue;
+                    }
+
+                    edge.From = from;
+                    edge.To = to;
+                }
+
+                // Duplicates are folded from the front, so the first-written edge is the one kept
+                // and the proposal's order is otherwise untouched.
+                for (int i = 0; i < Edges.Count; i++)
+                {
+                    string a = Edges[i].From, b = Edges[i].To;
+                    string key = String.Compare(a, b, StringComparison.OrdinalIgnoreCase) <= 0
+                        ? a + ">" + b
+                        : b + ">" + a;
+
+                    if (seen.Add(key))
+                    {
+                        continue;
+                    }
+
+                    Edges.RemoveAt(i--);
+                }
+            }
+
+            private string MergedId(string id)
+            {
+                string onto;
+
+                return _merged.TryGetValue(id ?? "", out onto) ? onto : id;
             }
 
             /// <summary>
@@ -1314,6 +1417,15 @@ namespace Server.Custom
                         continue;
                     }
 
+                    // A ROUTE'S STEPS ARE A PATH, NOT A SET, so re-pointing each one on its own is
+                    // not enough. Two adjacent steps that merged onto records further apart than
+                    // the hop cap leave a leg the walker cannot plan - brit-courier-loop came back
+                    // with legs of 13, 14, 16 and 14 tiles the first time this ran, on a route
+                    // whose every leg had been under twelve. So a leg over the cap is re-filled
+                    // from the graph this proposal is about to make, and the route keeps its shape
+                    // by following the new road between the two points rather than by luck.
+                    next = Refill(next);
+
                     if (Split(next).Count < 2)
                     {
                         // A route with fewer than two steps refuses the reload outright, so this
@@ -1384,6 +1496,162 @@ namespace Server.Custom
                 return true;
             }
 
+            /// <summary>
+            /// Put the intermediate steps back into any leg the merge stretched past the hop cap,
+            /// by walking the graph this proposal is about to make.
+            ///
+            /// THE GRAPH IS THE POST-SAVE ONE, assembled here rather than read: our own edges minus
+            /// the ones a removal takes away, plus the proposal's, with every end re-pointed
+            /// through the merge map. That is the only graph in which the answer is true - ours no
+            /// longer has the road, and the proposal's alone does not have the parts of the town we
+            /// kept.
+            ///
+            /// A breadth-first search rather than a cost search on purpose: this is repairing an
+            /// authored patrol route, and the shortest chain of hops between two points a person
+            /// chose is the honest reconstruction of what they drew. A leg that cannot be filled at
+            /// all is left as it is - over-cap and reported by the reload - because inventing a
+            /// detour for a patrol nobody can walk would hide it.
+            /// </summary>
+            private string Refill(string ids)
+            {
+                List<string> steps = Split(ids);
+
+                if (steps.Count < 2)
+                {
+                    return ids;
+                }
+
+                Dictionary<string, List<string>> links = MergedAdjacency();
+                int cap = NavigationSystem.HopMaxTiles;
+                var built = new List<string> { steps[0] };
+
+                for (int i = 1; i < steps.Count; i++)
+                {
+                    string a = steps[i - 1], b = steps[i];
+
+                    if (!Insensitive.Equals(a, b) && Tiles(a, b) > cap)
+                    {
+                        List<string> between = ShortestPath(links, a, b);
+
+                        // The interior only: the ends are already in the list, or about to be.
+                        for (int j = 1; between != null && j < between.Count - 1; j++)
+                        {
+                            built.Add(between[j]);
+                        }
+                    }
+
+                    if (!Insensitive.Equals(built[built.Count - 1], b))
+                    {
+                        built.Add(b);
+                    }
+                }
+
+                return String.Join(" ", built.ToArray());
+            }
+
+            /// <summary>The graph as it will be after this proposal is saved. See Refill.</summary>
+            private Dictionary<string, List<string>> MergedAdjacency()
+            {
+                var links = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (NavEdge edge in NavigationSystem.Store.Edges)
+                {
+                    if (_merged.ContainsKey(edge.From ?? "") || _merged.ContainsKey(edge.To ?? ""))
+                    {
+                        continue;
+                    }
+
+                    Link(links, edge.From, edge.To);
+                }
+
+                for (int i = 0; i < Edges.Count; i++)
+                {
+                    Link(links, Edges[i].From, Edges[i].To);
+                }
+
+                return links;
+            }
+
+            private static void Link(Dictionary<string, List<string>> links, string a, string b)
+            {
+                if (String.IsNullOrEmpty(a) || String.IsNullOrEmpty(b))
+                {
+                    return;
+                }
+
+                List<string> to;
+
+                if (!links.TryGetValue(a, out to))
+                {
+                    links[a] = to = new List<string>();
+                }
+
+                to.Add(b);
+
+                if (!links.TryGetValue(b, out to))
+                {
+                    links[b] = to = new List<string>();
+                }
+
+                to.Add(a);
+            }
+
+            private static List<string> ShortestPath(
+                Dictionary<string, List<string>> links, string from, string to)
+            {
+                if (!links.ContainsKey(from) || !links.ContainsKey(to))
+                {
+                    return null;
+                }
+
+                var back = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var queue = new Queue<string>();
+
+                back[from] = null;
+                queue.Enqueue(from);
+
+                while (queue.Count > 0)
+                {
+                    string at = queue.Dequeue();
+
+                    if (Insensitive.Equals(at, to))
+                    {
+                        var path = new List<string>();
+
+                        for (string step = to; step != null; step = back[step])
+                        {
+                            path.Insert(0, step);
+                        }
+
+                        return path;
+                    }
+
+                    foreach (string next in links[at])
+                    {
+                        if (!back.ContainsKey(next))
+                        {
+                            back[next] = at;
+                            queue.Enqueue(next);
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            /// <summary>Tile distance between two records, whichever graph each of them lives in.</summary>
+            private int Tiles(string a, string b)
+            {
+                NavWaypoint one = Resolve(a), two = Resolve(b);
+
+                if (one == null || two == null)
+                {
+                    return Int32.MaxValue;
+                }
+
+                return Math.Max(Math.Abs(one.X - two.X), Math.Abs(one.Y - two.Y));
+            }
+
             private static List<string> Split(string ids)
             {
                 var found = new List<string>();
@@ -1401,6 +1669,47 @@ namespace Server.Custom
                 }
 
                 return found;
+            }
+
+            /// <summary>
+            /// The end of a hop a merge may point at: the nearer one when this proposal is minting
+            /// it, the further one when the nearer is a waypoint of ours, and nothing when neither
+            /// is proposed. See the comment at the call site for why ours is never a target.
+            /// </summary>
+            private NavWaypoint ProposedEnd(Hop hop, int x, int y)
+            {
+                NavWaypoint nearer, further;
+                hop.Ends(x, y, out nearer, out further);
+
+                if (IsProposed(nearer))
+                {
+                    return nearer;
+                }
+
+                return IsProposed(further) ? further : null;
+            }
+
+            private bool IsProposed(NavWaypoint waypoint)
+            {
+                if (waypoint == null)
+                {
+                    return false;
+                }
+
+                if (Waypoints.ContainsKey(waypoint.Id))
+                {
+                    return true;
+                }
+
+                for (int i = 0; i < Subdivisions.Count; i++)
+                {
+                    if (Insensitive.Equals(Subdivisions[i].Id, waypoint.Id))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             /// <summary>One proposed hop, and the geometry a merge is measured against.</summary>
@@ -1437,15 +1746,18 @@ namespace Server.Custom
                 }
 
                 /// <summary>
-                /// Which end a merged record should name. The nearer of the two, because that is
-                /// the one a route through this hop reaches first from where our waypoint stood.
+                /// The two ends, nearer first - the nearer being the one a route through this hop
+                /// reaches first from where our waypoint stood.
                 /// </summary>
-                public NavWaypoint NearerEnd(int x, int y)
+                public void Ends(int x, int y, out NavWaypoint nearer, out NavWaypoint further)
                 {
                     double da = (A.X - x) * (double)(A.X - x) + (A.Y - y) * (double)(A.Y - y);
                     double db = (B.X - x) * (double)(B.X - x) + (B.Y - y) * (double)(B.Y - y);
 
-                    return da <= db ? A : B;
+                    bool first = da <= db;
+
+                    nearer = first ? A : B;
+                    further = first ? B : A;
                 }
             }
 
