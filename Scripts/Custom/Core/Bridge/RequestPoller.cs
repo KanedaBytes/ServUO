@@ -273,6 +273,98 @@ namespace Server.Custom
                     return true;
                 }
 
+                // What the engine sees at one tile, and whether it will let a step onto it.
+                // Body "x,y" or "x,y,z" - several tiles may be given, separated by whitespace.
+                //
+                // Answers in `warnings` as well as to Data/Live/tile-probe.json, because this is
+                // the one request whose whole value is the LINES: a headless run reads them off
+                // the ack, and a passability question answered by a count is no answer at all.
+                case "tile-probe":
+                {
+                    var probed = new List<string>();
+                    int tiles = 0;
+
+                    // "sweep <lo> <hi>" - every world item in an ItemID range, reporting the ones
+                    // the engine will let a mobile step onto. The sampling form below cannot
+                    // answer a question about 519 tiles, and a token is capped at 4 KB.
+                    if (Insensitive.Equals(FirstWord(body), "sweep"))
+                    {
+                        string[] range = (body ?? "").Split(
+                            new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+                        int lo, hi;
+
+                        if (range.Length < 3
+                            || !TryParseId(range[1], out lo)
+                            || !TryParseId(range[2], out hi))
+                        {
+                            message = "sweep takes two ItemIDs: \"sweep 0x0B20 0x0B25\"";
+                            return false;
+                        }
+
+                        warnings = TileProbe.Sweep(Map.Trammel, lo, hi);
+
+                        string sweepError;
+
+                        if (!AtomicFile.Write(
+                            TileProbe.SnapshotPath, LinesJson(warnings), out sweepError))
+                        {
+                            message = sweepError;
+                            return false;
+                        }
+
+                        message = warnings.Count > 1 ? warnings[1] : "swept";
+                        return true;
+                    }
+
+                    foreach (string word in (body ?? "").Split(
+                        new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string[] numbers = word.Split(',');
+                        int px, py;
+
+                        if (numbers.Length < 2
+                            || !Int32.TryParse(numbers[0], out px)
+                            || !Int32.TryParse(numbers[1], out py))
+                        {
+                            continue;
+                        }
+
+                        int pz;
+                        int? hint = numbers.Length > 2 && Int32.TryParse(numbers[2], out pz)
+                            ? (int?)pz
+                            : null;
+
+                        if (tiles > 0)
+                        {
+                            probed.Add("");
+                        }
+
+                        probed.Add(String.Format(
+                            "== {0},{1}{2} ==", px, py, hint == null ? "" : "," + hint.Value));
+                        probed.AddRange(TileProbe.Describe(Map.Trammel, px, py, hint));
+                        tiles++;
+                    }
+
+                    if (tiles == 0)
+                    {
+                        message = "no tile given; the body is \"x,y\" or \"x,y,z\"";
+                        return false;
+                    }
+
+                    string probeError;
+
+                    if (!AtomicFile.Write(TileProbe.SnapshotPath, LinesJson(probed), out probeError))
+                    {
+                        message = probeError;
+                        return false;
+                    }
+
+                    warnings = probed;
+                    message = String.Format("{0} tile(s) probed", tiles);
+                    return true;
+                }
+
                 // The Z resample. Body "apply" writes; anything else is a dry run.
                 //
                 // Never a failure for finding something, as nav-audit is not: a record the walker
@@ -888,6 +980,45 @@ namespace Server.Custom
         /// The first space-delimited word of a body, skipping the bridge's `#nonce`. Bodies that
         /// take one optional argument all want this and nothing more.
         /// </summary>
+        /// <summary>An ItemID written either way round - "0x0B20" or "2848".</summary>
+        private static bool TryParseId(string word, out int id)
+        {
+            if (word != null && word.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                return Int32.TryParse(
+                    word.Substring(2),
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out id);
+            }
+
+            return Int32.TryParse(word, out id);
+        }
+
+        /// <summary>
+        /// A list of report lines as JSON, for the requests whose whole answer IS the lines.
+        ///
+        /// The ack caps its details at MaxDetails so the console stays readable; a file has no
+        /// reason to, and a probe truncated at forty lines is a probe you have to run again.
+        /// </summary>
+        private static string LinesJson(IList<string> lines)
+        {
+            var builder = new StringBuilder(1024);
+
+            builder.Append("{\n  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o")));
+            builder.Append(",\n  \"lines\": [\n");
+
+            for (int i = 0; i < lines.Count; i++)
+            {
+                builder.Append("    ").Append(Json.Quote(lines[i]));
+                builder.Append(i < lines.Count - 1 ? ",\n" : "\n");
+            }
+
+            builder.Append("  ]\n}\n");
+
+            return builder.ToString();
+        }
+
         private static string FirstWord(string body)
         {
             string[] parts = body.Split(new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);

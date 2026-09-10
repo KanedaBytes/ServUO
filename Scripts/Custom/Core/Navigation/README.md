@@ -393,6 +393,43 @@ rather than giving up after two repaths. But **a `could not walk` line is still 
 the bug**: check occupancy and the approach tiles before believing the data is wrong, because the
 geometry pass has already told you the road exists.
 
+#### And whether the engine is telling the truth at all
+
+Every number on this page is worth what the engine's honesty is worth, so it was checked rather
+than assumed. The occasion was a report that a player and bots could walk onto lamp posts and
+braziers on this shard, where stock ServUO and the uo-offline ModernUO build refuse. **The
+regression does not exist, and here is what was measured rather than argued:**
+
+- **The movement path is byte-identical to upstream ServUO `pub57`.** Six tracked files in the
+  whole tree differ from the fork point `d76bf444`; `Server/` is untouched entirely, and so are all
+  eight files under `Scripts/Services/Pathing/`. The one `.cs` edit is `BotShove` in
+  `BaseCreature.OnMoveOver`, which runs *after* `CheckMovement` has approved the tile
+  (`Server/Mobile.cs:3138`) and can only loosen mobile-vs-mobile collision. Nothing under
+  `Scripts/Custom/` assigns `Movement.Impl`, either global switch, or mutates `TileData`.
+- **All 519 lamp posts on Trammel were swept, and 0 are passable** — `tile-probe sweep 0x0B20
+  0x0B25`, asking `CheckMovement` from each of the eight neighbours with a real uncontrolled
+  `BaseCreature`. Their positions, ItemIDs and Z values also match `Data/Decoration/**/*.cfg`
+  exactly, 519 for 519, and every one of them is in all three item lists (`World.Items`, the
+  sector's, and `GetItemsInRange`).
+- **The brazier is a tiledata fact, not a bug.** `0x0E31`, `0x0E32` and `0x0E33` — the ones
+  `[Decorate` places in towns — are **not** `Impassable` and have height 0. They are passable on
+  stock ServUO and on ModernUO too. Only `0x19AA`, `0x19BB` and `0x1F2B` block.
+
+So the audit's `0 blocked` over 655 edges was **not** measured against a permissive engine. Two
+things can still put a mobile somewhere an impassable tile says it cannot be, and neither is
+`CheckMovement` failing:
+
+1. **Staff cut diagonals.** `FastMovementImpl.CheckMovement:441` requires *both* diagonal side
+   tiles to pass only for `m.Player && m.AccessLevel < GameMaster`; everything else needs one. A
+   GM squeezes past a lamp post on a diagonal where a player cannot. That is upstream's rule.
+2. **`MoveToWorld`, which asks nothing.** Every teleport in this tree is a placement, not a step:
+   `TryPickLanding` validates with `CanFit`, but `NavWalker.OnTransition`'s fallback does not, and
+   neither do the fixed-coordinate placements in the probes and daily-life systems.
+
+`RefusesSolidTile` in `NavMovement.cs` now asks the engine to refuse a step from 1842,2711 onto the
+sandstone wall static at 1843,2711 on every `[CoreSmoke`, and reports both global switches beside
+it. A map static rather than a decoration, so a re-decorate cannot turn the check into noise.
+
 ### The second pass: `OCCUPIED`
 
 After an edge passes the geometry check, the audit re-walks the path the engine just returned and

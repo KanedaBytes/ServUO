@@ -236,6 +236,7 @@ checkpoint has shipped it as `True` once already.
 | `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
 | `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
+| `[TileProbe [<x> <y> [z]]` | Administrator | What the engine sees at a tile - land, statics, items in all three lists, the movement switches, and whether a step onto it is refused from each of the eight neighbours (token: `tile-probe`, which also takes `sweep <lo> <hi>` over an ItemID range) |
 | `[DayPhase` | GameMaster | Report the day phase, anchor time and whether an override is active |
 | `[DayPhase <dawn\|day\|dusk\|night\|clear>` | GameMaster | Force a phase for testing, or release it |
 | `[DailyLifeReload` | GameMaster | Re-read `britain-daily-life.json` and rebuild the town |

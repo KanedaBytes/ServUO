@@ -1527,6 +1527,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `world-items` | `WorldItemSnapshot.TryWrite`; the body is an optional facet name. The art view's furniture |
 | `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
 | `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`; answers to `Data/Live/nav-hop.json` |
+| `tile-probe` | What the engine sees at a tile, and whether it will let a step onto it. Body `"x,y"` or `"x,y,z"` (several may be given), or `"sweep <lo> <hi>"` for every world item in an ItemID range; answers to `Data/Live/tile-probe.json` and in the ack's `warnings` |
 | `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |
 
 **`save` exists because there is no other way to save from outside the game.** ServUO's console

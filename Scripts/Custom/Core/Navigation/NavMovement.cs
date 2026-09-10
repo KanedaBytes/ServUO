@@ -81,10 +81,106 @@ namespace Server.Custom
             HealthCheck.Register("Nav.Movement", BuildHealthResult);
         }
 
+        /// <summary>
+        /// A tile the engine must refuse, and the tile a mobile stands on to be refused from it.
+        ///
+        /// Trinsic's alchemist, the sandstone wall at 1843,2711 z 10 - Impassable, 20 tall, and a
+        /// MAP STATIC rather than a world item, deliberately: a decoration can be moved, deleted or
+        /// never placed, and a check that fails because somebody re-decorated is a check people
+        /// learn to ignore. This one is in statics0.mul and can only change if the client data
+        /// does. Its neighbour at 1842,2711 is the shop's wooden floor at the same Z.
+        /// </summary>
+        private static readonly Point3D SolidTile = new Point3D(1843, 2711, 10);
+        private static readonly Point3D SolidFrom = new Point3D(1842, 2711, 10);
+
+        /// <summary>
+        /// Whether the engine still refuses a step onto a known-impassable static.
+        ///
+        /// WHY A HEALTH CHECK AND NOT A COMMENT. "A player can walk onto lamp posts" was reported
+        /// against this shard, and answering it took a diff of the whole movement path against
+        /// upstream, a read of tiledata.mul and a sweep of all 519 lamp posts in the world. The
+        /// answer was no - but nothing in the tree could have said so, and every walkability number
+        /// this shard publishes (`[NavAudit`'s 655 edges, the unstandable arrivals, the failure
+        /// ledger) is worth what the engine's honesty is worth. So the engine is asked, on every
+        /// `[CoreSmoke`, in one line.
+        ///
+        /// The two globals go with it. `MovementImpl.IgnoreMovableImpassables` and
+        /// `AlwaysIgnoreDoors` are plain statics set without `try`/`finally` (BaseAI.cs:2358,
+        /// FastAStarAlgorithm.cs:93-94, SlowAStarAlgorithm.cs:156-157, PlayerMobile.cs:2081) and
+        /// cleared only on explicit return paths, so an exception thrown anywhere inside `Move`
+        /// leaves one of them set for every mobile for the rest of the process - and this tree put
+        /// its own code (BotShove, through BaseCreature.OnMoveOver) inside that window. A leak is
+        /// invisible until something walks through a fence; here it is a red line on boot.
+        /// </summary>
+        public static bool RefusesSolidTile(out string detail)
+        {
+            Map map = Map.Trammel;
+
+            var probe = new Server.Mobiles.Rat { Blessed = true, Frozen = true, Controlled = true };
+
+            try
+            {
+                probe.MoveToWorld(SolidFrom, map);
+
+                int newZ;
+
+                bool allowed = Movement.Movement.CheckMovement(
+                    probe,
+                    map,
+                    SolidFrom,
+                    Utility.GetDirection(SolidFrom, SolidTile),
+                    out newZ);
+
+                detail = String.Format(
+                    "a step from {0},{1} onto the sandstone wall at {2},{3} is {4}",
+                    SolidFrom.X,
+                    SolidFrom.Y,
+                    SolidTile.X,
+                    SolidTile.Y,
+                    allowed ? "ALLOWED" : "refused");
+
+                return !allowed;
+            }
+            catch (Exception ex)
+            {
+                detail = "the solid-tile probe threw: " + ex.Message;
+                return false;
+            }
+            finally
+            {
+                probe.Delete();
+            }
+        }
+
         public static HealthResult BuildHealthResult()
         {
             string name = ImplName;
             bool? blocks = BlocksOnMobiles;
+
+            string solid;
+            bool refuses = RefusesSolidTile(out solid);
+
+            bool leaked = MovementImpl.IgnoreMovableImpassables || MovementImpl.AlwaysIgnoreDoors;
+
+            if (!refuses)
+            {
+                return HealthResult.Fail(String.Format(
+                    "Movement.Impl is '{0}' and {1} - an impassable static is not blocking, so every "
+                    + "walkability number this shard publishes is measured against a permissive "
+                    + "engine{2}",
+                    name,
+                    solid,
+                    leaked ? ". " + LeakDetail() : ""));
+            }
+
+            if (leaked)
+            {
+                return HealthResult.Warn(String.Format(
+                    "Movement.Impl is '{0}' and {1}, but {2}",
+                    name,
+                    solid,
+                    LeakDetail()));
+            }
 
             if (blocks == null)
             {
@@ -97,12 +193,23 @@ namespace Server.Custom
 
             return HealthResult.Ok(String.Format(
                 "Movement.Impl is '{0}': a standing mobile {1} a step onto its tile, so an occupied "
-                + "tile is {2}",
+                + "tile is {2}; {3}",
                 name,
                 blocks.Value ? "BLOCKS" : "does not block",
                 blocks.Value
                     ? "refused before OnMoveOver and BotShove are ever consulted"
-                    : "refused only by the occupant's own OnMoveOver, which is where BotShove sits"));
+                    : "refused only by the occupant's own OnMoveOver, which is where BotShove sits",
+                solid));
+        }
+
+        private static string LeakDetail()
+        {
+            return String.Format(
+                "MovementImpl.IgnoreMovableImpassables={0} and AlwaysIgnoreDoors={1} on an idle "
+                + "shard - both are set without try/finally and cleared only on explicit return "
+                + "paths, so a set flag here is a leak out of a throwing Move, not a setting",
+                MovementImpl.IgnoreMovableImpassables,
+                MovementImpl.AlwaysIgnoreDoors);
         }
     }
 }
