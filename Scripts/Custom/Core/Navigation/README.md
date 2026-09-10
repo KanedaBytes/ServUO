@@ -257,12 +257,41 @@ in the forgiving direction:
 
 | | Audit probe (`Point3D`) | Walker probe (uncontrolled `BaseCreature`) |
 | --- | --- | --- |
-| Mobiles in the way | invisible — `checkMobs` is false | **every tile but the goal is blocked by whoever stands on it** (`Movement.cs:411`) |
+| Mobiles in the way | invisible | invisible **to the pathfinder**, then refused **at the step** by whoever it is — see below |
 | Closed doors | solid | walked through, if `CanOpenDoors` (`FastAStarAlgorithm.cs:92`) |
 | Start tile | the authored waypoint, exactly | wherever the last hop stopped — anywhere in the `ArrivalRangeFor` box, 2 tiles by default |
 
 The door row is the known false positive above. **The other two rows are false negatives, and
 those are the dangerous ones, because a clean report is silent about them.**
+
+#### Which movement implementation is installed, and why it decides the first row
+
+**`FastMovementImpl` is what is live, not `MovementImpl`,** and the difference is the whole first
+row. Both install themselves and the last one wins: `MovementImpl.Configure()`
+(`Scripts/Services/Pathing/Movement.cs:65`) runs in the Configure pass, then
+`FastMovementImpl.Initialize()` (`FastMovement.cs:23`) runs in the Initialize pass and replaces it,
+keeping the first as a `_Successor` it delegates to only while `Enabled` is false. Nothing in this
+tree sets `Enabled` to false.
+
+`MovementImpl` refuses an uncontrolled `BaseCreature` any tile holding a live mobile
+(`Movement.cs:345-356`, exemption at `:411`). **`FastMovementImpl` never builds a mobile list at
+all** (`FastMovement.cs:361-484`). So on this shard:
+
+- `MovementPath` plans straight through a standing vendor — which is why the audit's occupancy pass
+  finds so many, 31 of 655 edges on one boot;
+- the step is then refused by **the occupant's own `OnMoveOver`** (`Server/Mobile.cs:3216`), where
+  a fellow bot or a daily-life actor consents through `BotShove` and a stock NPC or a real player
+  does not.
+
+This was written down the other way round for a while, and `NavWalker.TryShiftWithinArrival` and
+`NavArrivals.Choose` both argued from it. `NavMovement.cs` now reports the live answer as the
+`Nav.Movement` health check on every `[CoreSmoke`, so the next reader does not have to derive it:
+
+```
+[OK] Nav.Movement - Movement.Impl is 'FastMovementImpl': a standing mobile does not block a step
+onto its tile, so an occupied tile is refused only by the occupant's own OnMoveOver, which is
+where BotShove sits
+```
 
 Seen in practice: `Perrin could not walk brit-prov-1 -> brit-cour-2` while the audit reported all
 86 edges clean. `brit-prov-1` (1469,1668) has a stock vendor standing on it permanently — the

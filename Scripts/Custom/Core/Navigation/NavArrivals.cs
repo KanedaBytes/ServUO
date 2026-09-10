@@ -93,13 +93,17 @@ namespace Server.Custom
         ///
         /// IT USED TO BE A FLAT RANDOM PICK, and occupancy was consulted only for `exclusive`
         /// arrivals - so a bank with four arrival points routinely sent a bot to the one another
-        /// bot was already standing on. That is not a near miss on this engine, it is an
-        /// impossible walk: Movement.CheckMovement refuses an uncontrolled BaseCreature any tile
-        /// holding a live mobile (Movement.cs:345-356), and the goal-tile exemption at :411 reads
-        /// MoveImpl.Goal, which is set only INSIDE the A* search and reset to Point3D.Zero before
-        /// the mobile ever steps (FastAStarAlgorithm.cs:97, :104). So the bot cannot arrive, the
-        /// recovery ladder climbs for eighty seconds, and it is teleported onto the tile it could
-        /// not walk to.
+        /// bot was already standing on, and the recovery ladder climbed for eighty seconds before
+        /// the bot was teleported onto the tile it could not walk to.
+        ///
+        /// THE REASON GIVEN HERE WAS WRONG, and is corrected rather than deleted because the
+        /// conclusion survives it. It said Movement.CheckMovement refuses an uncontrolled
+        /// BaseCreature any tile holding a live mobile (Movement.cs:345-356, exemption at :411
+        /// reading MoveImpl.Goal, set only inside the A* search). All true of MovementImpl, which
+        /// is not what is installed: FastMovementImpl replaces it in the Initialize pass and never
+        /// checks mobiles at all (FastMovement.cs:23-26, :361-484). See NavMovement.cs. The step is
+        /// refused by the OCCUPANT's OnMoveOver instead (Mobile.cs:3216) - so a bot-occupied
+        /// arrival is merely crowded, and a vendor-occupied one is the impossible walk.
         ///
         /// Preference rather than refusal: with every arrival taken, aiming at a taken one and
         /// letting the stand-tile sweep find a neighbour is still better than standing still.

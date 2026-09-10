@@ -787,21 +787,26 @@ namespace Server.Custom
         /// <summary>
         /// Re-aim at a free tile inside the arrival's range, once, when the goal tile is occupied.
         ///
-        /// WHY THIS IS NECESSARY AND NOT AN OPTIMISATION. A bot cannot step onto a tile a live
-        /// mobile is standing on. Movement.CheckMovement collects the mobiles on the forward tile
-        /// and refuses the step (Movement.cs:345-356); the exemption at :411 is gated on
-        /// MoveImpl.Goal, which FastAStarAlgorithm sets for the duration of the SEARCH and resets
-        /// to Point3D.Zero before returning (:97, :104) - so by the time the mobile actually steps,
-        /// nothing is exempt. Mobile.Move calls CheckMovement at :3138 and only reaches the
-        /// OnMoveOver loop at :3216 if it passed, which means BotShove is never consulted on an
-        /// occupied tile at all.
+        /// WHY AN OCCUPANT IS A REASON TO WANT A DIFFERENT TILE - CORRECTED, because this comment
+        /// argued from the wrong implementation for as long as it existed.
         ///
-        /// So "take the occupied tile, the shove makes it legal" is not available on this engine,
-        /// however willing both sides are. An occupied goal is an impossible goal, and the only
-        /// useful move is to want a different tile.
+        /// It used to say that Movement.CheckMovement collects the mobiles on the forward tile and
+        /// refuses the step (Movement.cs:345-356, exemption at :411 gated on MoveImpl.Goal), so an
+        /// occupied goal was an impossible goal and BotShove was never consulted at all. Every line
+        /// of that is true of MovementImpl - and MovementImpl is not what is installed.
+        /// FastMovementImpl replaces it in the Initialize pass and never checks mobiles at any
+        /// point (FastMovement.cs:23-26, :361-484). See NavMovement.cs, and the [CoreSmoke line
+        /// that reports which one is live.
         ///
-        /// ANY occupant counts, not only the ones a bot may not shove. The engine refuses the step
-        /// for a fellow bot exactly as it does for a vendor.
+        /// So the real gate is the occupant's own OnMoveOver, reached at Mobile.cs:3216: a fellow
+        /// bot or a daily-life actor consents through BotShove and the step IS legal; a stock NPC
+        /// or a real player refuses it and the step is not.
+        ///
+        /// ANY occupant still counts here, and deliberately, but as a PREFERENCE rather than an
+        /// impossibility: this layer is Core and must not learn what a bot is to ask which
+        /// occupants consent, and a free tile is the better tile either way. What changes is that
+        /// failing to shift is no longer fatal - for a bot-on-bot arrival the ladder that follows
+        /// can now genuinely succeed, and two bots on one tile is what a packed forge looks like.
         ///
         /// Once per hop: _shifted stops a crowd of bots trading tiles forever, and if the second
         /// tile is taken too the ladder is the right answer after all.
