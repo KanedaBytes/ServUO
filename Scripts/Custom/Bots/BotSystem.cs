@@ -324,6 +324,27 @@ namespace Server.Custom
                 _store.Population.Target,
                 BotTickManager.DescribeCost());
 
+            // WALKS, AND FAILURES PER HUNDRED OF THEM.
+            //
+            // The denominator that makes a measurement window comparable to another one of a
+            // different length. Every table up to window D was read per minute, which is a fact
+            // about how busy the shard was rather than about how good the roads are - and the
+            // measurement profile makes that worse on purpose, by doubling the population and
+            // thirding the visits so a window buys walks instead of wall time.
+            //
+            // [WalkAudit's probes are excluded by construction (NavWalker.Ledger), so a sweep of
+            // fourteen hundred walks does not appear in either half of this.
+            detail += String.Format(
+                ". walks {0} started / {1} completed{2}",
+                NavWalkFailures.WalksStarted,
+                NavWalkFailures.WalksCompleted,
+                NavWalkFailures.WalksStarted > 0
+                    ? String.Format(
+                        ", {0} terminal failure(s) = {1:F2} per 100 walks",
+                        NavWalkFailures.Total,
+                        NavWalkFailures.PerHundredWalks(NavWalkFailures.Total))
+                    : "");
+
             // Residents of a town with no station of their kind. Not a fault and not a rule -
             // upstream's home is a multiplier with no fallback, and so is ours - but a number
             // worth seeing, because it is the count of bots whose work is always a road trip.

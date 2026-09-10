@@ -324,6 +324,26 @@ ours to override.
 yields to a player and a player shoving a bot still pays the engine's full-stamina rule. That half
 of the deviation was always the right half.
 
+**And the rule is now symmetric, which it was not.** Everything above is about a bot as the
+*mover*. A bot as the *shoved* side refused every uncontrolled creature, including the daily-life
+actors it may itself walk through - not by anybody's decision, but because `BaseCreature.OnMoveOver`
+turns them all away and `PlayerBot` inherits that. So the town jammed in one direction only: a GG
+shopkeeper walking home at dusk stopped dead at a bot standing in its doorway, while the same bot
+would have walked straight through the shopkeeper.
+
+`BotShove.OnMoveOver` now answers the reverse case too, and **the pass is exactly as wide as the one
+going the other way**: `NavWalkFailures.Shovable` - a `PlayerBot` or an `IDailyLifeActor` - decides
+both directions, so the rule and the measurement cannot disagree about which bucket a mobile is in.
+No new upstream edit was needed, because `BaseCreature.OnMoveOver` passes the *stock* creature as
+the shoved side and the new branch cannot fire from there.
+
+**It stops at `IDailyLifeActor` on purpose.** A stock vendor in a doorway still jams a bot, and a
+bot still jams a stock vendor - which is the row above, held open deliberately, with window D's six
+unshovable rung entries (`Jeanette (InnKeeper) at 1457,1526` and its run) as the evidence still
+being gathered. Widening the symmetric pass to every uncontrolled creature would settle that
+question sideways, and would also go further than uo-offline, whose `PlayerBot` is a `PlayerMobile`
+and therefore blocks uncontrolled creatures outright.
+
 ### A station is a place, and the stand tile is chosen on arrival
 
 Upstream's arrival is `DriftArriveRange` 2 (`TravelerBehavior.cs:218`): the Traveler drifts toward
