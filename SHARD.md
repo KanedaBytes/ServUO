@@ -430,6 +430,39 @@ review past two hops. The eight skipped destinations were their data measured ag
 2. Save each box, then run `[NavAudit`.
 3. `[BotSendTo trinsic-bank` and watch the bot arrive.
 
+### The Britain rebase
+
+**Britain's roads are uo-offline's now; its places are still ours.** The town was the one place
+their graph had never touched, because Adopt refuses to propose over ground we have authored — and
+the walk audit's evidence was a cluster rather than a list: every high-detour row in the file was
+Britain's upper town, `brit-carp-3 -> brit-tan-1` being a six-tile edge with a thirty-nine-tile road.
+
+`[NavAdopt <region> rebase` turns that skip off **for waypoints and edges only**. Destinations,
+arrivals, sites, zones and routes keep it, so the records carrying authored work — names, tags,
+`exclusive`/`exact` flags, positions placed by eye — cannot be proposed over. What keeps the result
+one road network rather than two is a merge measured to the nearest point on a proposed **edge**;
+`Custom.NavAdoptMergeRadius` is that distance. The full rule, the calibration behind it and the four
+things a rebase has to do that an ordinary adopt never meets are in
+`Scripts/Custom/Core/Navigation/README.md` under *The whole-facet rule*.
+
+The rule itself is for the facet, not for Britain:
+
+> **Wherever uo-offline has roads, theirs replace ours. Wherever they have none, ours stay
+> authored.**
+
+Adopting `1385,1495 360x300 rebase` gave 465 waypoints and 598 edges walked with **0 failures,
+0 stranded, 0 unreachable and 0 islands**, removed 78 of our road waypoints, re-pointed 52 records
+and walked 27 relinks. The file went from 608 waypoints and 655 edges to 996 and 1148, with all 53
+destinations, all 115 arrivals and all 8 zones and 4 routes intact — then gained 12 more
+destinations adopted from theirs.
+
+**Where they have none, ours stayed.** Their graph reaches neither mine: the north-mine corridor and
+the west-mine road `wp-1`…`wp-23` are still hand-authored. The west mine also needed a new stub, and
+it does not run where anyone expected — the two southern arrivals sit on flat forest on the **far
+side** of the cliff, with impassable rock and forest from y 1758 to y 1770, so the road comes round
+from the east through `brit-minewest-1` and `-2` rather than down the face. `[BotWorkScout` had been
+saying so on its own: *"no walkable hop from the face chain"*.
+
 ## Britain daily life
 
 `Data/Custom/britain-daily-life.json` drives the town's day: tavern patrons after dark, the night

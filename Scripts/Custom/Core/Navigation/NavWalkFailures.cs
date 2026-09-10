@@ -10,7 +10,7 @@
 // one Log.Warn and moves the mobile. So the failure everybody wants to understand is the failure
 // with the least evidence attached to it, and the console line it does write says:
 //
-//     could not walk 'brit-bank-2' -> '(arrival)' ... it was moved
+//     could not walk 'uo-britain-bank' -> '(arrival)' ... it was moved
 //
 // `(arrival)` because DescribeHop prints waypoint IDS and an arrival step has none. The goal tile's
 // coordinates are nowhere. Nor is anything about what was standing on it: DescribeBlocker reports

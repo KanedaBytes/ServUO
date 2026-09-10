@@ -2403,15 +2403,26 @@ simply does not model a bot whose job is to stay put.
   not code: author a Trinsic square with a `plaza` tag and the recipe picks it up with no code
   change, and `Bots.Recipe` prints which stop each town's anchor resolved at so the switch is
   visible when it happens.
-- **`byType` has no entry for `dock`, `shrine`, `stables` or `healer`** — seven destinations, six of
-  them Trinsic's, all rolling at the implicit 1.0, so `trinsic-healer` outranks a Trinsic bank for
-  a non-Merchant. Harmless today and worth a weight when somebody is next in `bots.json`.
-- **The two picked-but-unwritten sites**, `brit-mine-west` (1192,1750, reach 15) and
-  `brit-lumber-south` (1422,1832, reach 4). The ground is verified; only the road is missing, and it
-  is missing because the flood cannot walk through a town gate. Hand-author a corridor out through
-  the **west gate** and the **south bridge** in the editor and both light up — the `Nav.Data` reach
-  check and `[BotSiteAudit` are what make that safe to do by hand. **Until the lumber site lands,
-  Lumberjacks have no station** and `Bots.Work` says so.
+- **`byType` has no entry for `dock`, `shrine`, `stables` or `healer`** — all rolling at the
+  implicit 1.0, so `trinsic-healer` outranks a Trinsic bank for a non-Merchant. **The Britain rebase
+  made this bigger without changing it**: adopting uo-offline's twelve missing Britain destinations
+  added two docks and the town's first stables to that set, and grew Britain's roamer pool by
+  26–49% depending on class (Merchant 22.7 → 33.8, Bard 48.8 → 65.2, Smith 44.5 → 56.2, Miner
+  49.3 → 67.0), so every existing Britain destination now takes proportionally fewer visits. A dock
+  weighs 0.6 through its `craft` tag — exactly an ordinary craft shop — and the stables 1.0, exactly
+  an inn, so nothing is over-weighted. Still harmless, still worth a weight when somebody is next in
+  `bots.json`, and now worth measuring rather than assuming.
+- **`brit-mine-west` has its road** — and it does not run where this section assumed. The corridor
+  was never blocked by a town gate: the two southern arrivals sit on flat forest on the **far side**
+  of the cliff, with impassable rock and forest across y 1758–1770, which is why `[BotWorkScout` kept
+  answering *"no walkable hop from the face chain"*. The road comes round from the **east** instead —
+  `wp-21 → brit-minewest-1 (1204,1768) → brit-minewest-2 (1200,1776)` — every leg pathed by
+  `[NavHop` before a record was written. The scout's own arrival table had also drifted from
+  `navigation.json` after Sean's editor pass and is now reconciled, reach re-measured at 15/14/14/14.
+- **`brit-lumber-south` (1422,1832, reach 4) is still unwritten.** The ground is verified; only the
+  road is missing. Hand-author a corridor out through the **south bridge** in the editor — the
+  `Nav.Data` reach check and `[BotSiteAudit` are what make that safe to do by hand. **Until it
+  lands, Lumberjacks have no station** and `Bots.Work` says so, loudly, at every boot.
 - **Two more sites Sean has already scouted**: the **cave at 1263,1251** and the **north mountain at
   1438,1223**. Same procedure — `[BotSitePick` for the arrivals, then either the scout or a hand
   corridor.

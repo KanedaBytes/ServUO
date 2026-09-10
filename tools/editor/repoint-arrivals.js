@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 //
-// repoint-arrivals.js — point every arrival at the waypoint a bot should actually leave from.
+// repoint-arrivals.js — point every arrival AND every destination at the waypoint a bot should
+// actually leave from.
+//
+// BOTH RECORDS CARRY THE SAME FIELD AND BOTH GET IT WRONG THE SAME WAY. A destination's list is
+// checked here as well as its arrivals', because brit-home-baker had correct arrivals three tiles
+// from the road and a destination still naming a waypoint 208 tiles away, and the walk audit failed
+// both of its approaches with no path at all while every other instrument read clean.
 //
 // WHAT AN ARRIVAL'S `waypoints` FIELD IS FOR. A route ends at the first of them that exists and
 // then appends the arrival tile, so it is the record that decides the LAST HOP - the one
@@ -135,6 +141,66 @@ async function main() {
     const updates = [];
     const stranded = [];
 
+    /** The nearest reachable waypoint to a record, and how far. */
+    function closest(record, map) {
+        let nearest = null;
+        let best = Infinity;
+
+        for (const waypoint of nav.waypoints) {
+            if (!canReach.has(waypoint.id) || waypoint.map !== map) {
+                continue;
+            }
+
+            const distance = tiles(waypoint, record);
+
+            if (distance < best) {
+                best = distance;
+                nearest = waypoint.id;
+            }
+        }
+
+        return { nearest, best };
+    }
+
+    // A DESTINATION HAS THE SAME FIELD AND THE SAME FAULT. A route ends at the first of its
+    // `waypoints` that exists and then appends the arrival, so a destination naming a far waypoint
+    // hands the walker a last hop it cannot plan - and this one is easy to miss because the arrival
+    // list beside it can be perfectly correct. brit-home-baker is the case that found it: its
+    // arrivals were re-pointed to a waypoint three tiles away while the destination still named one
+    // 208 tiles off, and the walk audit failed both of its approaches with no path at all.
+    for (const destination of nav.destinations) {
+        if (tag && !(destination.tags || '').split(/\s+/).includes(tag)) {
+            continue;
+        }
+
+        const listed = (destination.waypoints || '').split(/\s+/).filter(Boolean);
+        const { nearest, best } = closest(destination, destination.map);
+
+        if (nearest === null || best > HOP_CAP) {
+            stranded.push(`${destination.id} (destination, ${destination.x},${destination.y})`
+                + ` - nearest reachable is ${nearest || 'nothing'} at ${best === Infinity ? '-' : best} tiles`);
+            continue;
+        }
+
+        const kept = listed.filter((id) => {
+            const waypoint = byId.get(id);
+
+            return id !== nearest && waypoint && canReach.has(id) && tiles(waypoint, destination) <= HOP_CAP;
+        });
+
+        const next = [nearest, ...kept].join(' ');
+
+        if (next !== destination.waypoints) {
+            updates.push({
+                id: `dest:${destination.id}`,
+                props: { waypoints: next },
+                was: destination.waypoints,
+                now: next,
+                tiles: best
+            });
+        }
+    }
+
     for (const arrival of nav.arrivals) {
         const at = index.get(arrival.destination) || 0;
         index.set(arrival.destination, at + 1);
@@ -150,22 +216,7 @@ async function main() {
         }
 
         const listed = (arrival.waypoints || '').split(/\s+/).filter(Boolean);
-
-        let nearest = null;
-        let best = Infinity;
-
-        for (const waypoint of nav.waypoints) {
-            if (!canReach.has(waypoint.id) || waypoint.map !== destination.map) {
-                continue;
-            }
-
-            const distance = tiles(waypoint, arrival);
-
-            if (distance < best) {
-                best = distance;
-                nearest = waypoint.id;
-            }
-        }
+        const { nearest, best } = closest(arrival, destination.map);
 
         if (nearest === null || best > HOP_CAP) {
             // Nothing reachable is close enough. Left exactly as it is and reported: this is a

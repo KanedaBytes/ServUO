@@ -45,12 +45,12 @@
     <Name>GG_BotPop_britain_bank_brit-bank-east</Name>
     <UniqueId>8502d085-f395-b048-3bb7-601621e16b28</UniqueId>
     <Map>Trammel</Map>
-    <X>1646</X>
-    <Y>1612</Y>
+    <X>1645</X>
+    <Y>1611</Y>
     <Width>2</Width>
     <Height>2</Height>
-    <CentreX>1647</CentreX>
-    <CentreY>1613</CentreY>
+    <CentreX>1646</CentreX>
+    <CentreY>1612</CentreY>
     <CentreZ>20</CentreZ>
     <Range>0</Range>
     <MaxCount>3</MaxCount>
@@ -261,7 +261,7 @@
     <Height>0</Height>
     <CentreX>1556</CentreX>
     <CentreY>1657</CentreY>
-    <CentreZ>20</CentreZ>
+    <CentreZ>26</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>
@@ -345,7 +345,7 @@
     <Height>0</Height>
     <CentreX>1498</CentreX>
     <CentreY>1660</CentreY>
-    <CentreZ>20</CentreZ>
+    <CentreZ>27</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>
@@ -969,12 +969,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-weaponer</Name>
     <UniqueId>9b28cd7d-f98e-f8c9-c29b-270258671f65</UniqueId>
     <Map>Trammel</Map>
-    <X>1483</X>
-    <Y>1583</Y>
+    <X>1482</X>
+    <Y>1584</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1483</CentreX>
-    <CentreY>1583</CentreY>
+    <CentreX>1482</CentreX>
+    <CentreY>1584</CentreY>
     <CentreZ>20</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
@@ -1017,7 +1017,7 @@
     <Height>0</Height>
     <CentreX>1633</CentreX>
     <CentreY>1690</CentreY>
-    <CentreZ>30</CentreZ>
+    <CentreZ>36</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>

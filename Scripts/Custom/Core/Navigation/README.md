@@ -833,18 +833,72 @@ passes only, stable across runs:
 | `brit-jew-2 -> brit-jew-3` | 41 | 11 | 3.73 |
 | `brit-jew-3 -> brit-jew-2` | 41 | 11 | 3.73 |
 
-**This is the evidence for re-basing Britain, and it is a cluster rather than a list.** Every row
+**This was the evidence for re-basing Britain, and it was a cluster rather than a list.** Every row
 above 3.7 is in the upper town — the carpenter/tanner block, the courier run, the jeweller row, the
 provisioner-to-tavern leg. A six-tile edge with a thirty-nine-tile road is a bot walking round three
 sides of a building on every trip, on a graph whose hop cap exists to keep hops inside the
-pathfinder's box. These are not broken and the audit will never flag them; they are simply authored
+pathfinder's box. These were not broken and the audit never flagged them; they were simply authored
 across walls rather than along streets.
+
+#### What the rebase did to them, and the measure that nearly lied about it
+
+The table above is the **before**. After the rebase (*The whole-facet rule*, below), the same sweep
+grown from 1450 walks to 2509 — **0 failures in both**:
+
+| | before | after |
+| --- | --- | --- |
+| **edges** at detour ≥ 2.0 | 49 of 1208 — **4.1%** | 33 of 2068 — **1.6%** |
+| edge mean ratio | 1.11 | **1.05** |
+| **arrivals** at detour ≥ 2.0 | 12 of 88 — 13.6% | 30 of 152 — 19.7% |
+| arrival mean ratio | 1.45 | 1.55 |
+
+Every named row in the table above is gone from the edge list. And read naively, the arrival numbers
+say the rebase made the last hop worse — **which is the wrong conclusion from the wrong instrument,
+and worth keeping written down because it took a second measurement to see.**
+
+**A ratio compares a walk to a straight line, and the rebase moved the straight line.** Our door
+waypoints stood on the shops' thresholds. Where a merge removed one, the street waypoint that
+replaced it is four tiles from the door as the crow flies and thirty-two by road — so the detour
+that used to sit on the *edge* reaching the door now sits on the *arrival* leaving the street, and
+the denominator shrank with it. Nothing moved; the accounting did.
+
+**The measure that does not lie is walked tiles for the same journey** — the cheapest walked last
+hop per destination. Measured straight after the rebase it read *8 shorter, 5 longer, 35 unchanged,
+384 tiles against 383*: the roads much better and the last hop a wash. But three had got materially
+worse, all the same fault — `brit-shop-tanner` 1 → 20 tiles, `brit-home-carpenter` 2 → 28,
+`brit-shop-butcher` 1 → 10 — because their **door** waypoints had been merged into the street.
+
+**Both halves are fixed.** The three doors are restored, each link pathed by `[NavHop` first — and
+`PlanMerges` now refuses to merge any waypoint a destination or arrival names, which is the join
+rule applied to the other kind of attachment: *the proposal may replace the roads between our
+places, never the record standing at one.* With them back:
+
+> **8 destinations shorter, 2 longer, 38 unchanged — 384 walked tiles against 329.**
+
+`brit-shop-tinker` 37 → 10, `brit-inn` 27 → 9, `brit-forge` 11 → 5, `brit-tavern-south` 5 → 1. The
+arrival ratios stay higher than before and that is now the honest reading of them: a road waypoint
+on the street *is* further from a door than a door waypoint was, and the walk is shorter anyway.
 
 **Passed only after rungs** — the fragile set, invisible in both lists above because a sidestep
 costs one step: `brit-prov-1 -> brit-desc-3`, `uo-wp-194-s1-s1 -> uo-wp-194-s1-s2` and
 `uo-britain-south-road-b -> britain-forge` (arrival), each one `Repath 1`. A repath that works is
 the ladder doing its job; a repath that recurs on the same edge across sweeps is a road that only
 works when nobody else is on it.
+
+**And a sweep is not the same evidence as a live fleet.** The rebase's second `[BotSmoke` boot
+logged four terminal walk failures in twelve minutes on a graph the sweep had just walked clean:
+`uo-wp-194-s1 -> uo-wp-194` (Trinsic, and already in the fragile set above), `brit-jew-1 ->
+uo-britain-gem-shop-s4` (a rebase relink, ratio 4.83 in the sweep), and twice `(start) -> uo-wp-5`,
+which was a real defect the sweep structurally could not see — a *destination* with no reachable
+waypoint inside the hop cap. A sweep walks edges and arrivals that exist; it never asks whether a
+bot standing at a place can route **away** from it, because it starts every walk at a waypoint.
+`Nav.Data` did not catch it either: its rule is measured from the arrival, which was exactly at the
+cap, while the destination centre was fifteen tiles out. **The check that finds it is a flood from
+the home waypoint plus a cap test on every destination and arrival**, and it is worth running after
+any adoption:
+
+> 1000 of 1000 waypoints reachable; 1 record with no reachable waypoint inside the cap
+> (`trinsic-shop-tailor-2`, 14 tiles - pre-dates the rebase).
 
 ### What uo-offline has, and why this is not a port
 
@@ -897,6 +951,64 @@ as the audit skips them, because `MovementPath` returns no path for an adjacent 
 **Ground we have already authored is skipped** - the union of our nav-zone rects and a hop cap's
 radius around every existing waypoint, derived rather than a Britain rectangle, so it keeps holding
 for the next town authored by hand. 158 of their waypoints sit inside Britain where we have 121.
+
+### The whole-facet rule, and the mode that applies it
+
+> **Wherever uo-offline has roads, theirs replace ours. Wherever they have none, ours stay
+> authored.**
+
+This is the rule for the facet, not a Britain note, and **rebase** is the mode that applies it:
+`[NavAdopt <region> rebase`, or `rebase` in the `nav-adopt` token's body.
+
+The skip above is right while their roads and ours are in *different places* - it stops an adopt
+laying a second road network over a town somebody drew by hand. Britain was the case where they are
+in the **same** place and ours was the worse of the two: hand-authored, partial, and carrying every
+high-detour row the walk audit found. Refusing to propose there meant the town could never be
+improved by their data at all.
+
+**So in rebase mode the authored skip stops applying to waypoints and edges - and only to those.**
+Destinations, arrivals, sites, zones and routes keep it in full, because those are the records that
+carry authored work: names, tags, `exclusive` and `exact` flags, positions somebody placed by eye.
+Only the road is rebased. Britain went from 608 waypoints and 655 edges to 995 and 1147 with all 53
+destinations, all 115 arrivals (tiles *and* flags), all 8 zones and all 4 routes intact.
+
+**What keeps it one road network is the merge, not the skip.** Each of our waypoints inside the
+region is measured to the nearest point on a **proposed edge** - not to the nearest proposed
+waypoint - and one inside `Custom.NavAdoptMergeRadius` (6, half the hop cap) is removed and folded
+into the proposed record, with every destination, arrival and route that named it re-pointed.
+
+**The segment-versus-node distinction is the whole calibration.** uo-offline authored against a
+38-tile leg, so their nodes stand about sixteen tiles apart and ours stand *between* them on the
+same street. Britain measured both ways: **44 of our 93 waypoints are within six tiles of one of
+their nodes, and 73 are within six tiles of one of their roads.** Merging on node distance would
+have left thirty of ours sitting on a road the same proposal was laying - the second road network,
+arrived at by the other door.
+
+Four things a rebase has to do that an ordinary adopt never meets, each found by running it:
+
+- **A removal relinks.** Our edges naming a removed waypoint come back from the validator as
+  *warnings* - the shard drops them and reloads clean - so a removal on its own silently cuts its
+  neighbours loose. `brit-carp-4` was cut loose in the first trial, and it is the only approach
+  waypoint `brit-shop-carpenter` has. Every surviving neighbour now gets a walked edge onto the
+  waypoint the removal folded into, and a removal whose relink will not walk is **withdrawn**
+  rather than allowed to strand anybody.
+- **The dangling edge records go too.** Listed as `removedEdges` in their stored order, so Save
+  deletes them rather than leaving records that reload clean and get written back by the next
+  golden export.
+- **A join target is never merged.** A join subdivides the walk onto one of *our* waypoints, so the
+  subdivisions on that edge exist because ours does; merging ours into one of them makes a
+  self-edge, which is dropped, which strands the subdivision. `town-7` merged into `uo-town-7-s1`,
+  one hop along `town-7`'s own join, and `brit-shop-tinker` came back naming a record the save
+  never wrote.
+- **A route's steps are a path, not a set.** Re-pointing each step alone gave `brit-courier-loop`
+  legs of 13, 14, 16 and 14 tiles on a route whose every leg had been under twelve. A stretched leg
+  is now re-filled by breadth-first search over the graph the save is about to make.
+
+**A rebase proposal is accepted through the editor's own Save, headlessly or by hand.**
+`tools/editor/accept-adopt.js` posts to `/api/save/navigation` against a `baseHash`, so it inherits
+the same `survivors()` rule, the same `unproject`, the same replicated validator on a mandatory dry
+run, the same `.bak` and atomic rename and reload token. Adopt still cannot write nav data; the
+proposal simply gained `removals`, `rewrites`, `relinks`, `removedEdges` and `withdrawn`.
 
 **But an edge reaching into that ground becomes a JOIN.** Skipping authored ground on its own
 guarantees the adopted region is an island - the road to Trinsic is exactly the edge whose Britain
@@ -956,19 +1068,28 @@ edges walked at adopt time and nothing else.
 
 ## Seed data, and what is still missing
 
-Britain, Trammel: 75 waypoints, 86 walk edges, 27 destinations, 65 arrival points, 6 zones,
-4 routes. **`[NavAudit` reports 0 blocked and 0 over-cap edges** — every edge has been pathed in
-both directions against real map data.
+The whole file, Trammel: **996 waypoints, 1148 walk edges, 65 destinations, 8 zones, 4 routes.**
+`[NavAudit` reports **0 blocked, 0 over-cap, 0 unstandable arrivals and 0 stale Z** — every edge has
+been pathed in both directions against real map data.
 
-Landmarks come from `Spawns/trammel.xml` vendor spawn points, `Data/Regions.xml` town bounds, and
+**Britain's roads are uo-offline's; its places are ours.** The town was hand-authored until the
+rebase (see *The whole-facet rule* above) replaced 78 of our road waypoints with theirs and left
+every destination, arrival, zone and route exactly as authored. **50 waypoints of ours survive in
+Britain, and which 50 is the rule stated as data**: the shop doors and approaches their roads do not
+front (`brit-smith-1`, `brit-inn-1`, `brit-tav-1`/`-2`, `brit-mage-1`, `brit-bake-1`, `brit-bow-1`,
+`brit-jew-1`/`-2`, `brit-prov-1`, `brit-tail-1`, `brit-plaza-4`/`-7`, `brit-north-4`/`-b`/`-d`),
+the north-mine corridor, the west-mine road `wp-1`…`wp-23`, and the Trinsic slopes.
+
+Landmarks came from `Spawns/trammel.xml` vendor spawn points, `Data/Regions.xml` town bounds, and
 the ModernUO shard's `britain-daily-life.json` (which independently confirms six shop points and
-supplies their Z). The roads *between* landmarks started as interpolation and were then corrected
-against the map — the audit rejected 20 of the first 78 edges, and the replacements were
-flood-filled from the map itself. Two things that came out of that are worth knowing, because
-guessing got both wrong:
+supplies their Z). The roads *between* them started as interpolation and were corrected against the
+map — the audit rejected 20 of the first 78 edges. Two things that came out of that are worth
+keeping even though the roads themselves have since been replaced, because guessing got both wrong
+and the same guesses are available to make again:
 
-- **The descent from the upper town runs east**, `brit-plaza-1` → `brit-desc-1` (1472,1639) →
-  `brit-desc-2` (1467,1651), not down the middle of the block.
+- **The descent from the upper town runs east**, not down the middle of the block — the authored
+  chain was `brit-plaza-1` → `brit-desc-1` (1472,1639) → `brit-desc-2` (1467,1651), and uo-offline's
+  road, arrived at independently, comes down the same side.
 - **The northern district is at Z 30, not Z 20**, and `1471,1555` is a dead-end pocket: the road
   to the smithy goes `brit-north-c` → `brit-north-d` (1477,1556) → `brit-north-4`.
 

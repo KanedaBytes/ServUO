@@ -347,6 +347,61 @@ them are longer than the hop cap and have to be subdivided.
 6. **Run `[NavAudit`.** It paths every walk edge, so it is the check that the adopted road is real
    rather than merely present.
 
+### Rebasing a town onto their roads
+
+There is a second mode, and it is the one that changed Britain. An ordinary adopt **refuses to
+propose over ground we have authored**, which is right while their roads and ours are in different
+places. **Rebase** turns that refusal off for waypoints and edges — and only those — for the case
+where they mapped the same streets and mapped them better:
+
+> **Wherever uo-offline has roads, theirs replace ours. Wherever they have none, ours stay
+> authored.**
+
+Destinations, arrivals, sites, zones and routes keep the refusal in full, so nothing carrying
+authored work — a name, a tag, an `exclusive` or `exact` flag, a position placed by eye — can be
+proposed over. Britain's 53 destinations, 115 arrivals, 8 zones and 4 routes came through the
+rebase unchanged while 78 of its road waypoints were replaced.
+
+A rebase proposal carries three things an ordinary one does not, and the banner reads them out:
+
+- **Removals** — waypoints of *ours* the proposed road runs through, each with the record it folds
+  into and how far it stood from the new road. **This is the only proposal that asks Save to delete
+  anything**, so the distances are worth reading: a merge at one tile is the same piece of road
+  under two names, a merge at the radius has moved where a route ends.
+- **Rewrites** — the destinations, arrivals and routes that named a removed waypoint, with the list
+  they will carry instead. Carried explicitly because a dangling reference is only a *warning* on
+  this shard: without them the reload would succeed and quietly point a shop at nothing.
+- **Relinks and withdrawals** — a removal takes its edges with it, so every surviving neighbour
+  gets a walked edge onto the new road. A removal whose relink will not walk is **withdrawn** and
+  our waypoint kept, because two roads over one piece of ground is untidy and visible while a
+  stranded shop is neither.
+
+Accept it the same way as any proposal — `Save`. Headlessly,
+`node tools/editor/accept-adopt.js --write` posts the same creates, updates and deletes to the same
+endpoint, after a dry run it refuses to skip.
+
+### After a rebase: re-point the approaches
+
+`node tools/editor/repoint-arrivals.js --tag britain [--write]`
+
+**A destination's and an arrival's `waypoints` field decides the last hop**, and nothing keeps
+either honest when the graph moves underneath them. `Nav.Data` warns only when an arrival is beyond
+the hop cap of *every* waypoint — the stranding case — so a record naming something far away while a
+waypoint sits six tiles off warns about nothing and reads as fine. Britain's rebase left 21 arrivals
+over the cap from the waypoint they named and 49 naming something that was no longer nearest.
+
+The tool re-points both kinds to the nearest **reachable** waypoint, keeps every listed one still
+inside the cap (a shop fronting two streets keeps both approaches), and never touches a tile, a Z or
+an `exclusive`/`exact`/`range` flag. Reachability is flooded from the home waypoint rather than
+assumed: a nearer waypoint on an island trades a long last hop for no route at all. `--tag` scopes it
+to a town, because a town is the unit somebody re-bases.
+
+**Then check what a sweep cannot see.** `[WalkAudit` starts every walk at a waypoint, so it never
+asks whether a bot standing at a *place* can route away from it. Flood the graph from the home
+waypoint and cap-test every destination and arrival — that is the check that caught
+`brit-shop-mage-east`, whose arrival sat exactly at the cap while its centre was fifteen tiles out,
+and which failed live twice with `(start) -> uo-wp-5` after every other instrument read clean.
+
 **Adopt outward from Britain, one box at a time.** A box that touches nothing already saved is an
 island: Save refuses it, and a bot could not walk to it. Each box should overlap ground you have
 already accepted, so its edges can **join** onto records that exist — a join is an edge onto one of

@@ -1034,6 +1034,35 @@ namespace Server.Custom
                     }
                 }
 
+                // A WAYPOINT AN ARRIVAL OR DESTINATION NAMES IS NOT ROAD - IT IS A DOOR, and the
+                // difference only shows up in walked tiles, which is why the first Britain rebase
+                // shipped without it. A door waypoint stands ON the shop's threshold; the street
+                // waypoint that replaces it is four tiles away in a straight line and thirty-two
+                // by road, because the road goes round the building. The merge measured the
+                // straight line, took the door, and moved the detour off the EDGE that used to
+                // reach it and onto the ARRIVAL that now starts outside: `brit-shop-tanner`'s
+                // cheapest approach went from 1 walked tile to 20, `brit-home-carpenter`'s from 2
+                // to 28. Nothing failed and no ratio looked alarming, because the ratio's
+                // denominator moved with it.
+                //
+                // The rule is the join rule applied to the other kind of attachment: the proposal
+                // may replace the roads between our places, never the record standing at one.
+                foreach (NavDestination destination in NavigationSystem.Destinations)
+                {
+                    foreach (string id in Split(destination.WaypointIds))
+                    {
+                        joinTargets.Add(id);
+                    }
+                }
+
+                foreach (NavArrival arrival in NavigationSystem.Store.Arrivals)
+                {
+                    foreach (string id in Split(arrival.WaypointIds))
+                    {
+                        joinTargets.Add(id);
+                    }
+                }
+
                 foreach (NavWaypoint ours in NavigationSystem.Graph.NodesOn(Map))
                 {
                     if (!Region.Contains(new Point2D(ours.X, ours.Y)))
