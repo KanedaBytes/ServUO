@@ -1283,7 +1283,7 @@
     {"id":"brit-inn","name":"The North Side Inn","type":"inn","map":"Trammel","x":1458,"y":1528,"z":20,"tags":"social britain","waypoints":"brit-inn-1"},
     {"id":"brit-shop-baker","name":"Good Eats","type":"shop","map":"Trammel","x":1450,"y":1617,"z":20,"tags":"food britain","waypoints":"brit-bake-1"},
     {"id":"brit-shop-carpenter","name":"The Saw Horse","type":"shop","map":"Trammel","x":1433,"y":1593,"z":20,"tags":"craft woodworking britain","waypoints":"brit-carp-4"},
-    {"id":"brit-shop-tanner","name":"The Best Hides Of Britain","type":"shop","map":"Trammel","x":1431,"y":1610,"z":26,"tags":"craft britain","waypoints":"brit-tan-1"},
+    {"id":"brit-shop-tanner","name":"The Best Hides Of Britain","type":"shop","map":"Trammel","x":1431,"y":1610,"z":20,"tags":"craft britain","waypoints":"brit-tan-1"},
     {"id":"brit-shop-bowyer","name":"Quality Fletching","type":"shop","map":"Trammel","x":1470,"y":1578,"z":20,"tags":"craft archery britain","waypoints":"brit-bow-1","note":"Stratics: \"Quality Fletching + Archery butes\"."},
     {"id":"brit-shop-mage","name":"Britain Mage Shop","type":"shop","map":"Trammel","x":1485,"y":1550,"z":30,"tags":"magic britain","waypoints":"brit-mage-1"},
     {"id":"brit-shop-blacksmith","name":"The Hammer and Anvil","type":"shop","map":"Trammel","x":1418,"y":1547,"z":30,"tags":"craft britain","waypoints":"brit-smith-1","note":"The smithy building. brit-forge is its yard, where the anvil and forge actually stand."},
