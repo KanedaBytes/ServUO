@@ -42,6 +42,48 @@
     <Objects2>PlayerBot/Role/Fixed/SeedHome/britain/Seed/BankSitter:MX=3:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
+    <Name>GG_BotPop_britain_bank_brit-bank-east</Name>
+    <UniqueId>8502d085-f395-b048-3bb7-601621e16b28</UniqueId>
+    <Map>Trammel</Map>
+    <X>1646</X>
+    <Y>1612</Y>
+    <Width>2</Width>
+    <Height>2</Height>
+    <CentreX>1647</CentreX>
+    <CentreY>1613</CentreY>
+    <CentreZ>20</CentreZ>
+    <Range>0</Range>
+    <MaxCount>3</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Fixed/SeedHome/britain/Seed/BankSitter:MX=3:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
     <Name>GG_BotPop_britain_station_brit-forge</Name>
     <UniqueId>9538f2ec-a36f-f82c-89ad-372fbe7b1402</UniqueId>
     <Map>Trammel</Map>
@@ -84,8 +126,8 @@
     <Objects2>PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/britain/SeedStation/brit-forge/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
-    <Name>GG_BotPop_britain_station_britain-forge</Name>
-    <UniqueId>02ef9d8b-4839-fd90-86e4-2ca9a5c517bc</UniqueId>
+    <Name>GG_BotPop_britain_station_brit-forge-south</Name>
+    <UniqueId>0dc94d15-f789-c774-0c8e-c83fba13f8fe</UniqueId>
     <Map>Trammel</Map>
     <X>1344</X>
     <Y>1775</Y>
@@ -123,11 +165,11 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/britain/SeedStation/britain-forge/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/britain/SeedStation/brit-forge-south/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
-    <Name>GG_BotPop_britain_station_britain-forge-2</Name>
-    <UniqueId>73f518a2-d05f-0933-89d1-62407201bda0</UniqueId>
+    <Name>GG_BotPop_britain_station_brit-forge-south-2</Name>
+    <UniqueId>d6c444fc-78c4-4ebd-2ffa-0b0f56f81467</UniqueId>
     <Map>Trammel</Map>
     <X>1355</X>
     <Y>1783</Y>
@@ -165,7 +207,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/britain/SeedStation/britain-forge-2/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Fixed/SeedClass/Smith/SeedHome/britain/SeedStation/brit-forge-south-2/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_station_brit-shop-tailor</Name>
@@ -210,6 +252,48 @@
     <Objects2>PlayerBot/Role/Fixed/SeedClass/Tailor/SeedHome/britain/SeedStation/brit-shop-tailor/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
+    <Name>GG_BotPop_britain_station_brit-shop-tailor-east</Name>
+    <UniqueId>830f9621-e90e-be68-b9a5-a5f733b86d81</UniqueId>
+    <Map>Trammel</Map>
+    <X>1556</X>
+    <Y>1657</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1556</CentreX>
+    <CentreY>1657</CentreY>
+    <CentreZ>20</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Fixed/SeedClass/Tailor/SeedHome/britain/SeedStation/brit-shop-tailor-east/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
     <Name>GG_BotPop_britain_station_brit-shop-carpenter</Name>
     <UniqueId>2bce0d31-0cde-7981-f11e-ee879bd3240a</UniqueId>
     <Map>Trammel</Map>
@@ -250,6 +334,48 @@
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
     <Objects2>PlayerBot/Role/Fixed/SeedClass/Carpenter/SeedHome/britain/SeedStation/brit-shop-carpenter/Seed/Crafter:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-alchemist</Name>
+    <UniqueId>e742e7ec-2f09-1201-5d7a-dd07e72a9c7e</UniqueId>
+    <Map>Trammel</Map>
+    <X>1498</X>
+    <Y>1660</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1498</CentreX>
+    <CentreY>1660</CentreY>
+    <CentreZ>20</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-armorer</Name>
@@ -588,6 +714,48 @@
     <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-mage-east</Name>
+    <UniqueId>2c5e0a6c-5ed2-dd00-9017-319ed4a20cf3</UniqueId>
+    <Map>Trammel</Map>
+    <X>1592</X>
+    <Y>1655</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1592</CentreX>
+    <CentreY>1655</CentreY>
+    <CentreZ>10</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner</Name>
     <UniqueId>9eaa8be0-3146-8e81-b78f-c4798d4d5a8b</UniqueId>
     <Map>Trammel</Map>
@@ -598,6 +766,90 @@
     <CentreX>1470</CentreX>
     <CentreY>1666</CentreY>
     <CentreZ>0</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-provisioner-east</Name>
+    <UniqueId>7aba2396-f8eb-a1ad-1862-a620fdd5b84b</UniqueId>
+    <Map>Trammel</Map>
+    <X>1551</X>
+    <Y>1767</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1551</CentreX>
+    <CentreY>1767</CentreY>
+    <CentreZ>10</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-provisioner-south</Name>
+    <UniqueId>84b83f90-53c1-80d5-9140-b8fe10bcd1ba</UniqueId>
+    <Map>Trammel</Map>
+    <X>1414</X>
+    <Y>1748</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1414</CentreX>
+    <CentreY>1748</CentreY>
+    <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>
@@ -682,6 +934,90 @@
     <CentreX>1425</CentreX>
     <CentreY>1657</CentreY>
     <CentreZ>10</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-weaponer</Name>
+    <UniqueId>9b28cd7d-f98e-f8c9-c29b-270258671f65</UniqueId>
+    <Map>Trammel</Map>
+    <X>1483</X>
+    <Y>1583</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1483</CentreX>
+    <CentreY>1583</CentreY>
+    <CentreZ>20</CentreZ>
+    <Range>0</Range>
+    <MaxCount>1</MaxCount>
+    <MinDelay>5</MinDelay>
+    <MaxDelay>15</MaxDelay>
+    <DelayInSec>False</DelayInSec>
+    <Duration>0</Duration>
+    <DespawnTime>0</DespawnTime>
+    <ProximityRange>-1</ProximityRange>
+    <ProximityTriggerSound>500</ProximityTriggerSound>
+    <TriggerProbability>1</TriggerProbability>
+    <InContainer>False</InContainer>
+    <MinRefractory>0</MinRefractory>
+    <MaxRefractory>0</MaxRefractory>
+    <TODStart>0</TODStart>
+    <TODEnd>0</TODEnd>
+    <TODMode>0</TODMode>
+    <KillReset>1</KillReset>
+    <ExternalTriggering>False</ExternalTriggering>
+    <SequentialSpawning>-1</SequentialSpawning>
+    <AllowGhostTriggering>False</AllowGhostTriggering>
+    <AllowNPCTriggering>False</AllowNPCTriggering>
+    <SpawnOnTrigger>False</SpawnOnTrigger>
+    <SmartSpawning>False</SmartSpawning>
+    <TickReset>False</TickReset>
+    <Team>0</Team>
+    <Amount>1</Amount>
+    <IsGroup>False</IsGroup>
+    <IsRunning>True</IsRunning>
+    <IsHomeRangeRelative>False</IsHomeRangeRelative>
+    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+  </Points>
+  <Points>
+    <Name>GG_BotPop_britain_shop_brit-shop-weaponer-east</Name>
+    <UniqueId>b75348e5-db70-a707-047f-bb3475d3da84</UniqueId>
+    <Map>Trammel</Map>
+    <X>1633</X>
+    <Y>1690</Y>
+    <Width>0</Width>
+    <Height>0</Height>
+    <CentreX>1633</CentreX>
+    <CentreY>1690</CentreY>
+    <CentreZ>30</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>
@@ -800,48 +1136,6 @@
   <Points>
     <Name>GG_BotPop_britain_roam_brit-square_3</Name>
     <UniqueId>9cf7643c-baf1-0d17-9869-d70bec044bff</UniqueId>
-    <Map>Trammel</Map>
-    <X>1463</X>
-    <Y>1618</Y>
-    <Width>24</Width>
-    <Height>24</Height>
-    <CentreX>1475</CentreX>
-    <CentreY>1630</CentreY>
-    <CentreZ>20</CentreZ>
-    <Range>0</Range>
-    <MaxCount>6</MaxCount>
-    <MinDelay>5</MinDelay>
-    <MaxDelay>15</MaxDelay>
-    <DelayInSec>False</DelayInSec>
-    <Duration>0</Duration>
-    <DespawnTime>0</DespawnTime>
-    <ProximityRange>-1</ProximityRange>
-    <ProximityTriggerSound>500</ProximityTriggerSound>
-    <TriggerProbability>1</TriggerProbability>
-    <InContainer>False</InContainer>
-    <MinRefractory>0</MinRefractory>
-    <MaxRefractory>0</MaxRefractory>
-    <TODStart>0</TODStart>
-    <TODEnd>0</TODEnd>
-    <TODMode>0</TODMode>
-    <KillReset>1</KillReset>
-    <ExternalTriggering>False</ExternalTriggering>
-    <SequentialSpawning>-1</SequentialSpawning>
-    <AllowGhostTriggering>False</AllowGhostTriggering>
-    <AllowNPCTriggering>False</AllowNPCTriggering>
-    <SpawnOnTrigger>False</SpawnOnTrigger>
-    <SmartSpawning>False</SmartSpawning>
-    <TickReset>False</TickReset>
-    <Team>0</Team>
-    <Amount>1</Amount>
-    <IsGroup>False</IsGroup>
-    <IsRunning>True</IsRunning>
-    <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Traveler:MX=6:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
-  </Points>
-  <Points>
-    <Name>GG_BotPop_britain_roam_brit-square_4</Name>
-    <UniqueId>eb78ac61-05bb-3058-b7ab-2f53f7249f96</UniqueId>
     <Map>Trammel</Map>
     <X>1463</X>
     <Y>1618</Y>
@@ -1510,47 +1804,5 @@
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
     <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
-  </Points>
-  <Points>
-    <Name>GG_BotPop_trinsic_roam_trinsic-bank_1</Name>
-    <UniqueId>fc3eb67a-8cab-2f09-dc1a-87916fada1d0</UniqueId>
-    <Map>Trammel</Map>
-    <X>1809</X>
-    <Y>2815</Y>
-    <Width>24</Width>
-    <Height>24</Height>
-    <CentreX>1821</CentreX>
-    <CentreY>2827</CentreY>
-    <CentreZ>0</CentreZ>
-    <Range>0</Range>
-    <MaxCount>3</MaxCount>
-    <MinDelay>5</MinDelay>
-    <MaxDelay>15</MaxDelay>
-    <DelayInSec>False</DelayInSec>
-    <Duration>0</Duration>
-    <DespawnTime>0</DespawnTime>
-    <ProximityRange>-1</ProximityRange>
-    <ProximityTriggerSound>500</ProximityTriggerSound>
-    <TriggerProbability>1</TriggerProbability>
-    <InContainer>False</InContainer>
-    <MinRefractory>0</MinRefractory>
-    <MaxRefractory>0</MaxRefractory>
-    <TODStart>0</TODStart>
-    <TODEnd>0</TODEnd>
-    <TODMode>0</TODMode>
-    <KillReset>1</KillReset>
-    <ExternalTriggering>False</ExternalTriggering>
-    <SequentialSpawning>-1</SequentialSpawning>
-    <AllowGhostTriggering>False</AllowGhostTriggering>
-    <AllowNPCTriggering>False</AllowNPCTriggering>
-    <SpawnOnTrigger>False</SpawnOnTrigger>
-    <SmartSpawning>False</SmartSpawning>
-    <TickReset>False</TickReset>
-    <Team>0</Team>
-    <Amount>1</Amount>
-    <IsGroup>False</IsGroup>
-    <IsRunning>True</IsRunning>
-    <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Traveler:MX=3:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
 </Spawns>
