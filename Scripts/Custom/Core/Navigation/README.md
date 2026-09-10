@@ -314,6 +314,7 @@ and no `Warn` at all — on exactly the edges the audit had flagged as occupied.
 | `[NavArrival <destId> [exclusive]` | GameMaster | Arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed hops and cost |
 | `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
+| `[WalkAudit [probes\|selftest]` | Administrator | **Walk** every edge in both directions and every arrival from each approach, with real probe walkers |
 
 **`[NavMark` links only to your previous mark, never by proximity.** Linking by nearness would
 silently connect two waypoints through a building — which is exactly the class of bug the
@@ -653,6 +654,213 @@ showed it flipping between a wooden door with `CanFit` false and an empty tile w
 shut and its neighbour open, and the scatter had validated the half-second the doorway was clear.
 Scatter now refuses both tiles of every door within the scatter radius. `TryShiftWithinArrival` had
 recovered this one, which is why it cost a ladder climb rather than a failure.
+
+### Window E, the first with a denominator
+
+Same shard, same graph, 60 bots, **17m 11s**, nothing steered. The first window measured under
+`Custom.MeasurementProfile`, and the first measurement of last session's skip and re-anchor fixes,
+which were built *after* window D.
+
+**Read the last column, not the second.** A profile window doubles the target, thirds the visit
+windows and flattens the session curve, so it produces walks several times faster than wall time —
+which is the point, and which makes its per-minute figure incomparable with A–D by construction.
+
+| | **C** 15 min | **D** 30 min | **E** 17 min, profile |
+| --- | --- | --- | --- |
+| walks started | – | – | **372** |
+| terminal failures | 8 | 6 | **1** |
+| ... per minute | 0.53 | 0.20 | 0.06 |
+| ... **per 100 walks** | – | – | **0.27** |
+| on an **arrival** hop | 3 | 4 | 0 |
+| on a **waypoint** hop | 5 | 2 (both skip-marched) | 1 (**0 skip-marched**) |
+| rung entries (rungs 1–4) | 68 | 85 | 30 (7.9 per 100 walks) |
+| next-step tile occupied | 5 | 8 | 7 |
+| ... by something a bot may not push | 0 | 6 | **1** |
+| arrival retargets | 7 | 6 (taken 1, unstandable 1, unreachable 4) | **2 (taken 2, unstandable 0, unreachable 0)** |
+| struck edges | 0 | 2 (neither earned) | **0** |
+| unstandable arrivals | 19 | 15 | **0** |
+
+- **Zero skip-marched failures**, which is what window D's fix was for. D's only two waypoint
+  failures were both the ladder marching a rooted walker's index; E's single failure carries
+  `skips 0`, `index 3 of 203`, and a start tile 14 tiles from where it gave up — a bot that
+  genuinely travelled and genuinely stopped, which is the shape that was being drowned out.
+- **Arrival retargets went to zero on both diagnostic columns.** `unstandable 0` and
+  `unreachable 0` against D's 1 and 4 is Sean's fifteen relocations, and it agrees with
+  `[NavAudit` independently reading 0 unstandable arrivals against D's 15.
+- **The unshovable column fell 6 → 1**, which is the shove symmetry: a daily-life actor can now
+  step through a bot as a bot steps through it.
+- **The tick cost says the population dial has room and is not the binding constraint.**
+  `0.5 ms mean / 11 ms max of 2000 ms over 1144 passes at 60 bots`. The profile asked for 120 and
+  got 60 — `target 120 now (peak 60)` — because the population is a *file*: the recipe is derived
+  from `population.target` and `[GG_Reimport` turns it into 60 spawner slots, so doubling the
+  session ceiling fills the slots that exist and stops. E's walks were bought by the visit divisor
+  and the flat curve alone. Raising `population.target` in `bots.json` and re-importing is the
+  honest way to raise it, and the tick figures say it is affordable.
+
+## `[WalkAudit` - the second instrument
+
+`[NavAudit` asks the engine whether a step *could* work. This asks real walkers to walk it.
+
+The section above — *What a clean audit does not tell you* — lists why those are different
+questions, and four measured windows have now been read against the gap: 655 edges, 0 blocked,
+0 over cap, and a failure ledger with entries in it. The audit probes with a `Point3D` from the
+authored waypoint; a walker is an uncontrolled `BaseCreature` starting wherever its last hop
+stopped, and `FastAStarAlgorithm` is greedy with a 300-node budget and therefore **directional**.
+
+Twelve probe walkers at mounted pace take **every edge in both directions and every arrival from
+each of its approach waypoints**, skipping destinations tagged `pending-road`. Per walk it records
+pass or fail, the engine's own route length against the authored straight line, the steps actually
+taken, the seconds, and on a failure the stop tile, the cause, the blocker and the rungs burned.
+Output is `Data/Live/walk-audit.json` plus a console report; the editor has a **Walk audit** button
+beside **Audit**, and every failure becomes a Problems row that jumps to the tile the walk died on.
+
+**It leaves nothing behind.** Probes are deleted in a `finally`, they return `true` from
+`OnMoveOver` so they cannot manufacture each other's obstructions, they override `CheckIdle` so they
+never take a step the walker did not ask for, and they carry `NavWalker.Ledger = false` — which
+gates the walk counters, the rung totals, the terminal ledger **and `NavEdgeHealth.Strike`**. A
+sweep that struck every edge it found hard would put a fifteen-minute cost multiplier on the
+fleet's routing, which is the audit rewriting what it was asked to measure. Verified: two 1450-walk
+sweeps left `walksStarted` at 252 and `walksCompleted` at 227, untouched.
+
+### The instrument was wrong three times before it was right
+
+Worth keeping, because every one of the three would have produced a confident, wrong report, and
+two of them were the *shard* being right and the *test* being wrong.
+
+1. **A seeded hop into a wall passed, correctly.** `brit-shop-tinker`'s old arrival at
+   `1421,1651` is a plaster wall twenty tall. As a `Walk` step it names no real waypoint, so
+   `ArrivalRangeFor` returns `DefaultArrivalRange` — **2** — and the probe stopping two tiles from
+   the wall *is* an arrival. Walking into a wall with two tiles of latitude is a goal you can meet
+   from outside the wall.
+2. **The same tile as a range-0 arrival passed too.** `TryShiftWithinArrival` retargeted onto
+   `1422,1651`, the standable pathable neighbour, exactly as last session built it to. With the
+   ladder and the arrival shift both running, very nearly nothing is impossible — so the seed has
+   to be a tile the shift has nowhere to shift *to*.
+3. **A 45-second deadline could not reach the top rung.** The ladder is five rungs twenty seconds
+   apart, so a walk that is going to give up needs a hundred seconds. Every hard failure came back
+   as `timeout` and named no cause at all. `cause` and `endedBy` are now two fields — what was
+   wrong with the goal, and how the walk ended — and the deadline is 120 s.
+
+`[WalkAudit selftest` is the standing version: one hop it **must** fail (`2072,2865`, the water
+under the Trinsic pier — `CanFit` false, `TryResolveZ` no, all eight neighbour steps refused) and
+one it **must** pass, and it prints `SELF-TEST OK` or `SELF-TEST BROKEN` rather than leaving a
+reader to invert the verdict themselves. It seeds the *work list*, never `navigation.json`, so
+there is no seed to remove and no window in which a road through a wall could be committed.
+
+### The detour factor is the engine's route, not the probe's steps
+
+The number that ends up as re-base evidence is **the engine's planned route length over the
+authored straight line**, measured once with `MovementPath` before the probe moves.
+
+The obvious number — steps walked over straight line — is the wrong one, and it took three sweeps
+to be sure of it:
+
+| what the probe was | worst "ratio" | what it was actually measuring |
+| --- | --- | --- |
+| `Home` at `Point3D.Zero` | **82:1** on a ten-tile hop, 822 steps | `WalkRandomInHome` falling through to `WalkRandom` — pure random steps |
+| `KeepHomeAligned`, `RangeHome = 0` | **21.7** | the wander became `DoMove(toward Home)`, a *straight line* walking into the wall the walker's `PathFollower` was routing round; the two alternated |
+| `CheckIdle => true` | **30.0** | the bot population. The top of the list **reshuffled completely** between two sweeps of an unchanged graph |
+
+A list that reorders itself every run is not evidence of anything about the road. The engine's route
+is deterministic and contention-free, and it is the exact question the re-base asks: an edge
+authored at six tiles whose real road is thirty-nine walks a bot round three sides of a building
+*every time*, whoever else is on the map. **Verified: all 1310 edge rows identical across two
+consecutive sweeps.** The only 18 rows that moved were arrivals — which is `BaseDoor.Open` moving
+the door item, the same effect that made a doorway's `CanSpawnMobile` answer last only seconds.
+
+`stepRatio` keeps the other number beside it, because the gap between the two *is* the contention.
+A pass is also marked **contested** when a rung fired or a rung named somebody on the next-step
+tile, and contested rows are listed separately from the detour list for the same reason.
+
+### What it costs
+
+**1450 walks — 1310 edges, 140 arrivals — in about 2.5 to 4 minutes over 12 probes**, against a
+live population of sixty bots. `Custom.WalkAuditProbes` (12) and `Custom.WalkAuditWalkSeconds`
+(120) are the two dials. The work is wall-clock-bound rather than CPU-bound, so probes scale nearly
+linearly until they start meeting each other. Measured runs: 137 s, 147 s, 158 s, 159 s and 252 s —
+the spread is the failures, which cost the full 100-second ladder each.
+
+### The sweep on the current graph
+
+**1450 walks in 252 s over 12 probes. 3 failures, all from one waypoint; 2 arrivals skipped for
+`pending-road`; 8 contested passes; 8 that passed only after a rung.**
+
+**Every failure is `brit-arm-1`, and `[NavAudit` walks all three of its edges cleanly.** That is
+this instrument's first finding of the kind it was built for:
+
+```
+brit-arm-1 -> brit-shop-armorer (arrival)  short-of-goal  stop 1447,1648  (goal 1442,1650)  852 steps 100s
+brit-arm-1 -> brit-arm-2                   short-of-goal  stop 1445,1646  (goal 1441,1650)  855 steps 103s
+brit-arm-1 -> brit-shop-armorer (arrival)  short-of-goal  stop 1446,1646  (goal 1444,1651)  854 steps 101s
+```
+
+The probe **never leaves the start**: eight hundred and fifty steps of pacing inside two tiles of
+`1447,1647`, then the full ladder and a rescue. It is **directional** — `brit-arm-2 -> brit-arm-1`
+passes in 7 tiles — which is the greedy-pathfinder shape §*The pathfinder is greedy* describes, and
+`MovementPath` does return a 7-step route from the start tile. `[TileProbe 1447,1647` says the tile
+is a wooden floor at z 10, `CanFit` true, with **all eight neighbour steps allowed**. So neither the
+tile nor the geometry is at fault and nothing cheaper than a real walker could have found this.
+
+`brit-arm-1` is the armoury's *old* interior position. `brit-shop-armorer` and both its arrivals
+moved west to `1443,1650` / `1442,1650` / `1444,1651` in the editor; the waypoint stayed where it
+was, and now sits on the far side of the shop from everything it points at. **This is authoring, and
+it belongs with the Britain re-base** alongside `brit-inn`'s 13-tile arrival and `brit-mine-west`'s
+two at 16 and 19.
+
+**The twenty highest detours** — the engine's own route over the authored straight line, clean
+passes only, stable across runs:
+
+| edge | engine | authored | detour |
+| --- | --- | --- | --- |
+| `brit-carp-3 -> brit-tan-1` | 39 | 6 | **6.50** |
+| `brit-bank-1 -> brit-bank` (arrival) | 26 | 4 | **6.50** |
+| `brit-prov-4 -> brit-tav-1` | 42 | 7 | 6.00 |
+| `brit-tink-1 -> brit-shop-tinker` (arrival) | 40 | 7 | 5.71 |
+| `brit-carp-3 -> brit-carp-2` | 39 | 7 | 5.57 |
+| `brit-tav-1 -> brit-prov-4` | 35 | 7 | 5.00 |
+| `brit-cour-3 -> brit-cour-4` | 49 | 10 | 4.90 |
+| `brit-cour-4 -> brit-cour-3` | 47 | 10 | 4.70 |
+| `brit-tan-1 -> brit-carp-3` | 28 | 6 | 4.67 |
+| `brit-inn-1 -> brit-inn` (arrival) | 41 | 9 | 4.56 |
+| `brit-desc-3 -> brit-prov-1` | 47 | 11 | 4.27 |
+| `brit-cour-5 -> brit-jew-1` | 47 | 11 | 4.27 |
+| `brit-jew-1 -> brit-cour-5` | 45 | 11 | 4.09 |
+| `brit-mage-app -> brit-north-b` | 31 | 8 | 3.88 |
+| `brit-north-b -> brit-mage-app` | 31 | 8 | 3.88 |
+| `brit-carp-2 -> brit-carp-3` | 27 | 7 | 3.86 |
+| `brit-cour-1 -> brit-prov-1` | 27 | 7 | 3.86 |
+| `brit-mkt-1 -> brit-mkt-2` | 45 | 12 | 3.75 |
+| `brit-jew-2 -> brit-jew-3` | 41 | 11 | 3.73 |
+| `brit-jew-3 -> brit-jew-2` | 41 | 11 | 3.73 |
+
+**This is the evidence for re-basing Britain, and it is a cluster rather than a list.** Every row
+above 3.7 is in the upper town — the carpenter/tanner block, the courier run, the jeweller row, the
+provisioner-to-tavern leg. A six-tile edge with a thirty-nine-tile road is a bot walking round three
+sides of a building on every trip, on a graph whose hop cap exists to keep hops inside the
+pathfinder's box. These are not broken and the audit will never flag them; they are simply authored
+across walls rather than along streets.
+
+**Passed only after rungs** — the fragile set, invisible in both lists above because a sidestep
+costs one step: `brit-prov-1 -> brit-desc-3`, `uo-wp-194-s1-s1 -> uo-wp-194-s1-s2` and
+`uo-britain-south-road-b -> britain-forge` (arrival), each one `Repath 1`. A repath that works is
+the ladder doing its job; a repath that recurs on the same edge across sweeps is a road that only
+works when nobody else is on it.
+
+### What uo-offline has, and why this is not a port
+
+They have no whole-graph walk audit. `[auditedges` (`CustomBots/AuditEdgesCommand.cs`) is a
+flood-fill geometry check — our `[NavAudit`, arrived at independently and with the same two
+verdicts, `BLOCKED` and `FAR`. `[testroute` (`Nav/HpaCommands.cs:58`) plans an abstract route and
+walks nothing. The only thing in that tree that moves a real mobile to answer a navigation question
+is **`[testapproach`** (`Nav/FieldCommands.cs:88`): one nearby `PlayerBot`, one destination, the
+final approach only, and its own header calls it *"Diagnostic only"*.
+
+Their fleet-wide instrument is **passive** — `BotNavWatch` plus `StuckTelemetry`, aggregating what
+the live population happened to do into `Data/Live/stuck_report.json` as
+`{asOf, bootedAt, windowMinutes, window, total, hotspots, edges}` (`BotStuckTelemetry.cs:200-245`).
+`walk-audit.json` mirrors that header and adds the per-walk rows their shape has no place for,
+because **theirs reports a window and this reports a sweep**. A window tells you which roads the
+fleet happened to try; a sweep tells you about the ones nobody has walked yet.
 
 ### The seam for a custom pathfinder
 

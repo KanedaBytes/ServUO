@@ -425,6 +425,23 @@ namespace Server.Custom
             /// blocker in it.
             /// </summary>
             public string BlockedReason;
+
+            /// <summary>
+            /// Where the probe was standing when the walk gave up, captured in the Failed seam.
+            ///
+            /// NOT READ OFF THE PROBE AFTERWARDS, and it was, and that was wrong. Teleport moves
+            /// the mobile ONTO the goal and only then does the route run out, so a stop tile read
+            /// at completion is the goal tile for every rescued walk - the one place that is
+            /// demonstrably fine. Measured: all three of one sweep's failures reported a stop tile
+            /// identical to their goal, which read as "it arrived and failed anyway" and is not
+            /// what happened.
+            ///
+            /// This is the same reason NavWalkFailures.Record is called before the teleport rather
+            /// than after it, met from the other side.
+            /// </summary>
+            public Point3D StoppedAt;
+
+            public bool HaveStopped;
         }
 
         private sealed class Job
@@ -919,6 +936,7 @@ namespace Server.Custom
             runner.Failed = false;
             runner.FailCause = null;
             runner.BlockedReason = null;
+            runner.HaveStopped = false;
             runner.Done = false;
             runner.StartedTick = Core.TickCount;
 
@@ -962,6 +980,10 @@ namespace Server.Custom
             {
                 runner.Failed = true;
                 runner.FailCause = cause;
+
+                // BEFORE THE TELEPORT, which is the whole reason this seam is raised where it is.
+                runner.StoppedAt = runner.Probe.Location;
+                runner.HaveStopped = true;
             };
 
             walker.Arrived = w => runner.Done = true;
@@ -1054,9 +1076,9 @@ namespace Server.Custom
                 GoalX = item.Goal.X,
                 GoalY = item.Goal.Y,
                 GoalZ = item.Goal.Z,
-                StopX = runner.Probe.X,
-                StopY = runner.Probe.Y,
-                StopZ = runner.Probe.Z,
+                StopX = runner.HaveStopped ? runner.StoppedAt.X : runner.Probe.X,
+                StopY = runner.HaveStopped ? runner.StoppedAt.Y : runner.Probe.Y,
+                StopZ = runner.HaveStopped ? runner.StoppedAt.Z : runner.Probe.Z,
                 Range = item.Range,
                 Cause = cause,
                 Rungs = DescribeRungs(walker),

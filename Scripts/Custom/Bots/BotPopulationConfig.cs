@@ -170,6 +170,14 @@ namespace Server.Custom
         /// <summary>The curve's multiplier at a local hour, clamped into the day.</summary>
         public double CurveAt(int hour)
         {
+            // A FLAT CURVE UNDER THE MEASUREMENT PROFILE. The curve's whole job is to make 05:00
+            // quieter than 19:00, which is exactly what a measurement must not have: a window that
+            // straddles a shoulder of it measures the clock as much as the roads.
+            if (BotMeasurementProfile.Enabled)
+            {
+                return 1.0;
+            }
+
             double[] curve = Curve != null && Curve.Length == 24 ? Curve : DefaultCurve;
 
             if (hour < 0)

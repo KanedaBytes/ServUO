@@ -88,7 +88,15 @@ namespace Server.Custom
         /// <summary>How many LIFECYCLE bots should be live right now. Fixtures are not in this number.</summary>
         public static int TargetNow
         {
-            get { return Math.Max(1, (int)(Config_.Target * CurveNow)); }
+            // BotMeasurementProfile.Multiplier is 1.0 unless Custom.MeasurementProfile is on, and
+            // falls back to 1.0 on its own while a tick pass is costing more than half its budget:
+            // twice as many bots that cannot be ticked inside the budget do not walk faster, they
+            // walk in slow motion, which corrupts the measurement the profile exists to take.
+            get
+            {
+                return Math.Max(
+                    1, (int)(Config_.Target * CurveNow * BotMeasurementProfile.Multiplier));
+            }
         }
 
         public static int LogoutsSinceBoot

@@ -63,6 +63,14 @@ namespace Server.Custom
         /// </summary>
         public static TimeSpan? VisitWindowFor(PlayerBotBehavior behaviour)
         {
+            // THE ONE PLACE A VISIT'S LENGTH IS DECIDED, which is why the measurement profile's
+            // divisor is applied here and nowhere else. A bot spends most of its life standing in
+            // a shop it walked to, so shortening the standing is what buys walks per minute.
+            return BotMeasurementProfile.Shorten(BaseVisitWindowFor(behaviour));
+        }
+
+        private static TimeSpan? BaseVisitWindowFor(PlayerBotBehavior behaviour)
+        {
             if (behaviour is CrafterBehavior)
             {
                 return TimeSpan.FromMinutes(Utility.RandomMinMax(180, 360));

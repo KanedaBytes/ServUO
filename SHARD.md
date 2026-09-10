@@ -236,6 +236,7 @@ checkpoint has shipped it as `True` once already.
 | `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
 | `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
+| `[WalkAudit [probes\|selftest]` | Administrator | **Walk** every edge and arrival with real probe walkers; `selftest` proves the instrument |
 | `[TileProbe [<x> <y> [z]]` | Administrator | What the engine sees at a tile - land, statics, items in all three lists, the movement switches, and whether a step onto it is refused from each of the eight neighbours (token: `tile-probe`, which also takes `sweep <lo> <hi>` over an ItemID range) |
 | `[DayPhase` | GameMaster | Report the day phase, anchor time and whether an override is active |
 | `[DayPhase <dawn\|day\|dusk\|night\|clear>` | GameMaster | Force a phase for testing, or release it |
@@ -449,6 +450,26 @@ last result shows up in `[CoreSmoke` as `DailyLife.Smoke`. Set `Custom.DailyLife
 to run it headlessly.
 
 See `Scripts/Custom/DailyLife/README.md`.
+
+## Measuring the walker
+
+Two instruments and a switch, because a clean `[NavAudit` and bots that fail walks are both true at
+once and the audit cannot see why.
+
+- **`[WalkAudit`** walks the whole graph with real probe walkers - every edge both ways, every
+  arrival from each approach - in about three minutes, and reports the engine's route length
+  against the authored straight line. `[WalkAudit selftest` proves the instrument before you trust
+  it. See `Scripts/Custom/Core/Navigation/README.md`.
+- **Failures per 100 walks.** `NavWalkFailures` counts walks started and completed, so a window's
+  rate no longer depends on how long the window was. Both numbers are on `Bots.Population` and in
+  `Data/Live/walk-failures.json`; the `walk-failures` token with body `clear` opens a fresh window
+  without a restart.
+- **`Custom.MeasurementProfile=True`** buys walks instead of wall time: population target doubled
+  (clamped back to x1 while a tick pass costs more than half its budget), visit windows divided by
+  3, session curve flattened. A loud yellow banner prints once a minute and `[CoreSmoke` reports it
+  as a **WARN**. **A profile window is not comparable to an earlier one except per walk** - it
+  changes crowding, and a per-minute figure measures crowding. Put it back to `False` before
+  committing, like the `*OnStart` flags.
 
 ## Health checks
 
