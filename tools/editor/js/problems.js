@@ -88,6 +88,134 @@ export function edgeRows(problems, labelFor) {
 }
 
 /**
+ * What [WalkAudit found when real walkers walked it.
+ *
+ * A DIFFERENT QUESTION FROM THE ROWS ABOVE, and the reason this list gains a fourth source. Every
+ * other row here comes from asking the engine about a tile or a pair of tiles: is it standable, is
+ * it pathable, is the record where it says it is. A walk-audit row comes from a mobile that tried,
+ * with the recovery ladder running, starting where a walker actually starts. The shard's own
+ * README has the case: 655 edges, 0 blocked, 0 over cap, and bots failing walks all day.
+ *
+ * The jump target is the STOP TILE, not the goal. Where the walk died is where somebody has to go
+ * and look; the goal is already on the map as the record itself, and jumping there would show the
+ * place that is fine rather than the place that is not.
+ *
+ * Occupancy is carried in the reason rather than made a separate kind. A mobile on the next-step
+ * tile does not make this a different fault - the walk still failed - but it is the difference
+ * between a road nobody can use and a road that was busy for ten seconds, so it has to be visible
+ * on the row rather than inferred from a count somewhere else.
+ */
+export function walkAuditRows(walkAudit) {
+    const rows = (walkAudit && walkAudit.rows) || [];
+
+    return rows.filter((row) => !row.pass).map((row) => {
+        const label = row.kind === 'arrival'
+            ? `${row.from} -> ${row.destination} (arrival)`
+            : `${row.from} -> ${row.to}`;
+
+        const blocked = row.occupied
+            ? `; next step blocked by ${row.occupied}`
+                + (row.occupiedUnshovable ? ' - which a bot may not push' : '')
+            : '';
+
+        const rungs = row.rungs ? `; rungs: ${row.rungs}` : '';
+
+        return {
+            kind: 'walk',
+            severity: 'warning',
+            label,
+            x: row.stopX,
+            y: row.stopY,
+            reason:
+                `walked and failed: ${row.cause} (${row.endedBy})`
+                + `, stopped at ${row.stopX},${row.stopY},${row.stopZ}`
+                + ` after ${row.steps} step(s)${blocked}${rungs}`,
+            shapeId: null
+        };
+    });
+}
+
+/**
+ * What the walk audit said about one record, as a line for the properties panel.
+ *
+ * Keyed by the record's OWN id, not by an edge's pair, and it takes the worst row that mentions it
+ * - an id appears in up to four rows (both directions of an edge, or one arrival per approach) and
+ * the useful answer about a place is its worst case, not an average of its cases. A record with a
+ * failing row reports that first; otherwise it reports the highest ratio, which is the number the
+ * re-base argument is made of.
+ *
+ * Returns null when the sweep has never run or never touched this record, so the caller adds no
+ * row rather than an empty one.
+ */
+export function walkAuditFor(walkAudit, id) {
+    if (!walkAudit || !id) {
+        return null;
+    }
+
+    const rows = (walkAudit.rows || []).filter(
+        (row) => row.from === id || row.to === id || row.destination === id);
+
+    if (rows.length === 0) {
+        return null;
+    }
+
+    const failed = rows.filter((row) => !row.pass);
+
+    if (failed.length > 0) {
+        const worst = failed[0];
+
+        return `FAILED ${worst.cause} (${worst.endedBy})`
+            + `, stopped ${worst.stopX},${worst.stopY}`;
+    }
+
+    let worst = rows[0];
+
+    for (const row of rows) {
+        if (row.ratio > worst.ratio) {
+            worst = row;
+        }
+    }
+
+    return `${worst.steps} step(s) / ${worst.tiles} tile(s) = ${worst.ratio.toFixed(2)}`
+        + `, ${worst.seconds.toFixed(1)}s`
+        + (worst.rungTotal > 0 ? ` - after ${worst.rungTotal} rung(s)` : '');
+}
+
+/**
+ * "84 walked, 3 failed, 2 skipped, worst ratio 2.82" - the header the walk-audit rows carry.
+ *
+ * Its own line rather than folded into problemSummary, because those counts describe a RUN and the
+ * summary describes the list. A sweep that walked fourteen hundred edges and found three faults has
+ * said something about the other 1397 too, and a list can only ever show the three.
+ */
+export function walkAuditSummary(walkAudit) {
+    if (!walkAudit || !walkAudit.status || walkAudit.status === 'none') {
+        return 'no walk audit yet';
+    }
+
+    if (walkAudit.status === 'running') {
+        return `walking... ${walkAudit.walked || 0} of ${walkAudit.total || 0}`;
+    }
+
+    const rows = walkAudit.rows || [];
+    const failed = rows.filter((row) => !row.pass).length;
+
+    let worst = null;
+
+    for (const row of rows) {
+        if (row.pass && (worst === null || row.ratio > worst.ratio)) {
+            worst = row;
+        }
+    }
+
+    return `${rows.length} walked, ${failed} failed, ${walkAudit.skipped || 0} skipped`
+        + (worst ? `, worst ratio ${worst.ratio.toFixed(2)}` : '')
+        + (walkAudit.fragile ? `, ${walkAudit.fragile} passed only after rungs` : '')
+        + (walkAudit.contested ? `, ${walkAudit.contested} contested` : '')
+        + ` (${Math.round(walkAudit.seconds || 0)}s, ${walkAudit.probes || 0} probes)`;
+}
+
+/**
  * Everything the replicated validator found, at all three tiers.
  *
  * Taken whole rather than filtered: `notes` is where a `pending-road` tag lands, and "a gap
@@ -203,20 +331,25 @@ export function dedupe(rows) {
 /**
  * The whole list, from every source.
  *
- * `sources` is `{ audit, validation, flagged, shapeAt, labelFor }` - all optional, because each
- * one is independently absent in a real session: the audit has not been run, the shard is down,
- * the landz batch has not arrived. A missing source contributes nothing and never throws.
+ * `sources` is `{ audit, walkAudit, validation, flagged, shapeAt, labelFor }` - all optional,
+ * because each one is independently absent in a real session: the audit has not been run, the walk
+ * sweep has never been run at all, the shard is down, the landz batch has not arrived. A missing
+ * source contributes nothing and never throws.
  *
  * The sort is by severity only, and is STABLE, so within a tier the shard's own ordering survives
  * - which matters because the audit emits its findings in graph order and that is the order
  * somebody walking the map would meet them in.
  */
 export function problemRows(sources) {
-    const { audit, validation, flagged, shapeAt, labelFor } = sources || {};
+    const { audit, walkAudit, validation, flagged, shapeAt, labelFor } = sources || {};
 
+    // The walk rows go after the audit's and before the badges, which is the order of how much
+    // each one knows: the audit carries the blocking static's name, a walk row carries what a
+    // mobile actually did, and a badge carries neither. dedupe keeps the first of a pair.
     const rows = dedupe([]
         .concat(unstandableRows(audit && audit.unstandable, shapeAt))
         .concat(edgeRows(audit && audit.problems, labelFor))
+        .concat(walkAuditRows(walkAudit))
         .concat(badgeRows(flagged))
         .concat(validationRows(validation)));
 

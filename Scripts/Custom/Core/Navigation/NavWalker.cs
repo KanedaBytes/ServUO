@@ -216,6 +216,7 @@ namespace Server.Custom
         public NavWalker(BaseCreature mobile)
         {
             _mobile = mobile;
+            Ledger = true;
         }
 
         public BaseCreature Mobile
@@ -252,6 +253,42 @@ namespace Server.Custom
         /// dependency for the data checks.
         /// </summary>
         public Action<NavWalker, StuckRung, string> RungFired;
+
+        /// <summary>
+        /// Raised on the game thread at the TOP of the ladder, immediately before the rescue
+        /// teleport, with the step that failed and the cause in NavWalkFailures' vocabulary.
+        ///
+        /// THE ONE MOMENT THAT HAD NO SEAM. Every rung raises RungFired and every arrival raises
+        /// Arrived; the terminal failure raised neither - it wrote one Log.Warn and moved the
+        /// mobile, which is why NavWalkFailures had to exist as a second instrument reading the
+        /// same event. [WalkAudit needs it for a harder reason than diagnostics: Teleport is
+        /// followed by Advance, and on a one-step route Advance calls Finish, which raises
+        /// Arrived. So a probe that FAILED and a probe that ARRIVED reach a subscriber through the
+        /// same callback, standing on the same tile. Without this, the audit could not tell a walk
+        /// that worked from one that was rescued.
+        ///
+        /// Raised BEFORE the teleport for the reason NavWalkFailures.Record is called there: the
+        /// teleport moves the mobile onto the goal, so everything a subscriber might ask about
+        /// where the walk actually stopped is destroyed by it.
+        /// </summary>
+        public Action<NavWalker, NavStep, string> Failed;
+
+        /// <summary>
+        /// Whether this walker's outcomes count towards the FLEET-WIDE instruments: the walk
+        /// counters, the terminal ledger, the rung totals, the next-step block counts, and an
+        /// edge strike.
+        ///
+        /// True for every walker in the world, and false for exactly one thing - a [WalkAudit
+        /// probe. A whole-graph sweep is fourteen hundred walks in a few minutes, so a probe that
+        /// counted would swamp both halves of the rate window E is measured with, and its
+        /// failures would strike edges: NavEdgeHealth.Strike is a fifteen-minute cost multiplier
+        /// applied to the whole fleet's routing, and an audit that deforms the thing it is
+        /// measuring is not an audit.
+        ///
+        /// Per-walker counts (RungsFired, TotalRungsFired) are NOT gated - they are the audit's
+        /// own readout for a row, and they belong to the walker rather than to the fleet.
+        /// </summary>
+        public bool Ledger { get; set; }
 
         /// <summary>
         /// Whether MoveTo is asked to OR the running bit into every direction. Nothing sets it,
@@ -306,6 +343,14 @@ namespace Server.Custom
             _startedAt = _mobile.Location;
             _skips = 0;
 
+            // The denominator. Here rather than at the top of the method, so a route that was
+            // refused for being empty or for a deleted mobile is not counted as a walk that never
+            // finished - it is not a walk at all.
+            if (Ledger)
+            {
+                NavWalkFailures.NoteWalkStarted();
+            }
+
             ResetHop();
             Register(this);
         }
@@ -342,6 +387,26 @@ namespace Server.Custom
             int index = (int)rung;
 
             return index >= 0 && index < RungCount ? _rungsFired[index] : 0;
+        }
+
+        /// <summary>
+        /// Forget this walker's own rung history.
+        ///
+        /// For a REUSED walker, which in this tree means a [WalkAudit probe: one probe walks a
+        /// hundred hops, and its per-walker counts are the readout for a single row. Without this
+        /// every row after the first would carry every rung the probe had ever climbed, and the
+        /// "passed, but only after N rungs" list would be sorted by how long a probe had been
+        /// working rather than by how fragile the edge is.
+        ///
+        /// Not called anywhere else. A bot's walker is created with the bot and its history is its
+        /// own for as long as it lives - which is the property RungsFired exists for.
+        /// </summary>
+        public void ResetRungs()
+        {
+            for (int i = 0; i < RungCount; i++)
+            {
+                _rungsFired[i] = 0;
+            }
         }
 
         /// <summary>Every rung this walker has climbed, ignoring None.</summary>
@@ -637,6 +702,15 @@ namespace Server.Custom
         {
             Action<NavWalker> arrived = Arrived;
 
+            // The single completion point, which is why it is counted here and not at the arrival
+            // test: Advance reaches Finish from every way a route can run out of steps, including
+            // the one after a rescue. See NavWalkFailures.WalksStarted for why a rescued route
+            // still counts as completed.
+            if (Ledger)
+            {
+                NavWalkFailures.NoteWalkCompleted();
+            }
+
             Stop();
 
             if (arrived != null)
@@ -755,8 +829,14 @@ namespace Server.Custom
 
             if (rungIndex >= 0 && rungIndex < RungCount)
             {
+                // Per-walker always; fleet-wide only for a walker that counts. A [WalkAudit probe
+                // climbing a ladder is the audit measuring, not the fleet struggling.
                 _rungsFired[rungIndex]++;
-                _rungTotals[rungIndex]++;
+
+                if (Ledger)
+                {
+                    _rungTotals[rungIndex]++;
+                }
             }
 
             switch (_rung)
@@ -887,19 +967,49 @@ namespace Server.Custom
                     // This is the only place the terminal failure is recorded with the goal tile
                     // and the mobiles around it. The console line above names the edge and nothing
                     // else - see NavWalkFailures for what that cost.
-                    NavWalkFailures.Record(
-                        _mobile,
-                        _mobile.Map,
-                        new Point3D(step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point)),
-                        DescribeHop(step),
-                        _watchedCycles > 0,
-                        ArrivalRangeFor(step),
-                        step.Kind == NavStepKind.Arrival ? "arrival" : "waypoint",
-                        _index == 0,
-                        _index,
-                        _route == null ? 0 : _route.Count,
-                        _skips,
-                        _startedAt);
+                    Point3D goal = new Point3D(
+                        step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point));
+
+                    if (Ledger)
+                    {
+                        NavWalkFailures.Record(
+                            _mobile,
+                            _mobile.Map,
+                            goal,
+                            DescribeHop(step),
+                            _watchedCycles > 0,
+                            ArrivalRangeFor(step),
+                            step.Kind == NavStepKind.Arrival ? "arrival" : "waypoint",
+                            _index == 0,
+                            _index,
+                            _route == null ? 0 : _route.Count,
+                            _skips,
+                            _startedAt);
+                    }
+
+                    // The seam, raised while the evidence is still here. See the Failed field:
+                    // Teleport is followed by Advance, which on a last step calls Finish and
+                    // raises Arrived, so without this a subscriber cannot tell a rescue from an
+                    // arrival. Copied to a local first, the same null-race guard Advance applies.
+                    Action<NavWalker, NavStep, string> failed = Failed;
+
+                    if (failed != null)
+                    {
+                        bool unstandable;
+                        string cause = NavWalkFailures.CauseFor(
+                            _mobile, _mobile.Map, goal, ArrivalRangeFor(step), out unstandable);
+
+                        try
+                        {
+                            failed(this, step, cause);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Same rule as RungFired: a diagnostic subscriber must never be able
+                            // to stop the rescue it is watching.
+                            Log.Error(ex, "A Failed subscriber threw.");
+                        }
+                    }
 
                     // AND THE EDGE TAKES A STRIKE, so the next bot routes around it.
                     //
@@ -934,7 +1044,12 @@ namespace Server.Custom
                     // inside the hop cap is the same test the README already asks a human to
                     // apply: walk a struck edge from the failing bot's own start tile before
                     // concluding anything about the road.
-                    if (_bestDistance <= NavigationSystem.HopMaxTiles)
+                    //
+                    // AND ONLY FOR A WALKER THAT COUNTS. A [WalkAudit sweep walks every edge in
+                    // the graph in both directions; letting its failures strike would put a
+                    // fifteen-minute cost multiplier on every edge it found hard, which is the
+                    // audit rewriting the routing it was asked to measure.
+                    if (Ledger && _bestDistance <= NavigationSystem.HopMaxTiles)
                     {
                         NavEdgeHealth.Strike(PreviousWaypointId(), step.WaypointId);
                     }
@@ -1277,11 +1392,14 @@ namespace Server.Custom
             {
                 bool shovable = NavWalkFailures.Shovable(blocker);
 
-                _nextStepBlocked++;
-
-                if (!shovable)
+                if (Ledger)
                 {
-                    _nextStepUnshovable++;
+                    _nextStepBlocked++;
+
+                    if (!shovable)
+                    {
+                        _nextStepUnshovable++;
+                    }
                 }
 
                 what += String.Format(
@@ -1373,8 +1491,13 @@ namespace Server.Custom
         ///
         /// Costs one MovementPath, on rung entry only - a few dozen an hour across the fleet,
         /// against the one MoveTo already runs on every step of every walker.
+        ///
+        /// PUBLIC because [WalkAudit asks the identical question of a probe that has just run out
+        /// of ladder, and answering it a second time somewhere else would be a second definition
+        /// of "the tile whose occupant can refuse this step" - which is the one thing about this
+        /// method that is hard to get right and easy to get subtly wrong.
         /// </summary>
-        private Mobile NextStepBlocker(NavStep step)
+        public Mobile NextStepBlocker(NavStep step)
         {
             Map map = _mobile.Map;
 

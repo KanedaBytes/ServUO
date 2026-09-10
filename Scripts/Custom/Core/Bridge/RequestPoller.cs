@@ -253,6 +253,43 @@ namespace Server.Custom
                     return true;
                 }
 
+                // The whole graph, walked by real probe walkers rather than pathed with a Point3D.
+                //
+                // STARTED RATHER THAN RUN, which is what the ack says. A sweep is fourteen hundred
+                // walks and takes minutes; Poll is a Timer callback on the game thread, so
+                // dispatching it inline would freeze the world for the length of the audit and the
+                // ack would arrive long after any caller had given up. The editor drops this, gets
+                // "started", and reads `status` out of walk-audit.json - which is written once at
+                // the start with "running" for exactly that.
+                //
+                // Body: a probe count, or "selftest" for the one hop the audit must fail.
+                case "walk-audit":
+                {
+                    string first = FirstWord(body);
+                    bool selfTest = Insensitive.Equals(first, "selftest");
+
+                    int probes;
+
+                    if (selfTest || !Int32.TryParse(first, out probes))
+                    {
+                        probes = 0;
+                    }
+
+                    string auditError;
+
+                    if (!NavWalkAudit.TryStart(null, probes, selfTest, out auditError))
+                    {
+                        message = "walk audit not started: " + auditError;
+                        return false;
+                    }
+
+                    message = String.Format(
+                        "walk audit started{0}; watch {1} for status",
+                        selfTest ? " (self-test)" : "",
+                        NavWalkAudit.SnapshotPath);
+                    return true;
+                }
+
                 // Walks that climbed the whole ladder and were teleported, with the goal tile and
                 // who was standing near it. Body "clear" starts the ledger again, which is how a
                 // measurement run gets a clean window without a restart.

@@ -28,6 +28,32 @@ const NAV_AUDIT_CS = path.join(
 const NAV_RESAMPLE_CS = path.join(
     __dirname, '..', '..', 'Scripts', 'Custom', 'Core', 'Navigation', 'NavResampleZ.cs');
 
+const NAV_WALK_AUDIT_CS = path.join(
+    __dirname, '..', '..', 'Scripts', 'Custom', 'Core', 'Navigation', 'NavWalkAudit.cs');
+
+/** One walk-audit row, in the shape the shard writes it. */
+function walkRow(over) {
+    return {
+        kind: 'edge',
+        from: 'uo-wp-174',
+        to: 'uo-wp-173-s1',
+        map: 'Trammel',
+        pass: true,
+        steps: 12,
+        tiles: 11,
+        pathTiles: 12,
+        ratio: 1.09,
+        stepRatio: 1.09,
+        seconds: 3.4,
+        stopX: 2026,
+        stopY: 2832,
+        stopZ: 20,
+        rungTotal: 0,
+        rungs: '',
+        ...over
+    };
+}
+
 // --- the sources -------------------------------------------------------------------------------
 
 test('an unstandable arrival keeps the shard\'s own reason, verbatim', () => {
@@ -214,4 +240,173 @@ test('the shard exports the stale-Z records themselves, not only a count', () =>
         assert.ok(emitted.includes(field),
             `NavAudit stopped emitting "${field}" for a stale-Z record. Emitted: ${emitted.join(', ')}`);
     }
+});
+
+// --- the walk audit ----------------------------------------------------------------------------
+
+test('only the failures become rows - a sweep is mostly passes and they are not problems', () => {
+    const rows = problems.walkAuditRows({
+        rows: [walkRow({}), walkRow({ pass: false, cause: 'short-of-goal', endedBy: 'teleport' })]
+    });
+
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].kind, 'walk');
+    assert.match(rows[0].reason, /short-of-goal \(teleport\)/);
+});
+
+test('a walk row jumps to where the walk DIED, not to the goal', () => {
+    // The goal is already on the map as the record itself, so jumping there shows the place that
+    // is fine. 2026,2832 is the tile the README's ladder-drift trail ends on, and it is the tile
+    // somebody has to go and look at.
+    const [row] = problems.walkAuditRows({
+        rows: [walkRow({ pass: false, cause: 'short-of-goal', endedBy: 'timeout' })]
+    });
+
+    assert.strictEqual(row.x, 2026);
+    assert.strictEqual(row.y, 2832);
+});
+
+test('a blocker a bot may not push is said so, on the row', () => {
+    const [row] = problems.walkAuditRows({
+        rows: [walkRow({
+            pass: false,
+            cause: 'short-of-goal',
+            endedBy: 'teleport',
+            occupied: 'Jeanette (npc) at 1457,1526',
+            occupiedUnshovable: true
+        })]
+    });
+
+    assert.match(row.reason, /Jeanette \(npc\) at 1457,1526/);
+    assert.match(row.reason, /may not push/);
+});
+
+test('a sweep that has never run contributes nothing and never throws', () => {
+    assert.deepStrictEqual(problems.walkAuditRows(null), []);
+    assert.deepStrictEqual(problems.walkAuditRows({}), []);
+    assert.strictEqual(problems.walkAuditFor(null, 'uo-wp-174'), null);
+    assert.strictEqual(problems.walkAuditSummary(null), 'no walk audit yet');
+});
+
+test('the header reports the RUN, including what it cost', () => {
+    // The counts describe fourteen hundred walks and the list below can only show the failures, so
+    // the header is the only place the other 1447 are represented - and the only place the cost of
+    // a walk audit is visible at all.
+    const summary = problems.walkAuditSummary({
+        status: 'done',
+        skipped: 2,
+        fragile: 4,
+        seconds: 372.4,
+        probes: 12,
+        rows: [walkRow({}), walkRow({ ratio: 2.82 }), walkRow({ pass: false, cause: 'x' })]
+    });
+
+    assert.match(summary, /3 walked/);
+    assert.match(summary, /1 failed/);
+    assert.match(summary, /2 skipped/);
+    assert.match(summary, /worst ratio 2\.82/);
+    assert.match(summary, /4 passed only after rungs/);
+    assert.match(summary, /372s, 12 probes/);
+});
+
+test('a running sweep says how far it has got, so it cannot look like a hang', () => {
+    assert.match(
+        problems.walkAuditSummary({ status: 'running', walked: 300, total: 1450, rows: [] }),
+        /walking\.\.\. 300 of 1450/);
+});
+
+test("the properties line takes a record's WORST row, and a failure outranks a ratio", () => {
+    const walkAudit = {
+        rows: [
+            walkRow({ from: 'uo-wp-174', ratio: 1.09 }),
+            walkRow({ from: 'x', to: 'uo-wp-174', ratio: 3.5 }),
+            walkRow({ from: 'uo-wp-174', pass: false, cause: 'short-of-goal', endedBy: 'teleport' })
+        ]
+    };
+
+    assert.match(problems.walkAuditFor(walkAudit, 'uo-wp-174'), /FAILED short-of-goal/);
+
+    // With the failure gone, the worst of the two ratios wins - not the first, and not an average.
+    walkAudit.rows.pop();
+    assert.match(problems.walkAuditFor(walkAudit, 'uo-wp-174'), /= 3\.50/);
+});
+
+test('an arrival row is found by its destination id as well as its approach', () => {
+    const walkAudit = {
+        rows: [walkRow({
+            kind: 'arrival', from: 'brit-bank-0', to: undefined,
+            destination: 'brit-bank', ratio: 2.0
+        })]
+    };
+
+    assert.ok(problems.walkAuditFor(walkAudit, 'brit-bank'));
+    assert.ok(problems.walkAuditFor(walkAudit, 'brit-bank-0'));
+});
+
+test('a pass that needed rungs says so - it is not a clean road', () => {
+    const line = problems.walkAuditFor(
+        { rows: [walkRow({ rungTotal: 3, rungs: 'Repath 2, Sidestep 1' })] }, 'uo-wp-174');
+
+    assert.match(line, /after 3 rung\(s\)/);
+});
+
+test('walk rows join the same list as the audit and the badges', () => {
+    const rows = problems.problemRows({
+        rows: [],
+        walkAudit: {
+            rows: [walkRow({ pass: false, cause: 'goal-unstandable', endedBy: 'teleport' })]
+        }
+    });
+
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].kind, 'walk');
+});
+
+// --- the walk audit's drift guards -------------------------------------------------------------
+
+test('the shard still emits the fields these rows are built from', () => {
+    // THE SAME GUARD THE UNSTANDABLE ROWS HAVE, for the same reason. `cause` and `endedBy` are two
+    // different questions - what was wrong with the goal, and how the walk ended - and they were
+    // one field until the self-test showed that a deadline shorter than a ladder turn made every
+    // hard failure read as "timeout" and named no cause at all. If either stops being written the
+    // rows render "undefined" rather than failing.
+    const cs = fs.readFileSync(NAV_WALK_AUDIT_CS, 'utf8');
+
+    // Matched WITH the backslashes, and this test failed once for want of them. In the C# source
+    // the key is written `\"rows\"`, so the plain string `"rows"` is not a substring of the file
+    // at all - the same detail the stale-Z guard above records, met again three tests later.
+    const start = cs.indexOf('\\"rows\\"');
+
+    assert.ok(start > 0, 'NavWalkAudit no longer writes a "rows" array');
+
+    // Matched with the backslash, as the stale-Z guard above explains: in the C# source the key is
+    // written \"cause\", so "cause" with plain quotes is not a substring of the file at all.
+    const emitted = [...cs.slice(start).matchAll(/\\"([a-zA-Z]+)\\":/g)].map((m) => m[1]);
+
+    for (const field of
+        ['kind', 'from', 'pass', 'steps', 'tiles', 'ratio', 'seconds', 'stopX', 'stopY', 'stopZ',
+            'rungTotal', 'rungs', 'cause', 'endedBy', 'occupied', 'pathTiles', 'stepRatio']) {
+        assert.ok(emitted.includes(field),
+            `NavWalkAudit stopped emitting "${field}". Emitted: ${emitted.join(', ')}`);
+    }
+});
+
+test("the walk audit still refuses to count towards the fleet's own instruments", () => {
+    // THE PROPERTY THE WHOLE MEASUREMENT RESTS ON. A sweep is ~1450 walks in a few minutes; if a
+    // probe counted, window E's failures-per-100-walks would be divided by the audit's own
+    // denominator, and its failures would strike edges - a fifteen-minute cost multiplier applied
+    // to the fleet's routing by the very thing that was supposed to be observing it.
+    const cs = fs.readFileSync(NAV_WALK_AUDIT_CS, 'utf8');
+
+    assert.match(cs, /Walker\.Ledger = false/,
+        'the walk audit no longer sets NavWalker.Ledger = false on its probes');
+});
+
+test('a probe consents to being walked through, so it cannot appear in its own readings', () => {
+    // Twelve probes in one town would otherwise refuse each other's steps exactly as two stock
+    // NPCs do, and every one of those would be recorded as an occupied road.
+    const cs = fs.readFileSync(NAV_WALK_AUDIT_CS, 'utf8');
+
+    assert.match(cs, /public override bool OnMoveOver\(Mobile m\)\s*\{\s*return true;/,
+        'the walk probe no longer consents to being walked through');
 });

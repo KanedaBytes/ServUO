@@ -45,6 +45,7 @@ namespace Server.Custom
             CommandSystem.Register("NavArrival", AccessLevel.GameMaster, NavArrival_OnCommand);
             CommandSystem.Register("NavRoute", AccessLevel.GameMaster, NavRoute_OnCommand);
             CommandSystem.Register("NavAudit", AccessLevel.Administrator, NavAudit_OnCommand);
+            CommandSystem.Register("WalkAudit", AccessLevel.Administrator, WalkAudit_OnCommand);
 
             EventSink.Disconnected += OnDisconnected;
         }
@@ -957,6 +958,51 @@ namespace Server.Custom
                     "{0} {1} auditing navigation edges",
                     e.Mobile.AccessLevel,
                     CommandLogging.Format(e.Mobile)));
+        }
+
+        // ---- [WalkAudit ----
+
+        [Usage("WalkAudit [probes | selftest]")]
+        [Description(
+            "Walks every edge in both directions and every arrival from each of its approach "
+            + "waypoints with real probe walkers, and reports what actually happened. "
+            + "'selftest' walks one hop the audit is required to fail.")]
+        private static void WalkAudit_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            string argument = e.ArgString == null ? "" : e.ArgString.Trim();
+            bool selfTest = Insensitive.Equals(argument, "selftest");
+
+            int probes = 0;
+
+            if (!selfTest && argument.Length > 0 && !Int32.TryParse(argument, out probes))
+            {
+                from.SendMessage(0x35, "Usage: [WalkAudit [probes | selftest]");
+                return;
+            }
+
+            string error;
+
+            if (!NavWalkAudit.TryStart(from, probes, selfTest, out error))
+            {
+                from.SendMessage(0x35, "Walk audit not started: " + error);
+                return;
+            }
+
+            from.SendMessage(
+                selfTest
+                    ? "Walk audit self-test running; it must report one FAILED row."
+                    : "Walk audit running. The result goes to the console and to "
+                        + NavWalkAudit.SnapshotPath + ".");
+
+            CommandLogging.WriteLine(
+                from,
+                String.Format(
+                    "{0} {1} running a walk audit{2}",
+                    from.AccessLevel,
+                    CommandLogging.Format(from),
+                    selfTest ? " (self-test)" : ""));
         }
 
         // ---- helpers ----

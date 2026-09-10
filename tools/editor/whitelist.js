@@ -49,6 +49,10 @@ const FILES = {
     health: path.join(REPO_ROOT, 'Data', 'Live', 'health.json'),
     spawnerState: path.join(REPO_ROOT, 'Data', 'Live', 'spawners.json'),
     navAudit: path.join(REPO_ROOT, 'Data', 'Live', 'nav-audit.json'),
+
+    // [WalkAudit's sweep: every edge and arrival walked by real probe walkers, with the ratio of
+    // steps to straight line and the cause of every failure. Read-only like every Data/Live file.
+    walkAudit: path.join(REPO_ROOT, 'Data', 'Live', 'walk-audit.json'),
     siteReach: path.join(REPO_ROOT, 'Data', 'Live', 'site-reach.json'),
     navRoute: path.join(REPO_ROOT, 'Data', 'Live', 'nav-route.json'),
     botLog: path.join(REPO_ROOT, 'Data', 'Live', 'botlog.json'),

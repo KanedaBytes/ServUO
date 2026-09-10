@@ -497,6 +497,26 @@ const ROUTES = {
     },
 
     /**
+     * The last [WalkAudit.
+     *
+     * A SEPARATE ENDPOINT FROM /api/audit, not a field on it, because the two are produced by
+     * different runs at different times and cost. [NavAudit is seconds and runs on every nav save;
+     * a walk sweep is minutes and runs when somebody asks. Folding them together would make the
+     * cheap one wait for the expensive one, or make the expensive one's answer look current when
+     * it is an hour old.
+     *
+     * `status` is what the button polls: the shard writes this file once at the START of a run
+     * with status "running", because a sweep takes minutes and the request token cannot ack that
+     * long.
+     */
+    '/api/walkaudit': (request, response) => {
+        sendJson(
+            response,
+            200,
+            readJson(whitelist.FILES.walkAudit) || { utc: null, status: 'none', rows: [] });
+    },
+
+    /**
      * How many harvestable tiles each work-site arrival can actually reach.
      *
      * Read-only, like every other Data/Live file: the shard measures it against real map data and

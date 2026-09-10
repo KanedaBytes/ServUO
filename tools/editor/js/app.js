@@ -33,7 +33,7 @@ import {
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
 import { auditLine, hasBlocked } from './audit.js';
-import { problemRows, problemSummary } from './problems.js';
+import { problemRows, problemSummary, walkAuditSummary, walkAuditFor } from './problems.js';
 import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId, insertedId, insertedName } from './ids.js';
@@ -78,6 +78,7 @@ const state = {
 
     // The last [NavAudit result, drawn over the edges.
     audit: null,
+    walkAudit: null,
 
     // The replicated validator's last answer, kept so the Problems panel can list it. It used
     // to be computed on every edit and thrown away except for fatal[0], which went to the
@@ -1885,6 +1886,19 @@ function showProperties(shape) {
                 ? `${shape.points[0][2]} (ground ${ground})`
                 : shape.points[0][2]]
         ]));
+    }
+
+    // WHAT A REAL WALKER DID HERE, when a sweep has been run.
+    //
+    // The ratio is the number the Britain re-base rests on: an edge authored at twelve tiles whose
+    // real road is thirty walks a bot round three sides of a building every time, and nothing else
+    // in this editor can say so - the geometry audit passes it, the length check passes it, and the
+    // marker looks right. A failing row wins over a ratio, because "this does not work" outranks
+    // "this works badly".
+    const walked = walkAuditFor(state.walkAudit, shape.id);
+
+    if (walked) {
+        dom.properties.append(readonlyRow([['walk', walked]]));
     }
 
     for (const field of shape.fields || []) {
@@ -3903,6 +3917,7 @@ function wireInput() {
     });
 
     wireAudit();
+    wireWalkAudit();
     wireResync();
 
     wireRequest('reload-nav', 'nav-reload', '', 'Navigation reloaded');
@@ -4058,6 +4073,7 @@ function renderProblems() {
 
     const rows = problemRows({
         audit: state.audit,
+        walkAudit: state.walkAudit,
         validation: state.validation,
         flagged,
         shapeAt: shapeAtTile,
@@ -4065,6 +4081,21 @@ function renderProblems() {
     });
 
     dom.problems.innerHTML = '';
+
+    // The walk sweep's own header, before anything else in the list.
+    //
+    // Its counts describe a RUN and the list below describes findings, and the two are different
+    // facts: a sweep that walked 1450 edges and found three faults has said something about the
+    // other 1447 that a list of three cannot. It is also the only place the cost of a walk audit
+    // is visible - seconds and probes - which is what decides whether somebody runs one again.
+    if (state.walkAudit && state.walkAudit.status && state.walkAudit.status !== 'none') {
+        const head = document.createElement('li');
+
+        head.className = 'muted';
+        head.textContent = `walk audit: ${walkAuditSummary(state.walkAudit)}`;
+
+        dom.problems.append(head);
+    }
 
     if (rows.length === 0) {
         const empty = document.createElement('li');
@@ -4507,6 +4538,80 @@ function wireAudit() {
     }
 
     button.addEventListener('click', () => runAudit({ quiet: false }));
+}
+
+/**
+ * Runs [WalkAudit and shows what real walkers did.
+ *
+ * POLLED RATHER THAN AWAITED, which is the whole difference from runAudit. A nav audit is seconds
+ * and the ack carries its summary; a walk sweep is 1450 walks over twelve probes and takes minutes,
+ * so RequestPoller starts it and acks "started" immediately - waiting on that ack would report
+ * success before a single probe had moved. The shard writes walk-audit.json once at the start with
+ * status "running" precisely so there is something to poll, and the button reads `status` out of it.
+ *
+ * The poll is deliberately slow (two seconds). Nothing about this run changes on a shorter
+ * timescale than a walk, and a browser hammering the bridge is a browser competing with the shard
+ * it is measuring.
+ */
+async function runWalkAudit() {
+    const button = $('run-walk-audit');
+
+    if (button) {
+        button.disabled = true;
+    }
+
+    try {
+        const dropped = await api.request('walk-audit', '');
+        const ack = await api.awaitAck('walk-audit', { nonce: dropped.nonce, timeoutMs: 30000 });
+
+        if (!ack.ok) {
+            setStatus(`Walk audit not started: ${ack.message}`, 'error');
+            return;
+        }
+
+        setStatus('Walk audit running - every edge and arrival, by real walkers...', 'ok');
+
+        // No overall deadline, because there is no honest one: the run scales with the graph, and
+        // a sweep that is still going is not a sweep that has failed. The user can leave the page.
+        for (;;) {
+            state.walkAudit = await api.walkAudit();
+
+            renderProblems();
+            updateCounts();
+
+            if (state.walkAudit.status === 'done') {
+                break;
+            }
+
+            if (state.walkAudit.status !== 'running') {
+                setStatus('Walk audit stopped without finishing.', 'error');
+                return;
+            }
+
+            setStatus(`Walk audit: ${walkAuditSummary(state.walkAudit)}`, 'ok');
+
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+
+        const failed = (state.walkAudit.rows || []).filter((row) => !row.pass).length;
+
+        setStatus(`Walk audit: ${walkAuditSummary(state.walkAudit)}`, failed > 0 ? 'warn' : 'ok');
+        requestRender();
+    } catch (error) {
+        setStatus(`Walk audit failed: ${error.message}`, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+        }
+    }
+}
+
+function wireWalkAudit() {
+    const button = $('run-walk-audit');
+
+    if (button) {
+        button.addEventListener('click', () => runWalkAudit());
+    }
 }
 
 /**

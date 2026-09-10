@@ -161,6 +161,65 @@ namespace Server.Custom
 
         private static int _total;
 
+        private static int _started;
+
+        private static int _completed;
+
+        /// <summary>
+        /// How many walks were STARTED and how many reached their last step, since the last clear.
+        ///
+        /// WHY A DENOMINATOR. Windows A, B, C and D are thirty, thirty, fifteen and thirty
+        /// minutes, and every table so far has been read per minute - which is a fact about how
+        /// busy the shard was, not about how good the roads are. A window with the population
+        /// doubled and the visit windows thirded (MeasurementProfile) produces several times the
+        /// walks in the same wall time, so per minute would read as a regression while the roads
+        /// were unchanged.
+        ///
+        /// A WALK IS A ROUTE, AND A FAILURE IS AN EVENT INSIDE ONE. `_total` counts hops that
+        /// climbed the whole ladder and were rescued; a route of five hops can produce more than
+        /// one of those and still reach its last step, because the rescue teleports and carries
+        /// on. So "failures per 100 walks" is terminal-failure events per hundred routes BEGUN,
+        /// which is well defined and is the number that stops depending on window length. It is
+        /// not a percentage of walks that failed, and it can exceed 100 on a graph bad enough.
+        ///
+        /// Completed is kept beside it as routes that reached their last step. The gap between the
+        /// two is the walks still in flight plus the ones that ended some other way - a bot
+        /// deleted mid-route by a session ending, a Stop from a hand switch - and a gap that grows
+        /// without failures growing is its own finding.
+        /// </summary>
+        public static int WalksStarted
+        {
+            get { return _started; }
+        }
+
+        public static int WalksCompleted
+        {
+            get { return _completed; }
+        }
+
+        /// <summary>Counted by NavWalker.Follow. Gated on NavWalker.Ledger - see that property.</summary>
+        public static void NoteWalkStarted()
+        {
+            _started++;
+        }
+
+        /// <summary>Counted by NavWalker.Finish, the single completion point.</summary>
+        public static void NoteWalkCompleted()
+        {
+            _completed++;
+        }
+
+        /// <summary>
+        /// Events per hundred walks started, or -1 when nothing has walked yet.
+        ///
+        /// -1 rather than 0, because "no walks, so no failures" and "many walks and no failures"
+        /// are opposite findings and a shared 0 would read as the good one.
+        /// </summary>
+        public static double PerHundredWalks(int events)
+        {
+            return _started <= 0 ? -1.0 : (events * 100.0) / _started;
+        }
+
         /// <summary>Every failure since the last clear, oldest first.</summary>
         public static IList<NavWalkFailure> All
         {
@@ -177,6 +236,57 @@ namespace Server.Custom
         {
             _failures.Clear();
             _total = 0;
+
+            // The denominator clears with the numerator or the rate is nonsense: a window opened
+            // by `walk-failures clear` would otherwise divide this window's failures by every walk
+            // since boot.
+            _started = 0;
+            _completed = 0;
+        }
+
+        /// <summary>
+        /// WHY this walk ended, in the ledger's own vocabulary, and whether anything fits on the
+        /// goal tile at all.
+        ///
+        /// EXTRACTED SO THERE IS ONE COPY. Record used to compute this inline, and [WalkAudit asks
+        /// exactly the same question about a probe that ran out of ladder. Two copies of a
+        /// three-way branch would drift the moment either grew a fourth case, and the whole value
+        /// of the walk audit is that its causes read against the live ledger's without a
+        /// translation table - so the classification is a function and both callers call it.
+        ///
+        /// The three causes are not degrees of the same thing. `goal-unstandable` is a tile
+        /// nothing fits on and a walk that could never have finished. `arrived-no-stand-tile` is a
+        /// bot INSIDE the arrival's range that still found nowhere to stand - the place, not the
+        /// road. `short-of-goal` never reached the place at all, and its problem is the road
+        /// behind it. Merged, they made 28 of 30 failures in one window look like one thing.
+        /// </summary>
+        public static string CauseFor(
+            Mobile mobile, Map map, Point3D goal, int arrivalRange, out bool goalUnstandable)
+        {
+            goalUnstandable = false;
+
+            if (mobile == null || map == null || map == Map.Internal)
+            {
+                return "unknown";
+            }
+
+            // Mobiles deliberately not counted: the question is whether the TILE can take anybody,
+            // not whether somebody is on it right now - that is the near list's job.
+            goalUnstandable =
+                !map.CanFit(goal.X, goal.Y, goal.Z, 16, false, false, true)
+                && !map.CanFit(goal.X, goal.Y, map.GetAverageZ(goal.X, goal.Y), 16, false, false, true);
+
+            if (goalUnstandable)
+            {
+                return "goal-unstandable";
+            }
+
+            // Chebyshev, because that is the metric the walker's own arrival test uses; and at
+            // least one, because a range-0 arrival is still "reached" when the bot is on the tile
+            // beside it and the single last step is what failed.
+            int reach = Math.Max(Math.Abs(mobile.X - goal.X), Math.Abs(mobile.Y - goal.Y));
+
+            return reach <= Math.Max(arrivalRange, 1) ? "arrived-no-stand-tile" : "short-of-goal";
         }
 
         /// <summary>
@@ -220,22 +330,12 @@ namespace Server.Custom
                 StartZ = start.Z
             };
 
-            // Mobiles deliberately not counted: the question is whether the TILE can take anybody,
-            // not whether somebody is on it right now - that is the near list's job, just below.
-            failure.GoalUnstandable =
-                !map.CanFit(goal.X, goal.Y, goal.Z, 16, false, false, true)
-                && !map.CanFit(goal.X, goal.Y, map.GetAverageZ(goal.X, goal.Y), 16, false, false, true);
+            // Shared with [WalkAudit, so a probe's cause and a live bot's cause are the same
+            // words by construction rather than by two people keeping two branches in step.
+            bool unstandable;
 
-            // Chebyshev, because that is the metric the walker's own arrival test uses; and at
-            // least one, because a range-0 arrival is still "reached" when the bot is on the tile
-            // beside it and the single last step is what failed.
-            int reach = Math.Max(Math.Abs(mobile.X - goal.X), Math.Abs(mobile.Y - goal.Y));
-
-            failure.Cause = failure.GoalUnstandable
-                ? "goal-unstandable"
-                : reach <= Math.Max(arrivalRange, 1)
-                    ? "arrived-no-stand-tile"
-                    : "short-of-goal";
+            failure.Cause = CauseFor(mobile, map, goal, arrivalRange, out unstandable);
+            failure.GoalUnstandable = unstandable;
 
             // Centred on the GOAL, which is the whole point. NavWalker's own DescribeBlocker falls
             // back to a list centred on the walker, and a walker that has been shuffling for two
@@ -349,6 +449,14 @@ namespace Server.Custom
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
             builder.Append("  \"total\": ").Append(_total).Append(",\n");
             builder.Append("  \"kept\": ").Append(_failures.Count).Append(",\n");
+
+            // The denominator, so a reader of this file can compute the rate without knowing how
+            // long the window was or how many bots were on. See WalksStarted.
+            builder.Append("  \"walksStarted\": ").Append(_started).Append(",\n");
+            builder.Append("  \"walksCompleted\": ").Append(_completed).Append(",\n");
+            builder.Append("  \"per100Walks\": ")
+                .Append(PerHundredWalks(_total).ToString("F2", System.Globalization.CultureInfo.InvariantCulture))
+                .Append(",\n");
             builder.Append("  \"failures\": [\n");
 
             for (int i = 0; i < _failures.Count; i++)
@@ -417,7 +525,14 @@ namespace Server.Custom
             }
 
             message = String.Format(
-                "{0} walk failure(s) since boot, {1} kept", _total, _failures.Count);
+                "{0} walk failure(s) since boot, {1} kept; {2} walk(s) started, {3} completed{4}",
+                _total,
+                _failures.Count,
+                _started,
+                _completed,
+                _started > 0
+                    ? String.Format(" ({0:F2} failures per 100 walks)", PerHundredWalks(_total))
+                    : "");
 
             return true;
         }

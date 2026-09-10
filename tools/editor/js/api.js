@@ -78,6 +78,7 @@ export const api = {
     vocabulary: () => request('GET', '/api/vocabulary'),
 
     audit: () => request('GET', '/api/audit'),
+    walkAudit: () => request('GET', '/api/walkaudit'),
     adopt: () => request('GET', '/api/adopt'),
     reach: () => request('GET', '/api/reach'),
     route: () => request('GET', '/api/route'),
