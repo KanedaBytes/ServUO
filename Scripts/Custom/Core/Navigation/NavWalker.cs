@@ -910,7 +910,43 @@ namespace Server.Custom
                     //
                     // An arrival step has no waypoint id and is not an edge - the tile is the
                     // problem there, and NavWalkFailures is what records that.
-                    NavEdgeHealth.Strike(PreviousWaypointId(), step.WaypointId);
+                    //
+                    // AND ONLY IF THE WALKER EVER CAME NEAR IT. A strike is a fifteen-minute cost
+                    // multiplier on an edge, so striking one no bot ever approached deforms routing
+                    // for a quarter of an hour on no evidence at all - which is what has been
+                    // happening. Measured: `uo-wp-173-s1 <-> uo-wp-174` is a 12-tile Trinsic road
+                    // edge the audit walks in both directions, and it took two strikes in one
+                    // window from bots standing at 2026,2832 z 20 - the first floor of a
+                    // provisioner, 22 tiles from `uo-wp-174` and 34 from the goal.
+                    //
+                    // They got there by INDEX, not on foot. Nav.TryRouteFrom starts a route at the
+                    // nearest waypoint inside the hop cap, which from that tile is `uo-wp-194-s1`
+                    // ten tiles east - so no route it could have been given began at `uo-wp-174`.
+                    // TrySkipWaypoint is the only thing that advances the index without the mobile
+                    // moving, and it calls ResetHop each time, so a walker that cannot take a
+                    // single step climbs the ladder, skips, resets and climbs again, marching west
+                    // along the road while rooted upstairs. The hop it finally reports is one it
+                    // never touched, and that is where a "stopped 33 tiles SHORT" on a ten-tile
+                    // edge comes from.
+                    //
+                    // _bestDistance is the closest this walker ever got to THIS step - reset per
+                    // hop, so a skipped-to hop carries the distance it started at. Requiring it
+                    // inside the hop cap is the same test the README already asks a human to
+                    // apply: walk a struck edge from the failing bot's own start tile before
+                    // concluding anything about the road.
+                    if (_bestDistance <= NavigationSystem.HopMaxTiles)
+                    {
+                        NavEdgeHealth.Strike(PreviousWaypointId(), step.WaypointId);
+                    }
+                    else if (step.Kind != NavStepKind.Arrival)
+                    {
+                        Log.Debug(
+                            "{0} did not strike {1}: it never came closer than {2} tiles to it, "
+                            + "so the edge is not what failed.",
+                            Who(),
+                            DescribeHop(step),
+                            _bestDistance);
+                    }
 
                     Teleport(step);
                     Advance();
@@ -1608,6 +1644,42 @@ namespace Server.Custom
             if (next.Kind == NavStepKind.Transition)
             {
                 // A gate is not a tile to walk to; let the top rung place the mobile properly.
+                return false;
+            }
+
+            // NOT WHILE THE GOAL IS ALREADY OUT OF APPROACH RANGE, because then the skip and the
+            // re-anchor fight each other and the gap grows on every cycle.
+            //
+            // Measured, one bot, eight minutes. Lirien stalled at 2035,2832 on the Trinsic road
+            // with a 200-hop route to Britain. The ladder then ran five identical cycles:
+            //
+            //     [None]  15 tiles from the goal, past the approach cap - walking back to X
+            //     [Repath] [Sidestep] [Door]
+            //     [SkipWaypoint] skipping to Y          <- goal moves one waypoint FURTHER away
+            //     [None]  17 tiles from the goal ... walking back to Y-1
+            //     ... 19 ... 22 ... 34
+            //
+            // TryReAnchor walks the mobile BACKWARDS toward the waypoint behind it; the skip moves
+            // the goal FORWARDS; and because the skip calls ResetHop, which clears _reAnchored, the
+            // pair repeats indefinitely. Nine tiles of that drift carried the bot off the road and
+            // onto the first floor of a provisioner at 2026,2832 z 20 - the tile that looked like
+            // something was PLACING bots there and was nothing of the kind. The failure it finally
+            // reported, "34 tile(s) SHORT" of a twelve-tile edge, named a hop it had never been
+            // near, and struck it.
+            //
+            // Skipping cannot help a walker that could not reach the NEARER waypoint, so past the
+            // approach cap the honest answer is to stop climbing and let the top rung rescue it -
+            // about a hundred seconds at fifteen tiles, instead of eight minutes at thirty-four.
+            int reach = Chebyshev(_mobile.Location, step.Point);
+
+            if (reach > MaxApproachDistance)
+            {
+                LogRung(step, String.Format(
+                    "not skipping: {0} tiles from the goal, past the {1}-tile approach cap, and the "
+                    + "next waypoint is further still",
+                    reach,
+                    MaxApproachDistance));
+
                 return false;
             }
 

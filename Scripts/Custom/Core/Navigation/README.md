@@ -564,8 +564,95 @@ nothing was steered in any of them.
 it accounts for 5 of C's 8 failures on its own; `trinsic-shop-provisioner-2`'s at `1882,2805` is a
 **counter** whose only standable neighbour is the shop floor a storey up, which strands a bot
 against a 12-tile hop at z 0; and something puts bots on `2026,2832` z 20 in Trinsic, 22 tiles from
-their own start waypoint. All three are authoring decisions rather than code, which is why they are
-written down here rather than guessed at.
+their own start waypoint.
+
+**Two of the three were authoring and one was not.** Both arrivals were re-placed in the editor and
+are gone from the count. `2026,2832` was never a placement at all - the recovery ladder walks bots
+there, nine tiles at a time, and window D below has the trail. It is recorded here as it was written
+because being wrong about which of the three was code is the kind of thing worth leaving visible.
+
+### Window D, and the two mechanisms it named
+
+Same shard, same graph, 50-53 bots walking themselves, 30 minutes, nothing steered. The three
+records window C was left waiting on had by then been fixed as data - `brit-square`'s stone-wall
+arrival and `trinsic-shop-provisioner-2`'s counter were re-placed in the editor, and
+`brit-shop-tinker` was moved onto the building it is actually in (its only arrival, 1421,1651, was
+inside a plaster wall 20 tall: `CanFit` false and all eight neighbour steps refused).
+
+| | **C** 15 min | **D** 30 min |
+| --- | --- | --- |
+| terminal failures | 8 | 6 |
+| ... per minute | 0.53 | **0.20** |
+| on an **arrival** hop | 3 | 4 |
+| on a **waypoint** hop | 5 | 2 (**both skip-marched**) |
+| rung entries (rungs 1-4) | 68 | 85 |
+| ... per minute | 4.53 | **2.83** |
+| next-step tile occupied | 5 | 8 |
+| ... by something a bot may not push | 0 | 6 |
+| arrival retargets | 7 | 6 (taken 1, unstandable 1, unreachable 4) |
+| struck edges | 0 | 2 (**neither earned**) |
+| unstandable arrivals | 19 | **15** |
+
+The unshovable column is not a regression of the shove edit. Every one of the six is a stock NPC in
+a doorway - `Jeanette (InnKeeper) at 1457,1526` accounts for a run of them on its own - which is the
+yield-to-stock-NPCs rule working as written. C's zero was fifteen quiet minutes, not a floor.
+
+**The failure per minute fell by 62% and the two waypoint failures that remain are not about roads
+at all.** Both carry the new progress field, which is what made them legible:
+
+```
+Lirien could not walk 'uo-wp-174' -> 'uo-wp-173-s1' ... It stopped 34 tile(s) SHORT of the goal
+  - and it SKIPPED its way there, so the edge is not the suspect.
+  [at 2026,2832,20; started 2024,2844,0; step 10/200, 5 skipped]
+```
+
+#### The skip and the re-anchor were fighting each other
+
+Lirien's rung log is the whole mechanism, eight minutes of it:
+
+```
+17:37:25  stuck at 2035,2832 [Repath]
+17:38:26  stuck at 2035,2832 [SkipWaypoint] - skipping to 'uo-wp-193'
+17:38:46  stuck at 2030,2832 [None] - 15 tiles from the goal, past the 8-tile approach cap
+                                      - walking back to 'uo-wp-194'
+17:40:06  ... [SkipWaypoint] - skipping to 'uo-wp-174-s2'
+17:40:26  ... [None] - 17 tiles from the goal ...
+17:42:06  ... 19 tiles ...      17:43:47  ... 22 tiles ...      17:45:27  ... 34 tiles ...
+```
+
+`TryReAnchor` walks the mobile **backwards** toward the waypoint behind it. `TrySkipWaypoint` moves
+the goal **forwards**. And a skip calls `ResetHop`, which clears `_reAnchored`, so the pair repeats
+for as long as the walker keeps failing - the gap growing every cycle, 15 to 34 tiles. The frozen
+watchdog never fires, because the ladder's own sidesteps and re-anchor walks supply the two tiles of
+movement it looks for.
+
+Three consequences, all measured rather than reasoned:
+
+- **`2026,2832` z 20 is not a placement.** It looked like something was putting bots on the first
+  floor of a Trinsic provisioner 22 tiles from their start waypoint. Nothing was: Lirien *walked*
+  there, nine tiles of ladder drift west along the road from 2035,2832, over eight minutes. Every
+  walker-initiated `MoveToWorld` now logs where from and where to, so the next one of these is one
+  line rather than an inference.
+- **A "stopped N tiles SHORT" on a short edge is the index, not the road.** `TrySkipWaypoint` now
+  refuses while the goal is already past `MaxApproachDistance`: skipping cannot help a walker that
+  could not reach the *nearer* waypoint, so past the cap the ladder tops out and the rescue happens
+  at about a hundred seconds and fifteen tiles instead of eight minutes and thirty-four.
+- **A strike now requires the walker to have come within the hop cap of the edge.** Both of D's
+  strikes were skip-marched onto edges `[NavAudit` walks cleanly in both directions, and a strike is
+  a fifteen-minute cost multiplier - so an unearned one deforms routing for a quarter of an hour on
+  no evidence. `_bestDistance` is the closest this walker ever got to this step, and it is now the
+  gate. This is the same test the section above already asks a person to apply by hand.
+
+#### And an arrival can be scattered onto a doorway
+
+`NavArrivals.Scatter` validates a candidate with `CanSpawnMobile`, which is a true answer with a
+lifetime of seconds when the tile is a doorway. Measured: a bot sent to 1845,2710 at the Trinsic
+alchemist arrived to find *nothing can stand on it*, and probing that tile six times over a minute
+showed it flipping between a wooden door with `CanFit` false and an empty tile with `CanFit` true.
+`BaseDoor.Open` **moves** the item by its `Offset` (`BaseDoor.cs:88-94`), so a door occupies one tile
+shut and its neighbour open, and the scatter had validated the half-second the doorway was clear.
+Scatter now refuses both tiles of every door within the scatter radius. `TryShiftWithinArrival` had
+recovered this one, which is why it cost a ladder climb rather than a failure.
 
 ### The seam for a custom pathfinder
 

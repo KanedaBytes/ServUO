@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+using Server.Items;
+
 namespace Server.Custom
 {
     /// <summary>
@@ -192,6 +194,15 @@ namespace Server.Custom
         /// and unreachable, and answering that costs a MovementPath per candidate. NavWalker's
         /// arrival retarget is where reachability is settled, once, from close enough for the
         /// pathfinder's answer to be worth having.
+        ///
+        /// AND IT REFUSES A DOORWAY, because CanSpawnMobile's answer about one is only true until
+        /// the door swings. Measured: a bot was sent to 1845,2710 at the Trinsic alchemist and
+        /// arrived to find "nothing can stand on it". Probing that tile six times over a minute
+        /// showed it flipping between a wooden door with CanFit false and an empty tile with
+        /// CanFit true - because BaseDoor.Open MOVES the item by its Offset (BaseDoor.cs:88-94),
+        /// so a door occupies one tile shut and its neighbour open. The scatter had validated the
+        /// half-second the doorway was clear. Nothing is wrong with the validation; the tile is
+        /// simply not a place to stand, in either state.
         /// </summary>
         private static Point3D Scatter(Point3D around, Map map)
         {
@@ -199,10 +210,17 @@ namespace Server.Custom
 
             if (radius > 0)
             {
+                HashSet<int> doorTiles = DoorTiles(map, around, radius);
+
                 for (int i = 0; i < ScatterAttempts; i++)
                 {
                     int x = around.X + Utility.RandomMinMax(-radius, radius);
                     int y = around.Y + Utility.RandomMinMax(-radius, radius);
+
+                    if (doorTiles.Contains(Key(x, y)))
+                    {
+                        continue;
+                    }
 
                     int z;
 
@@ -219,6 +237,61 @@ namespace Server.Custom
             }
 
             return around;
+        }
+
+        /// <summary>
+        /// Every tile a door near this anchor can stand on - BOTH its states.
+        ///
+        /// Both, because either one is a tile whose standability depends on the door rather than on
+        /// the map: shut, the door is impassable where it is; open, it is impassable one tile over.
+        /// A scatter that lands on either gets an answer with a lifetime measured in seconds.
+        ///
+        /// One range query per Scatter call, not per candidate. The radius is the scatter's plus
+        /// one, because an open door reaches a tile beyond the closed one it belongs to.
+        /// </summary>
+        private static HashSet<int> DoorTiles(Map map, Point3D around, int radius)
+        {
+            var tiles = new HashSet<int>();
+
+            IPooledEnumerable eable = map.GetItemsInRange(around, radius + 1);
+
+            try
+            {
+                foreach (Item item in eable)
+                {
+                    var door = item as BaseDoor;
+
+                    if (door == null || door.Deleted)
+                    {
+                        continue;
+                    }
+
+                    // Where it is now, and where the other state would put it. Offset is signed
+                    // from the CLOSED position, so the arithmetic runs one way or the other
+                    // depending on which state we are looking at.
+                    Point3D here = door.Location;
+                    Point3D other = door.Open
+                        ? new Point3D(here.X - door.Offset.X, here.Y - door.Offset.Y, here.Z)
+                        : new Point3D(here.X + door.Offset.X, here.Y + door.Offset.Y, here.Z);
+
+                    tiles.Add(Key(here.X, here.Y));
+                    tiles.Add(Key(other.X, other.Y));
+                }
+            }
+            finally
+            {
+                // A non-generic IPooledEnumerable has to be freed or the pool leaks
+                // (CLAUDE.md section 14).
+                eable.Free();
+            }
+
+            return tiles;
+        }
+
+        /// <summary>A tile as one int, so the door set is a HashSet rather than a string join.</summary>
+        private static int Key(int x, int y)
+        {
+            return (x << 16) ^ (y & 0xFFFF);
         }
     }
 }

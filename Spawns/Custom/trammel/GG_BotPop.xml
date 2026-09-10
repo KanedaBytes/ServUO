@@ -675,12 +675,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-tinker</Name>
     <UniqueId>f9ddfbc5-7a3b-a408-0545-83140f358d66</UniqueId>
     <Map>Trammel</Map>
-    <X>1420</X>
-    <Y>1650</Y>
+    <X>1425</X>
+    <Y>1657</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1428</CentreX>
-    <CentreY>1660</CentreY>
+    <CentreX>1425</CentreX>
+    <CentreY>1657</CentreY>
     <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
