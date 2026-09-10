@@ -171,11 +171,11 @@
     <Name>GG_BotPop_britain_station_brit-shop-tailor</Name>
     <UniqueId>af0f21d5-39fe-245f-74e6-e07e2e511cbf</UniqueId>
     <Map>Trammel</Map>
-    <X>1467</X>
+    <X>1470</X>
     <Y>1686</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1467</CentreX>
+    <CentreX>1470</CentreX>
     <CentreY>1686</CentreY>
     <CentreZ>0</CentreZ>
     <Range>0</Range>
@@ -213,11 +213,11 @@
     <Name>GG_BotPop_britain_station_brit-shop-carpenter</Name>
     <UniqueId>2bce0d31-0cde-7981-f11e-ee879bd3240a</UniqueId>
     <Map>Trammel</Map>
-    <X>1429</X>
+    <X>1433</X>
     <Y>1596</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1429</CentreX>
+    <CentreX>1433</CentreX>
     <CentreY>1596</CentreY>
     <CentreZ>20</CentreZ>
     <Range>0</Range>
@@ -255,12 +255,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-armorer</Name>
     <UniqueId>fc376bd9-0eec-cf07-f5d1-102b1fe464ff</UniqueId>
     <Map>Trammel</Map>
-    <X>1447</X>
-    <Y>1647</Y>
+    <X>1442</X>
+    <Y>1650</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1447</CentreX>
-    <CentreY>1647</CentreY>
+    <CentreX>1442</CentreX>
+    <CentreY>1650</CentreY>
     <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
@@ -591,12 +591,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner</Name>
     <UniqueId>9eaa8be0-3146-8e81-b78f-c4798d4d5a8b</UniqueId>
     <Map>Trammel</Map>
-    <X>1469</X>
-    <Y>1668</Y>
+    <X>1470</X>
+    <Y>1666</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1469</CentreX>
-    <CentreY>1668</CentreY>
+    <CentreX>1470</CentreX>
+    <CentreY>1666</CentreY>
     <CentreZ>0</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
@@ -633,12 +633,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-tanner</Name>
     <UniqueId>493b8e7c-7d10-9fc7-da8a-e17203006060</UniqueId>
     <Map>Trammel</Map>
-    <X>1426</X>
-    <Y>1608</Y>
+    <X>1433</X>
+    <Y>1609</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1426</CentreX>
-    <CentreY>1608</CentreY>
+    <CentreX>1433</CentreX>
+    <CentreY>1609</CentreY>
     <CentreZ>20</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
