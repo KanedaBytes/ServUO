@@ -328,6 +328,27 @@ one thing no player ever did. The work probe's expectation is the packed forge: 
 the station tile, the miner delivering to whichever smith is at the bench, and a second smith
 arriving from town to settle on a free tile of its own and make something from it.
 
+### The last leg aims at a tile it can reach, where theirs aims at the waypoint
+
+Upstream's final leg never targets the arrival coordinate at all. It targets the approach
+**waypoint** plus a random +/-5 jitter and calls itself arrived at `FinalLegArrivalRange` **8**
+(`TravelerBehavior.cs:70-77`, `:1942-1963`), and its own comment says why in our words: *"The
+destination tile may sit inside a building ... a bot routing from the street can't reach the inner
+tile and would grind the outer wall."* The last few tiles are a bounded cosmetic drift that is
+allowed to fail (`DriftArriveRange` 2, six seconds, `:2042-2094`). They have no standability sweep
+in the arrival path anywhere.
+
+**We cannot take their 8, and the reason is the row above.** A station is a place *and* the stand
+tile has to be within 2 of both anvil and forge or `DefBlacksmithy.CanCraft` refuses. An arrival
+range is load-bearing here and decorative there, so eight tiles of latitude would put a smith
+outside the shop it came to work in.
+
+So the walker keeps the authored range and buys reachability instead: `NavWalker` retargets the
+last hop onto a tile that is standable **and** pathable inside that range, re-asking as the bot
+halves its distance. See the Navigation README, *The last hop is the one nobody audited* - the
+measurement is 7 of 17 terminal failures in one window, every one a bot three tiles from a range-2
+arrival.
+
 ### The walker has uo-offline's frozen watchdog
 
 `NavWalker`'s ladder resets on progress, and a `SkipWaypoint` that succeeds is progress: it aims at

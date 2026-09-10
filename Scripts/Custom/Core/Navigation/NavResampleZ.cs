@@ -103,12 +103,84 @@ namespace Server.Custom
             /// </summary>
             public bool FitsAtLand;
 
+            /// <summary>
+            /// What is actually in the way: the id and name of the tallest static or item whose
+            /// span overlaps the mobile's box, and how many others do.
+            ///
+            /// "UNSTANDABLE arrival for 'brit-bank' at 1432,1692" told a reader that a tile was
+            /// bad and nothing else. Whether to move the record one tile or to move it across the
+            /// room depends entirely on whether the answer is a bank counter, a wall or a barrel,
+            /// and that is a lookup the reader was being asked to do by hand with no tools.
+            /// </summary>
+            public int BlockerId;
+
+            public string BlockerName;
+
+            /// <summary>How many things overlap, so "and 3 more" is honest about the mess.</summary>
+            public int BlockerCount;
+
+            /// <summary>
+            /// The nearest tile within two that WOULD take the record, or Distance 0 for none.
+            ///
+            /// Two, because that is the arrival range a place authors and the radius the walker's
+            /// own shift searches: a fix inside it needs no other change, and a fix outside it is a
+            /// different decision about where the destination is.
+            /// </summary>
+            public int NearestX;
+
+            public int NearestY;
+
+            public int NearestZ;
+
+            public int NearestDistance;
+
+            /// <summary>
+            /// Whether the SAME x,y is standable at some other Z within twenty of the stored one,
+            /// and which.
+            ///
+            /// This separates two faults that the badge merges. A record whose tile is solid needs
+            /// moving; a record sitting at the wrong height on a tile that is perfectly standable
+            /// ten Z up needs resampling, and the reason TryResolveZ did not resample it is its own
+            /// window rather than the world. Counting this class across the whole graph is the
+            /// evidence for whether that window should change - which is a separate decision, and
+            /// deliberately not made here.
+            /// </summary>
+            public bool HasStandableZ;
+
+            public int StandableZ;
+
             public override string ToString()
             {
-                return String.Format(
+                var text = new System.Text.StringBuilder(160);
+
+                text.AppendFormat(
                     "{0} '{1}' {2},{3} z {4} (land {5}{6})",
                     Kind, Id, X, Y, Z, LandZ,
                     FitsAtLand ? ", fits at land" : ", solid - nothing fits here at all");
+
+                if (BlockerName != null)
+                {
+                    text.AppendFormat(
+                        " - blocked by 0x{0:X4} '{1}'", BlockerId, BlockerName);
+
+                    if (BlockerCount > 1)
+                    {
+                        text.AppendFormat(" and {0} more", BlockerCount - 1);
+                    }
+                }
+
+                if (HasStandableZ)
+                {
+                    text.AppendFormat("; standable at z {0}", StandableZ);
+                }
+
+                text.Append(NearestDistance > 0
+                    ? String.Format(
+                        "; nearest standable {0},{1},{2} ({3} tile{4} away)",
+                        NearestX, NearestY, NearestZ, NearestDistance, NearestDistance == 1 ? "" : "s")
+                    : "; nothing standable within 2");
+
+                return text.ToString();
             }
         }
 
@@ -219,7 +291,7 @@ namespace Server.Custom
             {
                 int landZ = map.GetAverageZ(x, y);
 
-                result.Cannot.Add(new Stranded
+                var stranded = new Stranded
                 {
                     Kind = kind,
                     Id = id,
@@ -230,7 +302,11 @@ namespace Server.Custom
                     // The walker's own standability test, mobiles deliberately not counted: who is
                     // standing there today says nothing about whether the tile is authorable.
                     FitsAtLand = map.CanFit(x, y, landZ, 16, false, false, true)
-                });
+                };
+
+                Diagnose(map, stranded);
+
+                result.Cannot.Add(stranded);
                 return;
             }
 
@@ -248,6 +324,182 @@ namespace Server.Custom
                 OldZ = z,
                 NewZ = stood
             });
+        }
+
+        /// <summary>
+        /// How far above or below the stored Z a standable surface still counts as "the same tile,
+        /// wrong height".
+        ///
+        /// Twenty is one storey in this world - Britain's upper town stands 20 above its lower -
+        /// so it is the distance at which "the floor above" is still the same place and not a
+        /// different building.
+        /// </summary>
+        private const int SameTileZWindow = 20;
+
+        /// <summary>How far to look for somewhere the record could go instead. See Stranded.</summary>
+        private const int NearestSearch = 2;
+
+        /// <summary>
+        /// Fill in WHY a record is stranded and what could be done about it.
+        ///
+        /// Read-only and per-record, run only on the records that already failed - twenty of them
+        /// on this graph - so it can afford to be thorough where the scan itself cannot.
+        /// </summary>
+        private static void Diagnose(Map map, Stranded stranded)
+        {
+            NameBlocker(map, stranded);
+
+            // The same tile at another height. Nearest to the STORED Z rather than to the land,
+            // because the question is how wrong the record is, and a record is what would be
+            // edited.
+            for (int d = 1; d <= SameTileZWindow; d++)
+            {
+                if (map.CanFit(stranded.X, stranded.Y, stranded.Z + d, 16, false, false, true))
+                {
+                    stranded.HasStandableZ = true;
+                    stranded.StandableZ = stranded.Z + d;
+                    break;
+                }
+
+                if (map.CanFit(stranded.X, stranded.Y, stranded.Z - d, 16, false, false, true))
+                {
+                    stranded.HasStandableZ = true;
+                    stranded.StandableZ = stranded.Z - d;
+                    break;
+                }
+            }
+
+            // Somewhere else within two. Rings outward so the first hit is the nearest, and the
+            // walker's own resolver decides the Z so the answer is one the walker would accept.
+            for (int ring = 1; ring <= NearestSearch; ring++)
+            {
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    for (int dy = -ring; dy <= ring; dy++)
+                    {
+                        if (Math.Abs(dx) != ring && Math.Abs(dy) != ring)
+                        {
+                            continue;
+                        }
+
+                        int x = stranded.X + dx;
+                        int y = stranded.Y + dy;
+
+                        int found;
+
+                        if (!NavWalker.TryResolveZ(map, new Point3D(x, y, stranded.Z), out found))
+                        {
+                            continue;
+                        }
+
+                        if (!map.CanFit(x, y, found, 16, false, false, true))
+                        {
+                            continue;
+                        }
+
+                        stranded.NearestX = x;
+                        stranded.NearestY = y;
+                        stranded.NearestZ = found;
+                        stranded.NearestDistance = ring;
+
+                        return;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The tallest thing whose span overlaps a mobile standing at the land Z, and how many
+        /// others do.
+        ///
+        /// BOTH statics and items, because CanFit counts both and naming only the map would be
+        /// silent about a decoration barrel - which is the one class of blocker somebody can
+        /// actually move. Measured against the LAND Z rather than the stored one: the stored Z is
+        /// what is under suspicion, and a record floating twenty above its tile would otherwise be
+        /// reported as blocked by nothing at all.
+        /// </summary>
+        private static void NameBlocker(Map map, Stranded stranded)
+        {
+            int floor = stranded.LandZ;
+            int ceiling = floor + 16;
+
+            int bestTop = Int32.MinValue;
+            int count = 0;
+
+            StaticTile[] statics = map.Tiles.GetStaticTiles(stranded.X, stranded.Y, true);
+
+            for (int i = 0; i < statics.Length; i++)
+            {
+                StaticTile tile = statics[i];
+                ItemData data = TileData.ItemTable[tile.ID & TileData.MaxItemValue];
+
+                if ((data.Flags & (TileFlag.Impassable | TileFlag.Surface)) == 0)
+                {
+                    continue;
+                }
+
+                int top = tile.Z + data.CalcHeight;
+
+                if (top <= floor || tile.Z >= ceiling)
+                {
+                    continue;
+                }
+
+                count++;
+
+                if (top > bestTop)
+                {
+                    bestTop = top;
+                    stranded.BlockerId = tile.ID;
+                    stranded.BlockerName = String.IsNullOrEmpty(data.Name) ? "(unnamed static)" : data.Name;
+                }
+            }
+
+            IPooledEnumerable items = map.GetItemsInRange(new Point3D(stranded.X, stranded.Y, floor), 0);
+
+            try
+            {
+                foreach (Item item in items)
+                {
+                    if (item == null || item.Deleted || item.X != stranded.X || item.Y != stranded.Y)
+                    {
+                        continue;
+                    }
+
+                    ItemData data = item.ItemData;
+
+                    if ((data.Flags & (TileFlag.Impassable | TileFlag.Surface)) == 0)
+                    {
+                        continue;
+                    }
+
+                    int top = item.Z + data.CalcHeight;
+
+                    if (top <= floor || item.Z >= ceiling)
+                    {
+                        continue;
+                    }
+
+                    count++;
+
+                    if (top > bestTop)
+                    {
+                        bestTop = top;
+                        stranded.BlockerId = item.ItemID;
+                        stranded.BlockerName = String.IsNullOrEmpty(item.Name)
+                            ? (String.IsNullOrEmpty(data.Name) ? "(unnamed item)" : data.Name)
+                            : item.Name;
+                    }
+                }
+            }
+            finally
+            {
+                // A non-generic IPooledEnumerable has to be freed or the pool leaks
+                // (CLAUDE.md section 14).
+                items.Free();
+            }
+
+            stranded.BlockerCount = count;
         }
 
         // -------------------------------------------------------------------

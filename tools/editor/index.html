@@ -32,6 +32,18 @@
             <button id="go-britain" type="button">Britain</button>
 
             <!--
+                Jump to a coordinate. There is one camera behind both projections (js/view.js), so
+                this centres the radar and the art view together and there is nothing to keep in
+                sync. The toolbar's "Go to..." modal calls the same function; this is the version
+                you do not have to open a dialog for, which is the one you use while reading a
+                report full of coordinates.
+            -->
+            <input id="goto-xy" type="search" placeholder="x,y &mdash; jump there"
+                   autocomplete="off"
+                   title="Type a coordinate and press Enter. Radar and art share one camera, so both centre.">
+            <p id="goto-status" class="muted" hidden></p>
+
+            <!--
                 Base map. Radar is the facet-wide pyramid; art is the real client art drawn
                 isometrically, rendered on demand. Art is disabled when the renderer has not been
                 built, and the reason is put in the title rather than left as a dead control.
@@ -87,6 +99,23 @@
                 <button id="resync-spawns" type="button" title="Delete and re-import every GG spawner">Resync all spawns</button>
             </div>
             <p id="live-status" class="muted">live: off</p>
+        </details>
+
+        <!--
+            Everything flagged, in one place. Four systems knew something was wrong with a record
+            and three of them could only say so as a mark on a dot; this is the list. Its id is the
+            key its open state is remembered under (js/panels.js), so renaming it silently resets
+            that for everybody who had already collapsed it.
+        -->
+        <details class="grp" id="sec-problems">
+            <summary>Problems</summary>
+            <p id="problems-help" class="muted">
+                Everything the audit, the badges and the validator have flagged. Click a row to
+                select the record and centre both views on it; a row with no place of its own
+                (an edge has two ends) selects nothing and says why in its text.
+                <strong>Run <em>Audit</em> above</strong> to fill in the shard's half.
+            </p>
+            <ul id="problems"></ul>
         </details>
 
         <details class="grp" id="sec-bots" open>

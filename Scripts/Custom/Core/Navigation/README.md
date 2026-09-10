@@ -134,6 +134,92 @@ take it offline:
   with no arrival point within the hop cap of a waypoint, **or with any individual arrival beyond
   it** (see below); a waypoint with no edges; a failing self-test.
 
+## The last hop is the one nobody audited
+
+Every waypoint hop was authored against the engine and `[NavAudit` walks it in both directions.
+**The arrival is not.** `NavArrivals.TryPick` chooses a point, scatters it by
+`Custom.NavArrivalScatter`, and validates the result **for standing and never for reachability** -
+so the last hop of every journey aims at the one tile in the route nobody has ever asked the
+pathfinder about.
+
+Measured over one 30-minute window: **7 of 17 terminal failures were that**, and each looked
+identical - a bot three tiles from a range-2 arrival with a clear road behind it and a wall in
+front. Five of the seven had scattered from an arrival the audit already badges **unstandable**,
+so the anchor was inside furniture and its neighbourhood was too.
+
+Two changes, and between them the last hop now aims at a tile a mobile can stand on and the engine
+will path to:
+
+- **`NavArrivals.Scatter` resolves Z the walker's way.** It used `map.GetAverageZ`, which only sees
+  land, so scattering around `brit-shop-tinker`'s arrival on a raised floor at z 11 asked about the
+  street underneath it and every candidate came back at z 10. `CanSpawnMobile` passed - a street
+  tile IS standable - and the bot was sent through a wall. It now uses `NavWalker.TryResolveZ`,
+  whose window is the hint first and the land second.
+- **`NavWalker.TryShiftWithinArrival` retargets on three faults, not one.** It fired only when the
+  goal tile was occupied; it now also fires when nothing can stand there, or when the engine will
+  not path to it from where the bot is, and every candidate it picks has to be pathable as well as
+  standable. `Tick` asks it as the bot **halves its distance** to the goal (about 8, 4 and 2 tiles),
+  and `HandleStuck` asks it again at the top of the ladder for a tile that became occupied since.
+
+**The check is only asked from inside `MaxApproachDistance`, and that is not a saving.**
+`FastAStarAlgorithm` is greedy with a 300-expansion budget, so from twelve tiles out it says "no
+path" about goals it reaches comfortably from eight - the finding the approach cap exists for.
+Retargeting on that answer would move a perfectly good arrival because the bot had not got there
+yet. One check at the moment the bot crossed the cap spent itself on the least trustworthy reading
+available, which is why it re-asks as the distance halves rather than once.
+
+`Bots.Population`'s recovery line carries the split: `arrival retargets: taken 4, unstandable 1,
+unreachable 7`. **A crowded tile is the world being busy; the other two columns are records
+somebody should move**, so they log at `Info` with the destination and the tile while the crowded
+case stays at `Debug`.
+
+### uo-offline solves the same problem by never aiming at the arrival
+
+Worth knowing before this is "simplified". Their final leg targets the approach **waypoint** plus a
+random +/-5 jitter and completes at `FinalLegArrivalRange` **8** (`TravelerBehavior.cs:70-77`,
+`:1834-1916`, `:1942-1963`); the arrival coordinate is reached, if at all, by a bounded cosmetic
+drift afterwards that is **allowed to fail** (`DriftArriveRange` 2, 6 s total, 3 s without
+progress, `:214-218`, `:2042-2094`). Their comment names our exact bug: *"The destination tile may
+sit inside a building ... a bot routing from the street can't reach the inner tile and would grind
+the outer wall."* There is no standability sweep anywhere in their arrival path.
+
+**We cannot take their 8.** Our arrival ranges are load-bearing - a forge stand tile has to be
+within 2 of both anvil and forge or `DefBlacksmithy.CanCraft` refuses - so we keep the authored
+range and buy reachability with the sweep instead. That is the deviation, and this is its reason.
+
+## The rescue lands somewhere a mobile can stand
+
+`NavWalker.Teleport` used to move the mobile to `step.Point` at `ResolveZ(step.Point)` - and
+`ResolveZ` answers with the **land Z when nothing is standable**, so a rescue aimed at a tile
+nothing fits on put the mobile exactly there.
+
+Measured in one window: three walks failed at `trinsic-dock-2`'s arrival (`2072,2865` z-15, which
+`[NavAudit` now reports as *blocked by 0x1797 'water'*), each was teleported onto it, and each of
+the three **next** failures in the ledger began at `2072,2865`, eleven tiles from a goal it could no
+longer reach. The same shape again at `trinsic-shop-smith-2`. **Eight of seventeen failures, and all
+three strikes on `uo-wp-990 <-> uo-wp-197-s1`** - a three-tile hop between two audited waypoints
+with nothing wrong with it.
+
+The rule is uo-offline's, from `MagicTravel.PickLanding` (`MagicTravel.cs:266-336`): validate every
+candidate, try the **authored Z first and the ground Z second** (*"docks and shop floors sit ABOVE
+what GetAverageZ reports - averaging under a pier returns the water level"*), escalate outward
+because popular arrival points are permanently crowded, and fall back to the approach waypoint when
+nothing near the anchor will take a landing. `TryResolveZ` already *is* their two-height rule.
+
+Two deliberate differences:
+
+- **Ours prefers a tile inside the arrival's own range**, which theirs has no notion of - no
+  teleport site in their tree reads `ArrivalRange`, `DriftArriveRange` or `FinalLegArrivalRange`.
+  It needs no special case: the scan goes outward from the arrival tile, so while the ring is
+  inside the range those are the tiles tried first. It matters because our ranges are load-bearing.
+- **If nothing is found, the mobile is not moved.** Theirs falls through to the raw authored
+  coordinate as a last resort, which is precisely the behaviour this change removes. Standing in
+  the road is recoverable; standing under a pier is not.
+
+`OnTransition` gets the same validated landing, because a gate's far side is authored data with the
+same exposure - it keeps the raw fallback, since a transition that does not happen leaves the
+mobile on the wrong facet with a route it cannot walk.
+
 ## Stuck recovery
 
 A hop that makes no progress for `HopTimeout` climbs a ladder, one rung per timeout. Translated

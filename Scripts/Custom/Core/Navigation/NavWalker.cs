@@ -162,6 +162,26 @@ namespace Server.Custom
         private bool _shifted;
 
         /// <summary>
+        /// How far from the arrival the proactive check last ran, win or lose.
+        ///
+        /// Separate from _shifted, which records only a SUCCESSFUL retarget: a sweep that
+        /// found nothing must not repeat four times a second, because it costs a
+        /// MovementPath and the answer will not have changed in 250ms.
+        ///
+        /// A DISTANCE RATHER THAN A FLAG, because one answer per hop is one answer too few.
+        /// The pathfinder is greedy with a 300-expansion budget, so "can I reach that tile"
+        /// is not one question with one answer - it is a different question at eight tiles
+        /// and at three, and the whole reason MaxApproachDistance exists is that the far
+        /// answer is the unreliable one. A single check at the moment the bot came inside
+        /// the cap therefore spent itself on the least trustworthy reading available.
+        ///
+        /// So it re-asks each time the bot has HALVED its distance to the goal: about three
+        /// times on a hop that starts at the cap, at 8, 4 and 2, which is cheap and is where
+        /// the answers actually differ.
+        /// </summary>
+        private int _arrivalCheckedAt = Int32.MaxValue;
+
+        /// <summary>
         /// A NAMED PORT of uo-offline's MaxApproachDistance (TravelerBehavior's approach cap,
         /// lowered from 50 to 36 there so a leg stays inside FastAStar's 38-tile box).
         ///
@@ -333,6 +353,22 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// Arrival retargets since the graph was loaded, split by what was wrong with the tile.
+        ///
+        /// Counted rather than only logged because the retarget is a RECOVERY FROM BAD DATA, not a
+        /// routine adjustment, and the split says which bad data. A crowded arrival is the world
+        /// being busy; a tile nothing can stand on, or one the engine will not path to, is a
+        /// record somebody should move - so a run where the second two columns are non-zero hands
+        /// you a list of destinations to look at, and a run where they fall to zero after a data
+        /// fix is the proof the fix worked.
+        /// </summary>
+        private static int _retargetOccupied;
+
+        private static int _retargetUnstandable;
+
+        private static int _retargetUnreachable;
+
+        /// <summary>
         /// "repath 12, sidestep 3, door 0, skip 1, teleport 0" - the fleet-wide recovery line.
         /// </summary>
         public static string DescribeRungTotals()
@@ -344,6 +380,16 @@ namespace Server.Custom
                 _rungTotals[(int)StuckRung.Door],
                 _rungTotals[(int)StuckRung.SkipWaypoint],
                 _rungTotals[(int)StuckRung.Teleport]);
+        }
+
+        /// <summary>"taken 4, unstandable 1, unreachable 7" - the fleet-wide arrival-retarget line.</summary>
+        public static string DescribeArrivalRetargets()
+        {
+            return String.Format(
+                "taken {0}, unstandable {1}, unreachable {2}",
+                _retargetOccupied,
+                _retargetUnstandable,
+                _retargetUnreachable);
         }
 
         /// <summary>
@@ -359,6 +405,12 @@ namespace Server.Custom
             {
                 _rungTotals[i] = 0;
             }
+
+            // The retarget counts describe a graph too - an arrival that was unreachable
+            // before an edit has no business being counted against the graph after it.
+            _retargetOccupied = 0;
+            _retargetUnstandable = 0;
+            _retargetUnreachable = 0;
         }
 
         private void Tick()
@@ -423,6 +475,41 @@ namespace Server.Custom
                 }
 
                 range = ArrivalRangeFor(step);
+            }
+
+            // THE LAST HOP AIMS AT A TILE IT CAN REACH, and it settles that BEFORE the ladder
+            // rather than after eighty seconds of it.
+            //
+            // An arrival is not a waypoint. A waypoint was authored against the engine and audited
+            // both ways; an arrival is a picked point plus a scatter, validated for standing and
+            // never for reachability - so the last hop is the one hop whose goal nobody has ever
+            // asked the pathfinder about. In one 30-minute window that was 7 of 17 terminal
+            // failures, every one of them a bot three tiles from a range-2 arrival with a clear
+            // road behind it and a wall in front.
+            //
+            // uo-offline does not need this because their final leg never aims at the arrival
+            // coord at all: it targets the approach WAYPOINT and completes at
+            // FinalLegArrivalRange 8 (TravelerBehavior.cs:70-77, :1942-1963), with the last few
+            // tiles a bounded cosmetic drift that is allowed to fail. We cannot take their 8 -
+            // our arrival ranges are load-bearing, a forge stand tile has to be within 2 of both
+            // anvil and forge or DefBlacksmithy.CanCraft refuses - so we keep the authored range
+            // and buy reachability with a sweep instead.
+            //
+            // ONCE PER HOP, and only from inside the approach cap: see ArrivalTileFault for why
+            // the pathfinder's answer is worthless further out than that.
+            if (step.Kind == NavStepKind.Arrival)
+            {
+                int reach = Chebyshev(_mobile.Location, step.Point);
+
+                if (reach <= MaxApproachDistance && reach * 2 <= _arrivalCheckedAt)
+                {
+                    _arrivalCheckedAt = reach;
+
+                    if (TryShiftWithinArrival(step))
+                    {
+                        return;
+                    }
+                }
             }
 
             // The frozen watchdog sits above the ladder. A mobile that has not moved two tiles
@@ -764,7 +851,9 @@ namespace Server.Custom
                         new Point3D(step.Point.X, step.Point.Y, ResolveZ(_mobile.Map, step.Point)),
                         DescribeHop(step),
                         _watchedCycles > 0,
-                        ArrivalRangeFor(step));
+                        ArrivalRangeFor(step),
+                        step.Kind == NavStepKind.Arrival ? "arrival" : "waypoint",
+                        _index == 0);
 
                     // AND THE EDGE TAKES A STRIKE, so the next bot routes around it.
                     //
@@ -785,7 +874,13 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Re-aim at a free tile inside the arrival's range, once, when the goal tile is occupied.
+        /// Re-aim at a standable, reachable tile inside the arrival's range, once per hop.
+        ///
+        /// Two call sites, asking the same question at two moments. Tick asks it PROACTIVELY, the
+        /// first time the mobile is inside the approach cap, because an arrival tile that cannot be
+        /// reached is not a stuck walker and twenty seconds of ladder learns nothing about it.
+        /// HandleStuck asks it again at the top of the ladder, because a tile can become occupied
+        /// after the first answer.
         ///
         /// WHY AN OCCUPANT IS A REASON TO WANT A DIFFERENT TILE - CORRECTED, because this comment
         /// argued from the wrong implementation for as long as it existed.
@@ -809,11 +904,13 @@ namespace Server.Custom
         /// can now genuinely succeed, and two bots on one tile is what a packed forge looks like.
         ///
         /// Once per hop: _shifted stops a crowd of bots trading tiles forever, and if the second
-        /// tile is taken too the ladder is the right answer after all.
+        /// tile is taken too the ladder is the right answer after all. _arrivalChecked is the
+        /// separate guard for the proactive call, so a sweep that finds nothing is also only paid
+        /// for once.
         /// </summary>
         private bool TryShiftWithinArrival(NavStep step)
         {
-            if (_shifted || step == null || step.Kind != NavStepKind.Arrival || step.Range <= 0)
+            if (_shifted || step == null || step.Kind != NavStepKind.Arrival)
             {
                 return false;
             }
@@ -825,65 +922,58 @@ namespace Server.Custom
                 return false;
             }
 
-            if (!IsTileOccupied(map, step.Point))
+            string reason = ArrivalTileFault(map, step);
+
+            if (reason == null)
             {
                 return false;
             }
 
-            Point3D best = Point3D.Zero;
-            int bestDistance = Int32.MaxValue;
-            bool found = false;
+            // A merely CROWDED tile is shifted within the range the author gave and no further:
+            // range 0 means "this tile", and a guard post that is standable and reachable and
+            // simply busy should wait for it rather than quietly become a different guard post.
+            // A tile nothing can stand on, or that cannot be reached from here, is a walk that
+            // cannot finish at all - there one tile of latitude beats a certain teleport.
+            int radius = reason == OccupiedFault ? step.Range : Math.Max(step.Range, 1);
 
-            for (int dx = -step.Range; dx <= step.Range; dx++)
+            if (radius <= 0)
             {
-                for (int dy = -step.Range; dy <= step.Range; dy++)
+                return false;
+            }
+
+            Point3D best;
+
+            if (!TryPickArrivalTile(map, step.Point, radius, out best))
+            {
+                return false;
+            }
+
+            // A CROWDED tile is routine and stays at Debug; the other two are data faults and are
+            // said out loud, because each one is a record somebody could fix and neither should be
+            // happening often enough to be noise.
+            if (reason == OccupiedFault)
+            {
+                _retargetOccupied++;
+
+                Log.Debug(
+                    "{0} shifted its arrival from {1},{2} to {3},{4} - {5}.",
+                    Who(), step.Point.X, step.Point.Y, best.X, best.Y, reason);
+            }
+            else
+            {
+                if (reason == UnstandableFault)
                 {
-                    if (dx == 0 && dy == 0)
-                    {
-                        continue;
-                    }
-
-                    int x = step.Point.X + dx;
-                    int y = step.Point.Y + dy;
-                    int z = ResolveZ(map, new Point3D(x, y, step.Point.Z));
-
-                    if (!map.CanFit(x, y, z, 16, false, false, true))
-                    {
-                        continue;
-                    }
-
-                    var candidate = new Point3D(x, y, z);
-
-                    if (IsTileOccupied(map, candidate))
-                    {
-                        continue;
-                    }
-
-                    // Nearest to the BOT, not to the arrival: it is standing somewhere already and
-                    // the point is to stop walking, not to get as close to the centre as possible.
-                    int distance = NavGraph.Chebyshev(candidate, _mobile.Location);
-
-                    if (distance < bestDistance)
-                    {
-                        bestDistance = distance;
-                        best = candidate;
-                        found = true;
-                    }
+                    _retargetUnstandable++;
                 }
-            }
+                else
+                {
+                    _retargetUnreachable++;
+                }
 
-            if (!found)
-            {
-                return false;
+                Log.Info(
+                    "{0} shifted its arrival from {1},{2} to {3},{4} - {5}.",
+                    Who(), step.Point.X, step.Point.Y, best.X, best.Y, reason);
             }
-
-            Log.Debug(
-                "{0} shifted its arrival from {1},{2} to {3},{4} - the tile was taken.",
-                Who(),
-                step.Point.X,
-                step.Point.Y,
-                best.X,
-                best.Y);
 
             step.Retarget(best);
 
@@ -895,7 +985,161 @@ namespace Server.Custom
             return true;
         }
 
-        private static bool IsTileOccupied(Map map, Point3D point)
+        private const string OccupiedFault = "the tile was taken";
+
+        private const string UnstandableFault = "nothing can stand on it";
+
+        /// <summary>
+        /// What is wrong with the arrival tile, in the words the log line uses, or null when
+        /// nothing is.
+        ///
+        /// Three faults, asked cheapest first. Occupancy and standability are tile lookups.
+        ///
+        /// REACHABILITY IS ONLY ASKED FROM INSIDE THE APPROACH CAP, and that is not a saving, it is
+        /// the difference between a true answer and a false one. FastAStarAlgorithm is greedy
+        /// best-first with a 300-expansion budget, so from twelve tiles out it says "no path" about
+        /// goals it reaches comfortably from eight - the whole finding behind MaxApproachDistance.
+        /// Retargeting an arrival on that answer would move a perfectly good goal because the bot
+        /// had not arrived yet.
+        /// </summary>
+        private string ArrivalTileFault(Map map, NavStep step)
+        {
+            int z;
+
+            if (!TryResolveZ(map, step.Point, out z)
+                || !map.CanFit(step.Point.X, step.Point.Y, z, 16, false, false, true))
+            {
+                return UnstandableFault;
+            }
+
+            if (IsTileOccupied(map, step.Point))
+            {
+                return OccupiedFault;
+            }
+
+            if (NavGraph.Chebyshev(_mobile.Location, step.Point) <= MaxApproachDistance
+                && !Reachable(new Point3D(step.Point.X, step.Point.Y, z)))
+            {
+                return "the engine will not path to it from here";
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The nearest tile to the mobile, inside `radius` of the arrival, that it can stand on
+        /// and the engine will path to.
+        ///
+        /// Nearest to the BOT, not to the arrival: it is standing somewhere already and the point
+        /// is to stop walking, not to get as close to the centre as possible. Free tiles are
+        /// preferred over taken ones, but a taken one is still taken over nothing - the shove is
+        /// consented to by another bot, and two bots on one tile is what a packed forge looks like.
+        ///
+        /// Candidates are sorted by that distance and path-tested IN ORDER, so the usual cost is
+        /// one MovementPath rather than one per tile in the box. It runs once per hop.
+        /// </summary>
+        private bool TryPickArrivalTile(Map map, Point3D arrival, int radius, out Point3D best)
+        {
+            best = Point3D.Zero;
+
+            var candidates = new List<Point3D>();
+
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                for (int dy = -radius; dy <= radius; dy++)
+                {
+                    if (dx == 0 && dy == 0)
+                    {
+                        continue;
+                    }
+
+                    int x = arrival.X + dx;
+                    int y = arrival.Y + dy;
+
+                    int z;
+
+                    if (!TryResolveZ(map, new Point3D(x, y, arrival.Z), out z))
+                    {
+                        continue;
+                    }
+
+                    if (!map.CanFit(x, y, z, 16, false, false, true))
+                    {
+                        continue;
+                    }
+
+                    candidates.Add(new Point3D(x, y, z));
+                }
+            }
+
+            if (candidates.Count == 0)
+            {
+                return false;
+            }
+
+            Point3D from = _mobile.Location;
+
+            candidates.Sort((a, b) =>
+                NavGraph.Chebyshev(a, from).CompareTo(NavGraph.Chebyshev(b, from)));
+
+            bool haveFallback = false;
+            Point3D fallback = Point3D.Zero;
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Point3D candidate = candidates[i];
+
+                if (!Reachable(candidate))
+                {
+                    continue;
+                }
+
+                if (!IsTileOccupied(map, candidate))
+                {
+                    best = candidate;
+                    return true;
+                }
+
+                if (!haveFallback)
+                {
+                    haveFallback = true;
+                    fallback = candidate;
+                }
+            }
+
+            best = fallback;
+
+            return haveFallback;
+        }
+
+        /// <summary>
+        /// Will the engine path this mobile from where it stands to here?
+        ///
+        /// The walker's own question, asked the walker's way - a MovementPath built on the mobile,
+        /// not a Point3D probe, because the two get different answers (see the audit's caveats in
+        /// the README). Adjacent and same-tile are answered without asking: MovementPath returns no
+        /// path for a goal one step away (MovementPath.cs:34), which is a guaranteed false negative
+        /// and the one NavAudit already special-cases.
+        /// </summary>
+        private bool Reachable(Point3D point)
+        {
+            if (NavGraph.Chebyshev(_mobile.Location, point) <= 1)
+            {
+                return true;
+            }
+
+            return new MovementPath(_mobile, point).Success;
+        }
+
+        /// <summary>
+        /// Is anybody OTHER THAN THE WALKER standing exactly here?
+        ///
+        /// The exclusion matters at every call site and used not to be made. A walker asking
+        /// whether its own arrival tile is taken, while standing on it, answered yes about
+        /// itself; so would a rescue looking for a landing at ring 0 under the frozen watchdog,
+        /// which fires precisely when the mobile has been standing in one place.
+        /// </summary>
+        private bool IsTileOccupied(Map map, Point3D point)
         {
             IPooledEnumerable nearby = map.GetMobilesInRange(point, 0);
 
@@ -903,7 +1147,7 @@ namespace Server.Custom
             {
                 foreach (Mobile other in nearby)
                 {
-                    if (!other.Deleted && other.Alive)
+                    if (other != _mobile && !other.Deleted && other.Alive)
                     {
                         return true;
                     }
@@ -1220,12 +1464,168 @@ namespace Server.Custom
             return dx > dy ? dx : dy;
         }
 
+        /// <summary>
+        /// How far out the rescue will look for somewhere to put the mobile.
+        ///
+        /// uo-offline's PickLanding scans rings 2, 4, 6, 8 around the anchor (MagicTravel.cs:
+        /// 266-336). Six rather than eight because their anchor is a destination coordinate and a
+        /// recall landing, where a few tiles either way is invisible; ours is a waypoint or an
+        /// arrival on a graph whose hops are capped at twelve, and a rescue that lands seven tiles
+        /// off the road has moved the problem rather than solved it.
+        /// </summary>
+        private const int MaxRescueRing = 6;
+
+        /// <summary>
+        /// Put the mobile down somewhere it can actually stand.
+        ///
+        /// WHAT THIS USED TO DO, AND WHAT IT COST. It moved the mobile to step.Point at
+        /// ResolveZ(step.Point) - and ResolveZ answers with the land Z when nothing is standable
+        /// (see its own summary), so a rescue aimed at a tile nothing fits on put the mobile
+        /// exactly there. Measured, in one 30-minute window: three walks failed at trinsic-dock-2's
+        /// arrival (2072,2865 z-15, under a pier), each was teleported onto it, and each of the
+        /// three NEXT failures in the ledger began at 2072,2865 - eleven tiles from a goal it could
+        /// no longer reach. The same shape again at trinsic-shop-smith-2. Eight of seventeen
+        /// failures, and all three strikes on 'uo-wp-990' -> 'uo-wp-197-s1', a three-tile hop
+        /// between two audited waypoints that has nothing wrong with it.
+        ///
+        /// THE RULE IS uo-offline's, from MagicTravel.PickLanding (MagicTravel.cs:266-336):
+        ///
+        ///   - every candidate is validated before the move, never assumed;
+        ///   - each is tried at the AUTHORED Z first and the averaged ground Z second, because
+        ///     "docks and shop floors sit ABOVE what GetAverageZ reports - averaging under a pier
+        ///     returns the water level". TryResolveZ is that rule already: the window around the
+        ///     hint, then the window around the land;
+        ///   - the search ESCALATES outward, because popular arrival points are permanently
+        ///     crowded and the mobile can walk the last tile or two itself;
+        ///   - and when nothing near the anchor will take a landing - "a pier ringed by water, a
+        ///     shop interior packed wall-to-wall" - it falls back to the approach WAYPOINT, which
+        ///     is proven walkable ground a few steps out.
+        ///
+        /// Two deliberate differences, both about where a rescued bot should end up rather than
+        /// whether the tile is real:
+        ///
+        ///   - OURS PREFERS A TILE INSIDE THE ARRIVAL'S OWN RANGE, which theirs has no notion of
+        ///     (no teleport site in their tree reads ArrivalRange, DriftArriveRange or
+        ///     FinalLegArrivalRange). It needs no special case: the scan goes outward from the
+        ///     arrival tile, so while the ring is inside the range those are the tiles it tries
+        ///     first. It matters here because our ranges are load-bearing - a smith rescued outside
+        ///     its forge apron has been rescued into a second failure.
+        ///   - AND IF NOTHING IS FOUND, THE MOBILE IS NOT MOVED. Theirs falls through to the raw
+        ///     authored coordinate as a last resort; that is precisely the behaviour this method
+        ///     exists to remove, so the last resort here is to leave the mobile where it is, say
+        ///     so at Warn, and let the ladder cycle. Standing in the road is recoverable; standing
+        ///     under a pier is not.
+        /// </summary>
         private void Teleport(NavStep step)
         {
             Map map = _mobile.Map;
-            Point3D point = new Point3D(step.Point.X, step.Point.Y, ResolveZ(map, step.Point));
 
-            _mobile.MoveToWorld(point, map);
+            Point3D landing;
+
+            if (!TryPickLanding(map, step.Point, out landing))
+            {
+                NavWaypoint previous = Nav.Waypoint(PreviousWaypointId());
+
+                if (previous == null || !TryPickLanding(map, previous.Location, out landing))
+                {
+                    Log.Warn(
+                        "{0} could not be rescued: nothing within {1} tiles of {2},{3} will take a "
+                        + "landing, and there is no waypoint behind it that will either. Leaving it "
+                        + "where it stands.",
+                        Who(),
+                        MaxRescueRing,
+                        step.Point.X,
+                        step.Point.Y);
+
+                    return;
+                }
+
+                Log.Warn(
+                    "{0} was rescued to '{1}' at {2},{3},{4} - nothing within {5} tiles of "
+                    + "{6},{7} would take a landing.",
+                    Who(),
+                    previous.Id,
+                    landing.X,
+                    landing.Y,
+                    landing.Z,
+                    MaxRescueRing,
+                    step.Point.X,
+                    step.Point.Y);
+            }
+
+            _mobile.MoveToWorld(landing, map);
+        }
+
+        /// <summary>
+        /// The nearest tile to `anchor` a mobile can stand on, searching outward, free first.
+        ///
+        /// A taken tile at ring 1 is worse than a free one at ring 2 only if you think the point is
+        /// to be close; the point is to be somewhere the mobile can move from, and a tile it shares
+        /// with somebody is one it may be unable to leave. So an occupied candidate is remembered
+        /// and used only when the whole search finds nothing free.
+        /// </summary>
+        private bool TryPickLanding(Map map, Point3D anchor, out Point3D landing)
+        {
+            landing = Point3D.Zero;
+
+            if (map == null || map == Map.Internal)
+            {
+                return false;
+            }
+
+            bool haveFallback = false;
+            Point3D fallback = Point3D.Zero;
+
+            for (int ring = 0; ring <= MaxRescueRing; ring++)
+            {
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    for (int dy = -ring; dy <= ring; dy++)
+                    {
+                        // The ring only, so the search really does go outward rather than
+                        // re-testing the whole box at every radius.
+                        if (ring > 0 && Math.Abs(dx) != ring && Math.Abs(dy) != ring)
+                        {
+                            continue;
+                        }
+
+                        int x = anchor.X + dx;
+                        int y = anchor.Y + dy;
+
+                        int z;
+
+                        // The authored Z as the hint, the land Z as the fallback - both halves are
+                        // inside TryResolveZ, and a false answer here means neither worked.
+                        if (!TryResolveZ(map, new Point3D(x, y, anchor.Z), out z))
+                        {
+                            continue;
+                        }
+
+                        if (!map.CanFit(x, y, z, 16, false, false, true))
+                        {
+                            continue;
+                        }
+
+                        var candidate = new Point3D(x, y, z);
+
+                        if (!IsTileOccupied(map, candidate))
+                        {
+                            landing = candidate;
+                            return true;
+                        }
+
+                        if (!haveFallback)
+                        {
+                            haveFallback = true;
+                            fallback = candidate;
+                        }
+                    }
+                }
+            }
+
+            landing = fallback;
+
+            return haveFallback;
         }
 
         /// <summary>
@@ -1236,9 +1636,28 @@ namespace Server.Custom
         protected virtual void OnTransition(NavStep step)
         {
             Map map = step.Map ?? _mobile.Map;
-            Point3D point = new Point3D(step.Point.X, step.Point.Y, ResolveZ(map, step.Point));
 
-            _mobile.MoveToWorld(point, map);
+            Point3D landing;
+
+            // A gate's far side is authored data with the same exposure as an arrival's, so it gets
+            // the same validated landing rather than the raw tile at whatever Z resolves. Falling
+            // back to the raw tile here rather than refusing: a transition that does not happen
+            // leaves the mobile on the wrong facet with a route it cannot walk, which is worse than
+            // an awkward arrival - and unlike the rescue, this is the caller's own instruction.
+            if (!TryPickLanding(map, step.Point, out landing))
+            {
+                landing = new Point3D(step.Point.X, step.Point.Y, ResolveZ(map, step.Point));
+
+                Log.Warn(
+                    "{0} is taking the gate to {1},{2} unvalidated - nothing within {3} tiles of it "
+                    + "will take a landing.",
+                    Who(),
+                    step.Point.X,
+                    step.Point.Y,
+                    MaxRescueRing);
+            }
+
+            _mobile.MoveToWorld(landing, map);
         }
 
         private int ArrivalRangeFor(NavStep step)
@@ -1648,6 +2067,7 @@ namespace Server.Custom
             // Per HOP, so a route with several arrivals gets one shift each rather than one in
             // total - and so a fresh walk to the same crowded bank is not born already spent.
             _shifted = false;
+            _arrivalCheckedAt = Int32.MaxValue;
             _reAnchored = false;
             _approaching = false;
 

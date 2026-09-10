@@ -45,7 +45,7 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 // ask for.
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
-    'botpop-audit', 'botpop-gen'
+    'botpop-audit', 'botpop-gen', 'botinfo'
 ]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a
@@ -529,6 +529,17 @@ const ROUTES = {
 
     '/api/botlog': (request, response) => {
         sendJson(response, 200, readJson(whitelist.FILES.botLog) || { utc: null, bots: [] });
+    },
+
+    /**
+     * The last [BotInfo report the shard was asked for.
+     *
+     * `serial` is echoed back by the shard so the card can tell its own answer from the answer to
+     * the request before it - a bot is ephemeral and the one you selected may already be gone.
+     */
+    '/api/botinfo': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.botInfo) || { utc: null, serial: 0, name: null, lines: [] });
     },
 
     '/api/reach': (request, response) => {

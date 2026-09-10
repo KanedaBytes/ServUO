@@ -87,6 +87,30 @@ namespace Server.Custom
         /// </summary>
         public string Cause;
 
+        /// <summary>
+        /// WHICH KIND OF HOP this was - "arrival" or "waypoint" - so the split can be counted
+        /// rather than read off the Hop string.
+        ///
+        /// The two are different failures with different fixes and they were only ever separable
+        /// by eye, by noticing that Hop ended in '(arrival)'. An arrival is a picked point plus a
+        /// scatter that nothing has asked the pathfinder about; a waypoint was authored against
+        /// the engine and audited in both directions. A window where the arrival column is empty
+        /// and the waypoint column is not says the graph regressed; the reverse says the arrival
+        /// picker did.
+        /// </summary>
+        public string HopKind;
+
+        /// <summary>
+        /// Whether this was the FIRST step of the route, with no waypoint behind it.
+        ///
+        /// Recorded because it decides which recovery rungs even exist. On a one-step route
+        /// TrySkipWaypoint refuses (there is nothing to skip to) and TryReAnchor returns
+        /// immediately (PreviousWaypointId is null), so the whole ladder is Repath, Sidestep and
+        /// Door - none of which changes the tile being aimed at. Four of one window's seventeen
+        /// failures were this, and they are invisible in the cause split.
+        /// </summary>
+        public bool FromStart;
+
         /// <summary>The arrival range in force, so "within range" is reproducible from the file.</summary>
         public int ArrivalRange;
 
@@ -137,7 +161,8 @@ namespace Server.Custom
         /// would not be worth it on a hot path.
         /// </summary>
         public static void Record(
-            Mobile mobile, Map map, Point3D goal, string hop, bool watched, int arrivalRange)
+            Mobile mobile, Map map, Point3D goal, string hop, bool watched, int arrivalRange,
+            string hopKind, bool fromStart)
         {
             if (mobile == null || map == null || map == Map.Internal)
             {
@@ -158,7 +183,9 @@ namespace Server.Custom
                 FromY = mobile.Y,
                 FromZ = mobile.Z,
                 Watched = watched,
-                ArrivalRange = arrivalRange
+                ArrivalRange = arrivalRange,
+                HopKind = hopKind,
+                FromStart = fromStart
             };
 
             // Mobiles deliberately not counted: the question is whether the TILE can take anybody,
@@ -296,6 +323,8 @@ namespace Server.Custom
                 builder.Append(",\"watched\":").Append(failure.Watched ? "true" : "false");
                 builder.Append(",\"goalUnstandable\":").Append(failure.GoalUnstandable ? "true" : "false");
                 builder.Append(",\"cause\":").Append(Json.Quote(failure.Cause));
+                builder.Append(",\"hopKind\":").Append(Json.Quote(failure.HopKind));
+                builder.Append(",\"fromStart\":").Append(failure.FromStart ? "true" : "false");
                 builder.Append(",\"range\":").Append(failure.ArrivalRange);
                 builder.Append(",\"near\":[");
 

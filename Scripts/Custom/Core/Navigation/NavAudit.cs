@@ -492,6 +492,32 @@ namespace Server.Custom
                 builder.Append(",\"y\":").Append(bad[i].Y);
                 builder.Append(",\"z\":").Append(bad[i].Z);
                 builder.Append(",\"landZ\":").Append(bad[i].LandZ);
+
+                // The diagnosis, not just the verdict. A Problems panel row that says "blocked by
+                // a bank counter, standable one tile east" is actionable; "unstandable" is a
+                // second lookup somebody has to do by hand. See NavResampleZ.Stranded.
+                builder.Append(",\"reason\":").Append(Json.Quote(bad[i].ToString()));
+
+                if (bad[i].BlockerName != null)
+                {
+                    builder.Append(",\"blockerId\":").Append(bad[i].BlockerId);
+                    builder.Append(",\"blockerName\":").Append(Json.Quote(bad[i].BlockerName));
+                    builder.Append(",\"blockerCount\":").Append(bad[i].BlockerCount);
+                }
+
+                if (bad[i].HasStandableZ)
+                {
+                    builder.Append(",\"standableZ\":").Append(bad[i].StandableZ);
+                }
+
+                if (bad[i].NearestDistance > 0)
+                {
+                    builder.Append(",\"nearestX\":").Append(bad[i].NearestX);
+                    builder.Append(",\"nearestY\":").Append(bad[i].NearestY);
+                    builder.Append(",\"nearestZ\":").Append(bad[i].NearestZ);
+                    builder.Append(",\"nearestDistance\":").Append(bad[i].NearestDistance);
+                }
+
                 builder.Append("}");
 
                 if (i < bad.Count - 1)

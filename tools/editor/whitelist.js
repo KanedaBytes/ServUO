@@ -55,6 +55,11 @@ const FILES = {
     navHop: path.join(REPO_ROOT, 'Data', 'Live', 'nav-hop.json'),
     navAdopt: path.join(REPO_ROOT, 'Data', 'Live', 'nav-adopt.json'),
 
+    // One bot's [BotInfo report, pulled on demand rather than pushed with every entity poll:
+    // forty lines of skill table for sixty bots twice a second would be a hundred kilobytes
+    // to answer a question about one of them. Not in WRITABLE - the shard writes it.
+    botInfo: path.join(REPO_ROOT, 'Data', 'Live', 'botinfo.json'),
+
     // Authoring input, not live data: uo-offline's navigation converted into our schema.
     // Read-only by construction - resolveSave has no entry for it, so the save endpoint
     // cannot name it however the request is spelled.

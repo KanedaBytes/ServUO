@@ -610,6 +610,75 @@ namespace Server.Custom
                     return true;
                 }
 
+                // One bot's [BotInfo report, so the editor's bot card can show the same forty
+                // lines the command shows in game.
+                //
+                // A FILE RATHER THAN AN ACK, for the reason nav-audit writes one: the ack's arrays
+                // are capped and carry prose, and this is forty lines of aligned skill columns.
+                // A file also means the card can re-read it without another round trip.
+                //
+                // Body is the bot's serial. Nothing else: the editor already has the serial - it is
+                // what it draws the dot with - and a name would have to be resolved against a
+                // population where names repeat across towns.
+                case "botinfo":
+                {
+                    string[] words = (body ?? "").Split(
+                        new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    int serial = 0;
+
+                    for (int i = 0; i < words.Length; i++)
+                    {
+                        // The bridge appends its nonce as '#abc'; it is not an argument.
+                        if (words[i].StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        string word = words[i];
+
+                        if (word.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Int32.TryParse(
+                                word.Substring(2),
+                                System.Globalization.NumberStyles.HexNumber,
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                out serial);
+                        }
+                        else
+                        {
+                            Int32.TryParse(word, out serial);
+                        }
+                    }
+
+                    if (serial == 0)
+                    {
+                        message = "botinfo needs a bot serial: '1074321' or '0x1064B1'";
+                        return false;
+                    }
+
+                    var bot = World.FindMobile((Serial)serial) as PlayerBot;
+
+                    // A bot that has gone is a normal answer, not a failure: they are ephemeral by
+                    // design and the card is looking at a snapshot that may be a poll old. Writing
+                    // the empty answer is what stops the card showing the PREVIOUS bot's report
+                    // under this one's name.
+                    string report = BotInfoSnapshot.BuildJson(serial, bot);
+                    string reportError;
+
+                    if (!AtomicFile.Write(BotInfoSnapshot.Path, report, out reportError))
+                    {
+                        message = reportError;
+                        return false;
+                    }
+
+                    message = bot == null
+                        ? String.Format("no bot with serial 0x{0:X}; wrote an empty report", serial)
+                        : String.Format("{0}'s report written", bot.Name);
+
+                    return true;
+                }
+
                 case "site-reach":
                 {
                     string[] parts = (body ?? "").Split(

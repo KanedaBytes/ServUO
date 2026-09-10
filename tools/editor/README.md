@@ -1231,6 +1231,63 @@ Both passes are tested against a stub canvas that records calls rather than pixe
 the two failures that actually happened: a pass that never ran, and a pass that ran and rejected
 every box.
 
+## The Problems panel
+
+Everything flagged, in one clickable list. It exists because **four systems already knew something
+was wrong with a record and three of them could only say so as a mark on a dot** somewhere on a
+6144-tile facet:
+
+| source | what it could say before |
+| --- | --- |
+| `[NavAudit`'s unstandable arrivals | a `z?` badge on a marker, and a line in a banner capped at twelve |
+| `[NavAudit`'s blocked / far / occupied edges | the same banner, same cap |
+| the `z?` and `!` badges (`shapes.js`) | the marker, and nowhere else |
+| the replicated shard validator | runs on **every** edit and produces `{severity, where, message, shapeId}` per finding - of which exactly one, `fatal[0]`, reached the status line |
+
+That last row is the one worth noticing: `validatePreview()` was computing a full report on every
+edit and discarding all of it but one string, in the same expression. A stranded destination, a
+`pending-road` note and a duplicate id were all being found and thrown away.
+
+Rows carry the shard's own words. `[NavAudit`'s unstandable entries now ship a `reason` built by
+`NavResampleZ.Stranded.ToString()`, which names **the blocking static's id and name**, the nearest
+standable tile within two, and - where there is one - a standable height on the same tile:
+
+```
+arrival 'brit-bank' 1432,1692 z 0 (land 0, solid - nothing fits here at all)
+  - blocked by 0x0034 'brick wall'; nearest standable 1431,1691,0 (1 tile away)
+```
+
+**The formatting is a module, `js/problems.js`, for the reason `js/audit.js` gives in its own
+header**: the line it replaced lived inside a click handler, was wrong for a year, and nothing
+could have caught it. `problems.test.js` tests the rows directly and reads `NavAudit.cs` back to
+fail if the shard stops emitting `reason` - which would silently downgrade every row to a
+generated sentence.
+
+Two things about the list that are deliberate:
+
+- **A `note` is not a `warning`.** `validate.js`'s third tier exists because a warning that is
+  expected teaches everybody to skim, and the moment the list is skimmed the real warning
+  underneath it is invisible. A `pending-road` gap is listed, counted, and coloured differently.
+- **Deduping is by kind and tile, not by label.** The audit knows an unstandable arrival by its
+  destination's id and the badge knows it by the record's, so keying on the name would list one
+  fault twice under two names. The audit's row wins, because it is the one carrying the blocker.
+
+Clicking a row selects the record and centres both views. A finding with no single place - an edge
+has two ends - selects its record if it names one and otherwise does nothing, rather than jumping
+somewhere arbitrary.
+
+## Jump to a coordinate
+
+A box in the **View** section: type `1475,1641` and press Enter. It accepts a comma, a space or
+both, because all three are what a coordinate looks like in the places you copy one from - a
+console warning, a walk-failure line, this editor's own readout.
+
+There is one camera behind both projections (`js/view.js`), so this centres the radar and the art
+view together and there is nothing to keep in sync. The toolbar's `Go to...` modal and the
+Problems panel call the same `jumpTo(x, y)`, so "go to a coordinate" cannot come to mean two
+slightly different things. `clampCenter()` already refuses anything off the facet, which is why
+nothing range-checks.
+
 ## The Bots panel
 
 Every live bot, what it is doing, and its recent history — fed by the same `entities.json` the map
@@ -1279,6 +1336,31 @@ useful thing only when the card happened to be shut.
 shared one symptom — a bot standing still — and telling them apart meant reading a console that
 logged almost none of it. A list where one bot reads *"walking in to The Northern Outcrop"* and
 another reads *"standing outside a work site"* separates two of them at a glance.
+
+### The full `[BotInfo` report, selectable
+
+The card ends in a `[BotInfo` block - the same forty lines the in-game command shows, in a
+monospace `<pre>` you can select and copy. Class, tier, home, behaviour and status line, the leg it
+is on, stats against the caps in force, notoriety, every non-zero skill in an aligned column,
+personality and the phase clock.
+
+**Pulled, not pushed.** `entities.json` carries sixty bots on every poll; forty lines of skill
+table each would be a hundred kilobytes twice a second to answer a question about one of them. So
+the block is collapsed until opened, and opening it drops a `botinfo` request token naming the
+bot's serial. The shard writes `Data/Live/botinfo.json` and the card reads it back through
+`GET /api/botinfo`.
+
+Three details:
+
+- **The serial is echoed back and checked.** A bot is ephemeral, and showing the previous bot's
+  report under this one's name is the one failure a cached panel has that the command does not.
+- **`BotCommands.Describe(bot)` builds the lines, and the command calls it too**, so the two
+  renderings cannot drift - the same rule `fillBotDetail` follows for the row and the card.
+- **The shard being down is not a gate.** The block says why it could not read it and everything
+  else in the card is unchanged, the way `sendReach` already behaves.
+
+`bridge.test.js` asserts that every `api.request('...')` in `app.js` has a matching `case "...":`
+in `RequestPoller.cs`, so the browser half cannot ship without the shard half.
 
 ## The Live panel
 

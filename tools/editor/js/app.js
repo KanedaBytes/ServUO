@@ -27,11 +27,12 @@ import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
     READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, setUnstandableFlags, BEHAVIOR_COLORS, setHopFlags,
     hitTest, pick, entityAt, grabsOverEntity, nearSegment, geometryOf, applyGeometry, moveShape,
-    resizeRect, moveNode, syncDerived, isStaleZ
+    resizeRect, moveNode, syncDerived, isStaleZ, isUnstandable
 } from './shapes.js';
 import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
 import { auditLine, hasBlocked } from './audit.js';
+import { problemRows, problemSummary } from './problems.js';
 import { HOP_CAP, validate, plainFromShapes } from './validate.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId, insertedId, insertedName } from './ids.js';
@@ -76,6 +77,15 @@ const state = {
 
     // The last [NavAudit result, drawn over the edges.
     audit: null,
+
+    // The replicated validator's last answer, kept so the Problems panel can list it. It used
+    // to be computed on every edit and thrown away except for fatal[0], which went to the
+    // status line - so a warning or a pending-road note was produced and discarded in the same
+    // expression.
+    validation: null,
+
+    // The last [BotInfo report pulled for the card, keyed by serial. See appendBotInfo.
+    botInfo: null,
 
     // The ids of the current unsaved corridor proposal, so it can be replaced or edited as a
     // unit. Null once it has been saved or discarded.
@@ -176,7 +186,8 @@ async function boot() {
         sidebar: $('sidebar'), sidebarResize: $('sidebar-resize'),
         botCard: $('bot-card'), botCardHead: $('bot-card-head'),
         botCardTitle: $('bot-card-title'), botCardBody: $('bot-card-body'),
-        botCardClose: $('bot-card-close')
+        botCardClose: $('bot-card-close'),
+        problems: $('problems'), gotoXy: $('goto-xy'), gotoStatus: $('goto-status')
     });
 
     initTools();
@@ -186,6 +197,7 @@ async function boot() {
     initSections(dom.sidebar);
     initResize(dom.sidebarResize);
     wireBotCard();
+    wireGotoBox();
 
     try {
         const status = await api.status();
@@ -1422,6 +1434,87 @@ function fillBotDetail(host, bot) {
     }
 
     host.append(events);
+
+    appendBotInfo(host, bot);
+}
+
+/**
+ * The full `[BotInfo` report, as selectable text.
+ *
+ * SELECTABLE IS THE POINT. Every other block in this card is built out of divs the browser will
+ * happily let you drag across, but what somebody actually wants to do with a bot's skill table is
+ * copy the whole thing into a message - and a <pre> whose text is one string is the shape that
+ * survives that, tabs and column alignment included. The shard sends it as aligned lines; joining
+ * them and letting the element hold the newlines keeps the alignment the command already worked
+ * out.
+ *
+ * PULLED, NOT PUSHED. entities.json carries sixty bots on every poll and this is forty lines each;
+ * so the report is requested for one serial, and only when the card is open on that bot.
+ * `state.botInfo` caches the last answer so re-filling the card on the next entity poll - which
+ * happens twice a second - does not re-ask.
+ *
+ * THE SHARD BEING DOWN IS NEVER A GATE, the rule sendReach already follows: the block simply does
+ * not appear, and everything else in the card is unchanged.
+ */
+function appendBotInfo(host, bot) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+
+    details.className = 'botinfo';
+    summary.textContent = '[BotInfo';
+    details.append(summary);
+
+    const body = document.createElement('pre');
+
+    body.className = 'botinfo-text';
+
+    // The serial is checked, not just the presence of an answer: a bot is ephemeral, and showing
+    // the previous bot's report under this one's name is the one failure a cached panel has that
+    // the in-game command does not.
+    const cached = state.botInfo && state.botInfo.serial === bot.serial ? state.botInfo : null;
+
+    body.textContent = cached
+        ? (cached.lines || []).join('\n')
+        : 'open to load';
+
+    details.append(body);
+
+    details.addEventListener('toggle', () => {
+        if (details.open) {
+            loadBotInfo(bot.serial, body);
+        }
+    });
+
+    host.append(details);
+}
+
+async function loadBotInfo(serial, body) {
+    if (state.botInfo && state.botInfo.serial === serial) {
+        body.textContent = (state.botInfo.lines || []).join('\n');
+        return;
+    }
+
+    body.textContent = 'loading...';
+
+    try {
+        const dropped = await api.request('botinfo', String(serial));
+
+        await api.awaitAck('botinfo', { nonce: dropped.nonce, timeoutMs: 10000 });
+
+        const answer = await api.botinfo();
+
+        // Still the bot that was asked about? The card may have been re-pointed while this was in
+        // flight, and an answer about a bot nobody is looking at must not be written into the
+        // panel or the cache.
+        if (Number(answer.serial) !== Number(serial)) {
+            return;
+        }
+
+        state.botInfo = answer;
+        body.textContent = (answer.lines || []).join('\n') || 'that bot is gone';
+    } catch (error) {
+        body.textContent = `could not read it: ${error.message}`;
+    }
 }
 
 /**
@@ -3859,6 +3952,25 @@ function nudgeSelected(dx, dy, step) {
     requestRender();
 }
 
+/**
+ * Centre both views on a world coordinate.
+ *
+ * One function, three callers - the toolbar modal, the sidebar box and the Problems panel - so
+ * "go to a coordinate" cannot come to mean two slightly different things. There is a single camera
+ * behind both projections (js/view.js), so this is genuinely all it takes; clampCenter already
+ * refuses anything off the facet, which is why nothing here range-checks.
+ */
+function jumpTo(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return false;
+    }
+
+    view.goTo(x, y, Math.max(view.scale, 2));
+    requestRender();
+
+    return true;
+}
+
 async function gotoCoordinate() {
     const values = await askFor({
         title: 'Go to a coordinate',
@@ -3873,8 +3985,146 @@ async function gotoCoordinate() {
         return;
     }
 
-    view.goTo(Number(values.x), Number(values.y), Math.max(view.scale, 2));
-    requestRender();
+    jumpTo(Number(values.x), Number(values.y));
+}
+
+/**
+ * The sidebar's coordinate box.
+ *
+ * Accepts "1475,1641", "1475, 1641" and "1475 1641", because all three are what a coordinate looks
+ * like in the places you copy one from - a console warning, a walk-failure line, this editor's own
+ * readout - and a box that takes only one of them makes you retype the other two.
+ */
+function wireGotoBox() {
+    if (!dom.gotoXy) {
+        return;
+    }
+
+    dom.gotoXy.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+            return;
+        }
+
+        event.preventDefault();
+
+        const parts = String(dom.gotoXy.value || '').split(/[\s,]+/).filter(Boolean);
+        const ok = parts.length >= 2 && jumpTo(Number(parts[0]), Number(parts[1]));
+
+        if (dom.gotoStatus) {
+            dom.gotoStatus.hidden = ok;
+            dom.gotoStatus.textContent = ok ? '' : 'Give two numbers, like 1475,1641.';
+        }
+    });
+}
+
+// --- the Problems panel ------------------------------------------------------------------------
+
+/**
+ * Which record, if any, is standing on this tile.
+ *
+ * The audit reports an unstandable arrival by coordinate rather than by id - an arrival has no id
+ * of its own, it belongs to a destination - so a row that wants to SELECT something has to find it
+ * the same way the badge does.
+ */
+function shapeAtTile(x, y) {
+    const hit = state.shapes.find((shape) => shape.kind === 'point'
+        && shape.points && shape.points[0]
+        && shape.points[0][0] === x && shape.points[0][1] === y);
+
+    return hit ? hit.id : null;
+}
+
+/**
+ * Every flagged record, as one clickable list.
+ *
+ * Re-rendered from whatever is currently known rather than accumulated: the audit is replaced
+ * wholesale by a fresh run, the validator re-runs on every edit, and a stale row is worse than no
+ * row - it sends somebody to look at a record that was fixed twenty minutes ago.
+ */
+function renderProblems() {
+    if (!dom.problems) {
+        return;
+    }
+
+    const flagged = state.shapes
+        .filter((shape) => shape.kind === 'point')
+        .map((shape) => ({ shape, unstandable: isUnstandable(shape), staleZ: isStaleZ(shape) }))
+        .filter((entry) => entry.unstandable || entry.staleZ);
+
+    const rows = problemRows({
+        audit: state.audit,
+        validation: state.validation,
+        flagged,
+        shapeAt: shapeAtTile,
+        labelFor: auditLine
+    });
+
+    dom.problems.innerHTML = '';
+
+    if (rows.length === 0) {
+        const empty = document.createElement('li');
+
+        empty.className = 'muted';
+        empty.textContent = state.audit ? 'nothing flagged' : 'nothing flagged yet - run Audit';
+
+        dom.problems.append(empty);
+        return;
+    }
+
+    for (const row of rows) {
+        const item = document.createElement('li');
+        const tag = document.createElement('span');
+
+        tag.className = `swatch ${row.severity}`;
+        tag.textContent = '';
+        tag.title = row.severity;
+
+        const label = document.createElement('label');
+
+        label.textContent = row.x === null || row.x === undefined
+            ? row.label
+            : `${row.label} @ ${row.x},${row.y}`;
+        label.title = row.reason;
+
+        const kind = document.createElement('span');
+
+        kind.className = 'count';
+        kind.textContent = row.kind;
+
+        item.append(tag, label, kind);
+
+        const reason = document.createElement('p');
+
+        reason.className = 'muted reason';
+        reason.textContent = row.reason;
+        item.append(reason);
+
+        // A finding with no single place - an edge has two ends - still selects its record when it
+        // names one, and otherwise does nothing rather than jumping somewhere arbitrary.
+        item.addEventListener('click', () => {
+            const shape = row.shapeId ? state.shapes.find((s) => s.id === row.shapeId) : null;
+
+            if (shape) {
+                select(shape);
+            }
+
+            if (row.x !== null && row.x !== undefined) {
+                jumpTo(row.x, row.y);
+            } else if (shape) {
+                centerOnShape(shape);
+            }
+        });
+
+        dom.problems.append(item);
+    }
+
+    const summary = dom.problems.parentElement
+        ? dom.problems.parentElement.querySelector('summary')
+        : null;
+
+    if (summary) {
+        summary.textContent = `Problems - ${problemSummary(rows)}`;
+    }
 }
 
 // --- validation preview ----------------------------------------------------------------------------
@@ -3894,6 +4144,9 @@ function validatePreview() {
     };
 
     const result = validate(files, { hopCap: HOP_CAP });
+
+    state.validation = result;
+    renderProblems();
 
     if (result.fatal.length > 0) {
         setStatus(`${result.fatal.length} problem(s) would be refused: ${result.fatal[0].message}`,
@@ -4269,6 +4522,7 @@ function wireAudit() {
                 hideBanner();
             }
 
+            renderProblems();
             updateCounts();
             requestRender();
         } catch (error) {

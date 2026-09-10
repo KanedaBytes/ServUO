@@ -313,9 +313,28 @@ namespace Server.Custom
                 return;
             }
 
-            BotCaps caps = BotSystem.Caps;
+            CommandReport.Send(from, String.Format("[BotInfo {0}", bot.Name), Describe(bot));
+        }
 
+        /// <summary>
+        /// The [BotInfo report as lines, for anything that wants it other than a gump.
+        ///
+        /// Hoisted out of the target callback unchanged. It never depended on `from` - only
+        /// on the bot and on statics - so the extraction is mechanical, and it is what lets
+        /// the editor show the same report beside the same bot's dot on the map. Two
+        /// renderings of one answer, built by one function, which is the rule the bot card
+        /// already follows on the browser side (fillBotDetail).
+        /// </summary>
+        public static IList<string> Describe(PlayerBot bot)
+        {
             var lines = new List<string>();
+
+            if (bot == null)
+            {
+                return lines;
+            }
+
+            BotCaps caps = BotSystem.Caps;
 
             // --- header ---------------------------------------------------------------------
             lines.Add(String.Format("--- {0} ---", bot.Name));
@@ -504,8 +523,8 @@ namespace Server.Custom
                         left.TotalSeconds > 0 ? left.TotalSeconds : 0));
                 }
             }
-        
-            CommandReport.Send(from, String.Format("[BotInfo {0}", bot.Name), lines);
+
+            return lines;
         }
 
         [Usage("BotLifecycle [on|off]")]

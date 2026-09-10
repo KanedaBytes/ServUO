@@ -297,7 +297,7 @@ namespace Server.Custom
 
             string detail = String.Format(
                 "{0} bot(s) live ({1} travelling, {2} lingering, {3} idle; {4} name(s) claimed){5}{6}{7}. "
-                + "recovery: {8}. {9}. Last load {10}",
+                + "recovery: {8}; arrival retargets: {11}. {9}. Last load {10}",
                 count,
                 travelling,
                 lingering,
@@ -308,7 +308,8 @@ namespace Server.Custom
                 Describe(byHome, home => "of " + home),
                 NavWalker.DescribeRungTotals(),
                 caps,
-                loaded);
+                loaded,
+                NavWalker.DescribeArrivalRetargets());
 
             // The target this population is aiming at, and what a tick of it costs.
             //

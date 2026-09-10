@@ -174,6 +174,24 @@ namespace Server.Custom
         /// A random offset within the configured radius, validated with CanSpawnMobile so the
         /// mobile is never sent into a wall. Falls back to the exact tile, which is what the
         /// author asked for anyway.
+        ///
+        /// THE Z IS RESOLVED THE WALKER'S WAY, not with GetAverageZ, and that is the whole of a
+        /// measured fault. GetAverageZ only sees land, so scattering around an arrival on a raised
+        /// shop floor asked about the street underneath it: `brit-shop-tinker` authors 1421,1651 at
+        /// z 11 and every scattered spot came back at z 10, on the ground outside. CanSpawnMobile
+        /// then passed - a street tile IS standable - and the bot was sent to a tile three away
+        /// with a wall between. Four of one 30-minute window's seventeen terminal failures were
+        /// that one arrival, and three more were the same shape at the carpenter and the inn.
+        ///
+        /// NavWalker.TryResolveZ searches a window around the HINT first and the land second, which
+        /// is what keeps a scatter on the floor its anchor is on. The hint is the anchor's own Z
+        /// rather than the candidate's, because the candidate has none - that is the question being
+        /// asked.
+        ///
+        /// It still validates standing only, never reachability: a scattered spot can be standable
+        /// and unreachable, and answering that costs a MovementPath per candidate. NavWalker's
+        /// arrival retarget is where reachability is settled, once, from close enough for the
+        /// pathfinder's answer to be worth having.
         /// </summary>
         private static Point3D Scatter(Point3D around, Map map)
         {
@@ -185,7 +203,13 @@ namespace Server.Custom
                 {
                     int x = around.X + Utility.RandomMinMax(-radius, radius);
                     int y = around.Y + Utility.RandomMinMax(-radius, radius);
-                    int z = map.GetAverageZ(x, y);
+
+                    int z;
+
+                    if (!NavWalker.TryResolveZ(map, new Point3D(x, y, around.Z), out z))
+                    {
+                        continue;
+                    }
 
                     if (map.CanSpawnMobile(x, y, z))
                     {
