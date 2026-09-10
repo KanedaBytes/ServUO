@@ -236,9 +236,11 @@ namespace Server.Custom
                     // false positive. True of the pathfinder, and it left a hole: twenty edges on
                     // this graph are one tile long and NONE of them was ever checked.
                     //
-                    // It found none broken, and that is itself the finding. The suspect was
-                    // 'uo-wp-188-s4' -> 'uo-trinsic-shop-alchemist-s1' (1840,2711 -> 1840,2710),
-                    // four repeat walk failures in one 30-minute window - and CheckMovement ALLOWS
+                    // It found none broken, and that is itself the finding. The suspect was the
+                    // one-tile hop into the Trinsic alchemist - then 'uo-wp-188-s4' ->
+                    // 'uo-trinsic-shop-alchemist-s1' at (1840,2711 -> 1840,2710); the shop end has
+                    // since been relocated to 1847,2711 and that pair is no longer an edge - four
+                    // repeat walk failures in one 30-minute window, and CheckMovement ALLOWS
                     // that step. The edge is sound; what fails is reaching it from ten tiles out,
                     // which is FastAStarAlgorithm's budget rather than this graph's geometry (see
                     // NavWalkFailures for the measurement). Worth keeping the check anyway: it is

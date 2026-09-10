@@ -1095,12 +1095,12 @@
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-alchemist</Name>
     <UniqueId>b3a22fbc-0197-4e49-493f-ac01949bbf48</UniqueId>
     <Map>Trammel</Map>
-    <X>1840</X>
-    <Y>2710</Y>
+    <X>1847</X>
+    <Y>2711</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1840</CentreX>
-    <CentreY>2710</CentreY>
+    <CentreX>1847</CentreX>
+    <CentreY>2711</CentreY>
     <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>

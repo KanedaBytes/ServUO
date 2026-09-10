@@ -327,7 +327,15 @@ Two things follow, and both are already acted on:
 
 - **Author uphill hops short.** An edge whose straight-line length is 12 can have a 30-tile walk.
   `trinsic-alchemist-slope-1..4` exist for exactly this: they split `uo-wp-188-s3 -> uo-wp-188-s4`
-  into five hops of at most six tiles, each verified with the engine.
+  into hops of at most six tiles, each verified with the engine. The shop end was then relocated in
+  the editor - the arrival, `uo-trinsic-shop-alchemist-s1` and the spawner all moved to `1847,2711`
+  - and `uo-wp-188-s4` moved onto the road at `1849,2711`, so the chain now runs
+  `slope-3 -> uo-wp-188-s4 -> uo-trinsic-shop-alchemist-s1 -> slope-4` at 3, 2 and 1 tiles.
+  **The order is the ground's, not the ids'**: `nav-route 1852,2713 1847,2711` walks
+  `1852,2713 -> 1851,2712 -> 1850,2711 -> 1849,2711 -> 1848,2711 -> 1847,2711`, straight west along
+  `y=2711`, and `slope-4` (1846,2711) is one tile *past* the arrival rather than before it - so the
+  monotone chain ends there and `slope-4` is a leaf pointing at the shop centre. `uo-wp-188-s4`'s
+  previous placement doubled back six tiles north and six south to a tile one east of `slope-4`.
 - **`NavWalker.MaxApproachDistance = 8`** is the named port of uo-offline's approach cap (theirs is
   36, sized to the 38-tile box; ours is sized to the 300-expansion budget, which binds first). Past
   it the walker gives up aiming at the goal and walks back to the waypoint behind it, once per hop.
