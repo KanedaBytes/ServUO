@@ -244,6 +244,20 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// Whether a mobile of this kind consents to being walked through by a bot.
+        ///
+        /// The one line the shove question reduces to, kept beside Describe so the two can never
+        /// disagree about which bucket a mobile is in. NavWalker counts rung entries with it; the
+        /// answer is what separates "the world is busy" from "the rules refuse this".
+        /// </summary>
+        public static bool Shovable(Mobile mobile)
+        {
+            string kind = Describe(mobile);
+
+            return kind == "PlayerBot" || kind == "daily-life";
+        }
+
+        /// <summary>
         /// What KIND of thing this is, in the terms the shove rule is written in.
         ///
         /// This is the classification the whole measurement turns on. A bot walks through another
@@ -252,7 +266,7 @@ namespace Server.Custom
         /// upstream files and stay as they are. So "who was on the tile" decides whether a failure
         /// was avoidable with the rules we have, or needs the rules to change.
         /// </summary>
-        private static string Describe(Mobile mobile)
+        public static string Describe(Mobile mobile)
         {
             if (mobile.Player)
             {

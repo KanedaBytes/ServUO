@@ -411,6 +411,9 @@ namespace Server.Custom
             _retargetOccupied = 0;
             _retargetUnstandable = 0;
             _retargetUnreachable = 0;
+
+            _nextStepBlocked = 0;
+            _nextStepUnshovable = 0;
         }
 
         private void Tick()
@@ -1178,6 +1181,39 @@ namespace Server.Custom
         /// <summary>One Debug line per rung entered, never per tick.</summary>
         private void LogRung(NavStep step, string what)
         {
+            // WHO IS ON THE TILE THE NEXT STEP WANTS - asked first, because it is the only one of
+            // the three that answers the question anybody is asking.
+            //
+            // DescribeBlocker names a mobile on the GOAL tile and otherwise lists whatever is near
+            // the walker, and both are the wrong set. A wedge is almost never caused by somebody
+            // standing on the goal twelve tiles away; it is caused by somebody standing on the
+            // tile the walker is trying to step onto right now. Measured, that gap was total: over
+            // a whole run of 133 rung entries, ONE said "blocked by" - a dog - while 75 of the 76
+            // that carried a mobile list at all had a stock NPC or an animal within two tiles.
+            // "A vendor was near the wedge" is well supported by that and "a vendor caused it" is
+            // not, and the difference is what decides whether an upstream file gets edited.
+            Mobile blocker = NextStepBlocker(step);
+
+            if (blocker != null)
+            {
+                bool shovable = NavWalkFailures.Shovable(blocker);
+
+                _nextStepBlocked++;
+
+                if (!shovable)
+                {
+                    _nextStepUnshovable++;
+                }
+
+                what += String.Format(
+                    ", next step blocked by {0} ({1}) at {2},{3}{4}",
+                    blocker.Name ?? "?",
+                    NavWalkFailures.Describe(blocker),
+                    blocker.X,
+                    blocker.Y,
+                    shovable ? "" : " - WHICH A BOT MAY NOT PUSH");
+            }
+
             // The body on the goal tile, when there is one. A bot walks through other bots and
             // the daily-life actors (BotShove), so a rung that fires against a mobile is one it
             // cannot push - a real player, a vendor, a guard, an animal - and that is the case
@@ -1226,6 +1262,95 @@ namespace Server.Custom
         /// counter has nothing on the counter tile: what it cannot pass is the vendor in the
         /// doorway, and that is exactly the case the yield-to-stock-NPCs decision wants evidence of.
         /// </summary>
+        /// <summary>
+        /// Fleet-wide counts of rung entries where the tile the next step wanted was occupied,
+        /// and of how many of those occupants a bot may not push.
+        ///
+        /// The second number is the whole instrument. It is what "the stock-NPC shove costs us N
+        /// stalls an hour" has to be measured with, because the terminal ledger cannot see it: a
+        /// wedge that the ladder eventually recovers from never reaches the ledger at all, and the
+        /// one Sean actually watched - a vendor in the Trinsic alchemist doorway - was exactly
+        /// that. Reported on Bots.Population beside the rung totals.
+        /// </summary>
+        private static int _nextStepBlocked;
+
+        private static int _nextStepUnshovable;
+
+        /// <summary>"blocked 41, unshovable 33" - the fleet-wide next-step line.</summary>
+        public static string DescribeNextStepBlocks()
+        {
+            return String.Format(
+                "blocked {0}, unshovable {1}", _nextStepBlocked, _nextStepUnshovable);
+        }
+
+        /// <summary>
+        /// Who is standing on the tile this hop's next step wants, or null.
+        ///
+        /// Asked of the ENGINE rather than guessed from the direction to the goal: a walker on a
+        /// road bend is not stepping towards its goal, and the tile it is actually about to try is
+        /// whatever MovementPath's first direction names. That is the tile Mobile.Move will hand
+        /// to the occupant's OnMoveOver, and therefore the only tile whose occupant can refuse
+        /// this step.
+        ///
+        /// Costs one MovementPath, on rung entry only - a few dozen an hour across the fleet,
+        /// against the one MoveTo already runs on every step of every walker.
+        /// </summary>
+        private Mobile NextStepBlocker(NavStep step)
+        {
+            Map map = _mobile.Map;
+
+            if (map == null || map == Map.Internal || step == null)
+            {
+                return null;
+            }
+
+            var path = new MovementPath(
+                _mobile, new Point3D(step.Point.X, step.Point.Y, ResolveZ(map, step.Point)));
+
+            if (!path.Success || path.Directions == null || path.Directions.Length == 0)
+            {
+                return null;
+            }
+
+            int x = _mobile.X;
+            int y = _mobile.Y;
+
+            Movement.Movement.Offset(path.Directions[0], ref x, ref y);
+
+            Mobile found = null;
+
+            IPooledEnumerable nearby = map.GetMobilesInRange(new Point3D(x, y, _mobile.Z), 0);
+
+            try
+            {
+                foreach (Mobile other in nearby)
+                {
+                    if (other == _mobile || other.Deleted || !other.Alive)
+                    {
+                        continue;
+                    }
+
+                    // The first one that is really in the way vertically. CanMoveOver's own test:
+                    // two mobiles more than fifteen apart in Z are on different storeys.
+                    if (other.Z + 15 <= _mobile.Z || _mobile.Z + 15 <= other.Z)
+                    {
+                        continue;
+                    }
+
+                    found = other;
+                    break;
+                }
+            }
+            finally
+            {
+                // A non-generic IPooledEnumerable has to be freed or the pool leaks
+                // (CLAUDE.md section 14).
+                nearby.Free();
+            }
+
+            return found;
+        }
+
         private string DescribeBlocker(NavStep step)
         {
             Map map = _mobile.Map;
