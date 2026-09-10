@@ -147,3 +147,102 @@ test('an older proposal without the reachability fields still renders', () => {
     const text = adopt.summary(proposal, 1).join('\n');
     assert.ok(!/will be written|All \d+ waypoint/.test(text), 'no reach counts without the fields');
 });
+
+// ---- rebase: removals and rewrites ----------------------------------------------------------
+//
+// A rebase proposal is the only one that asks Save to DELETE something of ours, so these hold the
+// two halves of that to account: which shapes go, and what the records that named them say instead.
+
+/** `split()` plus the two fields a rebase adds. */
+function rebased() {
+    const proposal = split();
+
+    proposal.rebase = true;
+    proposal.mergeRadius = 6;
+    proposal.removals = [
+        { id: 'brit-old-1', into: 'uo-a', x: 12, y: 11, tiles: 2 },
+        { id: 'brit-old-2', into: 'uo-a-s1', x: 22, y: 13, tiles: 3 }
+    ];
+    proposal.removedEdges = ['edge:brit-old-1>brit-old-2', 'edge:brit-keep>brit-old-1'];
+    proposal.rewrites = [
+        {
+            kind: 'destination', shape: 'dest:brit-shop-x', owner: 'brit-shop-x',
+            from: 'brit-old-1', to: 'uo-a'
+        },
+        {
+            kind: 'route', shape: 'route:brit-loop', owner: 'brit-loop',
+            from: 'brit-old-1 brit-old-2', to: 'uo-a uo-a-s1'
+        }
+    ];
+
+    return proposal;
+}
+
+test('removals delete the edges first, then the waypoints', () => {
+    // Edges first so each is resolved while both its ends still exist, and edges AT ALL because a
+    // dangling edge id is only a warning here - left behind, it would reload clean and sit in the
+    // file naming a record that no longer exists.
+    assert.deepStrictEqual(adopt.removals(rebased()), [
+        'edge:brit-old-1>brit-old-2',
+        'edge:brit-keep>brit-old-1',
+        'wp:brit-old-1',
+        'wp:brit-old-2'
+    ]);
+});
+
+test('rewrites become shape updates carrying only the waypoints field', () => {
+    // The shape id comes from the shard, so accepting a proposal is a map onto `updates` rather
+    // than a second matching-up of records - and nothing but the approach list is touched, so a
+    // rewrite cannot quietly move a record's position, name or flags.
+    assert.deepStrictEqual(adopt.rewrites(rebased()), [
+        { id: 'dest:brit-shop-x', props: { waypoints: 'uo-a' } },
+        { id: 'route:brit-loop', props: { waypoints: 'uo-a uo-a-s1' } }
+    ]);
+});
+
+test('an ordinary proposal has no removals and no rewrites', () => {
+    // The whole ordinary flow has to be unchanged by this, and "unchanged" means the two new
+    // lists come back empty rather than undefined - a caller spreads them into a save payload.
+    const proposal = split();
+
+    assert.deepStrictEqual(adopt.removals(proposal), []);
+    assert.deepStrictEqual(adopt.rewrites(proposal), []);
+    assert.ok(!/REBASE/.test(adopt.summary(proposal, 1).join('\n')));
+});
+
+test('the banner names the relinks that keep the neighbours of a removed waypoint attached', () => {
+    const proposal = rebased();
+    proposal.relinks = ['brit-keep>uo-a'];
+
+    assert.match(adopt.summary(proposal, 5).join('\n'),
+        /1 edge\(s\) walked to keep the neighbours of a removed waypoint on the road: brit-keep>uo-a/);
+});
+
+test('a withdrawn removal says so, because keeping our waypoint is the visible outcome', () => {
+    // A relink that would not walk takes the removal back rather than stranding the neighbour.
+    const proposal = rebased();
+    proposal.withdrawn = ['brit-old-2 is KEPT: the relink from one of its neighbours to uo-a-s1 would not walk'];
+
+    assert.match(adopt.summary(proposal, 5).join('\n'), /WITHDRAWN: brit-old-2 is KEPT/);
+});
+
+test('the banner names every removal, its distance, and what it folded into', () => {
+    const text = adopt.summary(rebased(), 5).join('\n');
+
+    assert.match(text, /REBASE: 2 waypoint\(s\) of ours stand on the road being proposed/);
+    assert.match(text, /within 6 tiles of it/);
+    assert.match(text, /brit-old-1 \(12,11\) -> uo-a, 2 tile\(s\) from the new road/);
+    assert.match(text, /2 record\(s\) named a removed waypoint and are re-pointed/);
+    assert.match(text, /route brit-loop: "brit-old-1 brit-old-2" -> "uo-a uo-a-s1"/);
+});
+
+test('removals with nothing naming them say so rather than printing an empty list', () => {
+    // A road of ours nothing pointed at is the common case for a plain street, and a banner that
+    // fell silent there would read as "the rewrites are missing" rather than "there were none".
+    const proposal = rebased();
+    proposal.rewrites = [];
+
+    const text = adopt.summary(proposal, 5).join('\n');
+
+    assert.match(text, /No destination, arrival or route named any of them\./);
+});

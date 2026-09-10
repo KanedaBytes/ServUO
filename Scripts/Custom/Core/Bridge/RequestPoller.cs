@@ -697,11 +697,20 @@ namespace Server.Custom
 
                     Rectangle2D region = default(Rectangle2D);
                     bool haveRegion = false;
+                    bool rebase = false;
 
                     for (int i = 0; i < parts.Length; i++)
                     {
                         if (parts[i].StartsWith("#"))
                         {
+                            continue;
+                        }
+
+                        // The word rather than a flag character, because this one is worth having
+                        // to type: rebase is the mode that proposes road over ground we authored.
+                        if (Insensitive.Equals(parts[i], "rebase"))
+                        {
+                            rebase = true;
                             continue;
                         }
 
@@ -727,15 +736,15 @@ namespace Server.Custom
 
                     string adoptError;
 
-                    if (!NavAdopt.TryStart(Map.Trammel, region, out adoptError))
+                    if (!NavAdopt.TryStart(Map.Trammel, region, rebase, out adoptError))
                     {
                         message = String.Format("adopt not started: {0}", adoptError);
                         return false;
                     }
 
                     message = String.Format(
-                        "adopt started over {0}x{1} at {2},{3}; watch Data/Live/nav-adopt.json",
-                        region.Width, region.Height, region.X, region.Y);
+                        "adopt{0} started over {1}x{2} at {3},{4}; watch Data/Live/nav-adopt.json",
+                        rebase ? " (rebase)" : "", region.Width, region.Height, region.X, region.Y);
                     return true;
                 }
 

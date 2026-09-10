@@ -78,6 +78,24 @@ namespace Server.Custom
             get { return Config.Get("Custom.NavAdoptJoinReach", 100); }
         }
 
+        /// <summary>
+        /// In REBASE mode, how close one of our waypoints has to be to a road we are proposing
+        /// before it counts as the same piece of road and is merged away.
+        ///
+        /// SIX, half the hop cap, so a merged route end never moves by more than half a leg - and
+        /// measured to the nearest point on a proposed EDGE, not to the nearest proposed waypoint.
+        /// That distinction is the whole calibration. uo-offline authored against a 38-tile leg,
+        /// so their nodes sit about sixteen tiles apart, and ours sit BETWEEN them on the same
+        /// street: measured node-to-node, only 44 of Britain's 93 are within six tiles of theirs,
+        /// while measured to the segment 73 are. Merging on the node distance would have left
+        /// thirty of our waypoints standing on top of their roads, which is the second road
+        /// network this mode exists to avoid.
+        /// </summary>
+        public static int MergeRadius
+        {
+            get { return Config.Get("Custom.NavAdoptMergeRadius", 6); }
+        }
+
         /// <summary>Edges walked per LoopQueue pass. Each is a flood-fill; this is the budget.</summary>
         private const int EdgesPerPass = 4;
 
@@ -96,6 +114,32 @@ namespace Server.Custom
         /// thread for the length of a flood-fill per edge.
         /// </summary>
         public static bool TryStart(Map map, Rectangle2D region, out string error)
+        {
+            return TryStart(map, region, false, out error);
+        }
+
+        /// <summary>
+        /// Start an adopt, optionally in REBASE mode.
+        ///
+        /// WHAT REBASE CHANGES, and it is one thing stated two ways: the authored-region skip stops
+        /// applying to waypoints and edges, and starts being enforced by a merge instead. Ordinary
+        /// adopt refuses to propose a road over ground we have authored, which is right while their
+        /// roads and ours are in different places. Britain is the case where they are in the SAME
+        /// place and ours is the worse of the two - hand-authored, partial, and carrying every
+        /// high-detour edge the walk audit finds - so refusing to propose there means the town can
+        /// never be improved by their data at all.
+        ///
+        /// WHAT IT DOES NOT CHANGE. Destinations, arrivals, sites, zones and routes keep the skip
+        /// in full. Those are the records that carry authored work - names, tags, exclusive and
+        /// exact flags, positions somebody placed by eye - and nothing here may propose over one.
+        /// Only the ROAD is rebased.
+        ///
+        /// The rule this serves, whole-facet rather than a Britain special case: wherever
+        /// uo-offline has roads, theirs replace ours; wherever they have none, ours stay authored.
+        /// A waypoint of ours further than <see cref="MergeRadius"/> from every proposed edge is
+        /// one their graph does not cover, and it is kept and joined exactly as before.
+        /// </summary>
+        public static bool TryStart(Map map, Rectangle2D region, bool rebase, out string error)
         {
             error = null;
 
@@ -122,7 +166,7 @@ namespace Server.Custom
                 return false;
             }
 
-            var job = new Job(map, region, reference);
+            var job = new Job(map, region, reference, rebase);
 
             if (job.Total == 0 && job.Waypoints.Count == 0)
             {
@@ -137,8 +181,8 @@ namespace Server.Custom
             LoopQueue.Post(() => Step(job));
 
             Log.Info(
-                "Adopt started: {0} waypoint(s), {1} edge(s) to walk, {2} skipped as already authored.",
-                job.Waypoints.Count, job.Total, job.SkippedAuthored);
+                "Adopt{0} started: {1} waypoint(s), {2} edge(s) to walk, {3} skipped as already authored.",
+                rebase ? " (REBASE)" : "", job.Waypoints.Count, job.Total, job.SkippedAuthored);
 
             return true;
         }
@@ -182,7 +226,20 @@ namespace Server.Custom
                     return;
                 }
 
+                // AFTER the corridors, because a merge is measured against the road as it will be
+                // written and an arrival corridor is part of that road - and because it queues
+                // WORK of its own: the relinks that keep a removed waypoint's neighbours attached
+                // have to walk like any other edge, so this sits in the same return-and-come-back
+                // chain the joins and the corridors use.
+                if (job.PlanMerges())
+                {
+                    LoopQueue.Post(() => Step(job));
+                    return;
+                }
+
                 job.SettleCorridors();
+                job.SettleMerges();
+
                 job.FindIslands();
                 job.PruneUnreachable();
 
@@ -212,6 +269,39 @@ namespace Server.Custom
         {
             public readonly Map Map;
             public readonly Rectangle2D Region;
+
+            /// <summary>True when this run may propose road over ground we have authored.</summary>
+            public readonly bool Rebase;
+
+            /// <summary>
+            /// Waypoints of OURS this proposal asks to remove, because the road it proposes runs
+            /// where they stand. Written to the proposal; applied only by the editor's save path.
+            ///
+            /// THIS IS THE ONE PLACE ADOPT ASKS FOR A DELETION, and the safety property is
+            /// unchanged in kind: it is still a proposal in `Data/Live/nav-adopt.json`, and there
+            /// is still no code path from this file to `navigation.json`.
+            /// </summary>
+            public readonly List<Removal> Removals = new List<Removal>();
+
+            /// <summary>
+            /// Every reference that has to move because a removal took its waypoint away - a
+            /// destination's or arrival's approach list, a route's step list, an edge of ours.
+            ///
+            /// CARRIED EXPLICITLY RATHER THAN LEFT TO WARN. The shard drops a dangling edge and
+            /// warns about a destination naming an unknown waypoint, so a removal with no rewrite
+            /// would reload cleanly and silently point somebody's shop at nothing. The proposal
+            /// says what has to change, and the reference audit at the end is what checks it did.
+            /// </summary>
+            public readonly List<Rewrite> Rewrites = new List<Rewrite>();
+
+            /// <summary>Edges queued to keep a removed waypoint's neighbours on the road, as "a&gt;b".</summary>
+            public readonly List<string> Relinks = new List<string>();
+
+            /// <summary>Our edges naming a removed waypoint, as editor shape ids. See PlanEdgeRemovals.</summary>
+            public readonly List<string> RemovedEdges = new List<string>();
+
+            /// <summary>Removals taken back because their relink would not walk. See SettleMerges.</summary>
+            public readonly List<string> Withdrawn = new List<string>();
 
             /// <summary>Reference waypoints being adopted, by id.</summary>
             public readonly Dictionary<string, NavWaypoint> Waypoints =
@@ -272,6 +362,16 @@ namespace Server.Custom
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>
+            /// REBASE: the proposed waypoint each removed one of ours re-points to. Separate from
+            /// `_alias`, which is a fold between two REFERENCE records on one tile; this is a merge
+            /// between one of OURS and the road being proposed over it, and the two must not share
+            /// a map because a fold is applied to the reference before the walk while a merge is
+            /// decided after it.
+            /// </summary>
+            private readonly Dictionary<string, string> _merged =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
             /// Corridors walked from a reachable waypoint to a destination none of whose arrivals
             /// was inside the hop cap. See PlanArrivalCorridors.
             /// </summary>
@@ -280,7 +380,15 @@ namespace Server.Custom
             public int Next;
             private bool _joinsPlanned;
             private bool _corridorsPlanned;
+            private bool _mergesPlanned;
             public int SkippedAuthored;
+
+            /// <summary>
+            /// Reference records already in our graph from an earlier adopt. Rebase only: ordinary
+            /// adopt never meets one, because an adopted waypoint is one of ours and the authored
+            /// skip catches it first.
+            /// </summary>
+            public int SkippedAdopted;
             public int SkippedRegion;
             public int SkippedNoArrival;
             public int Links;
@@ -294,10 +402,11 @@ namespace Server.Custom
             private readonly HashSet<string> _taken =
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            public Job(Map map, Rectangle2D region, NavigationStore reference)
+            public Job(Map map, Rectangle2D region, NavigationStore reference, bool rebase)
             {
                 Map = map;
                 Region = region;
+                Rebase = rebase;
 
                 foreach (NavWaypoint waypoint in reference.Waypoints ?? new List<NavWaypoint>())
                 {
@@ -335,7 +444,27 @@ namespace Server.Custom
                         continue;
                     }
 
-                    if (authored.Contains(waypoint.X, waypoint.Y))
+                    // A REFERENCE RECORD WE HAVE ALREADY ADOPTED IS NOT PROPOSED AGAIN - and in
+                    // rebase mode this is load-bearing rather than an optimisation. Ordinary adopt
+                    // never meets the case: an adopted waypoint is one of ours, so it sits in the
+                    // authored region and the skip below catches it. Rebase turns that skip off,
+                    // and 216 of the reference's ids are already in navigation.json from the
+                    // Britain-Trinsic box - so a rebase box overlapping saved ground would propose
+                    // a CREATE for an id that already exists, and a duplicate id is one of the few
+                    // things that refuses the reload outright. It is already adopted, at the
+                    // position it was walked to; there is nothing to do but let edges join onto it.
+                    if (Rebase && NavigationSystem.Graph.Node(waypoint.Id) != null)
+                    {
+                        SkippedAdopted++;
+                        continue;
+                    }
+
+                    // REBASE PROPOSES HERE ANYWAY. Ordinary adopt refuses ground we have authored,
+                    // which is right while their roads and ours are in different places; Britain is
+                    // where they are in the same place and ours is the worse of the two. What keeps
+                    // the two graphs from becoming one road laid over another is not this skip in
+                    // rebase mode - it is PlanMerges, which removes ours where theirs now runs.
+                    if (!Rebase && authored.Contains(waypoint.X, waypoint.Y))
                     {
                         SkippedAuthored++;
                         continue;
@@ -832,6 +961,494 @@ namespace Server.Custom
             /// An adopt that touches nothing of ours is legitimately an island for now - a far
             /// town adopted before the road to it - so this reports rather than refuses.
             /// </summary>
+            /// <summary>
+            /// REBASE ONLY: work out which of our waypoints the proposed road now runs through,
+            /// and ask for them to be removed - with every reference that named one re-pointed.
+            ///
+            /// MEASURED TO A SEGMENT, NOT TO A NODE, and that is the whole calibration rather than
+            /// a detail. Their graph was authored against a 38-tile leg, so their nodes stand about
+            /// sixteen tiles apart and ours stand BETWEEN them on the same street. Britain measured
+            /// both ways: 44 of our 93 are within six tiles of one of their NODES, and 73 are
+            /// within six tiles of one of their ROADS. Merging on node distance would have kept
+            /// thirty waypoints of ours sitting on a road this proposal is also laying - which is
+            /// the second road network the authored-region skip existed to prevent, arrived at by
+            /// the other door.
+            ///
+            /// The segments are the WALKED hops, not the reference's edges: by the time this runs
+            /// every over-cap edge has been subdivided under the cap and every hop has been pathed
+            /// both ways, so the road being measured against is the road that will be written.
+            ///
+            /// WHAT IS NEVER MERGED. A waypoint further than the radius from every proposed hop is
+            /// one their graph does not cover, and it is kept and joined - the shop doors and
+            /// approaches their roads do not front, and the work-site corridors they never reach.
+            /// That asymmetry IS the rule: wherever uo-offline has roads, theirs replace ours;
+            /// wherever they have none, ours stay authored.
+            /// </summary>
+            public bool PlanMerges()
+            {
+                if (!Rebase || _mergesPlanned)
+                {
+                    return false;
+                }
+
+                _mergesPlanned = true;
+
+                int radius = MergeRadius;
+
+                // The proposed road as segments, each with the two waypoints that bound it, so a
+                // merge can name the nearer end as the record everything re-points to.
+                var hops = new List<Hop>();
+
+                for (int i = 0; i < Edges.Count; i++)
+                {
+                    NavWaypoint a = Resolve(Edges[i].From);
+                    NavWaypoint b = Resolve(Edges[i].To);
+
+                    if (a != null && b != null)
+                    {
+                        hops.Add(new Hop { A = a, B = b });
+                    }
+                }
+
+                if (hops.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (NavWaypoint ours in NavigationSystem.Graph.NodesOn(Map))
+                {
+                    if (!Region.Contains(new Point2D(ours.X, ours.Y)))
+                    {
+                        continue;
+                    }
+
+                    // An id this proposal itself minted is not one of ours to remove.
+                    if (Waypoints.ContainsKey(ours.Id))
+                    {
+                        continue;
+                    }
+
+                    double best = Double.MaxValue;
+                    NavWaypoint onto = null;
+
+                    for (int i = 0; i < hops.Count; i++)
+                    {
+                        double distance = hops[i].DistanceTo(ours.X, ours.Y);
+
+                        if (distance < best)
+                        {
+                            best = distance;
+                            onto = hops[i].NearerEnd(ours.X, ours.Y);
+                        }
+                    }
+
+                    if (onto == null || best > radius || Insensitive.Equals(onto.Id, ours.Id))
+                    {
+                        continue;
+                    }
+
+                    _merged[ours.Id] = onto.Id;
+
+                    Removals.Add(new Removal
+                    {
+                        Id = ours.Id,
+                        Into = onto.Id,
+                        X = ours.X,
+                        Y = ours.Y,
+                        Tiles = (int)Math.Round(best)
+                    });
+                }
+
+                return PlanRelinks();
+            }
+
+            /// <summary>
+            /// A REMOVAL HAS TO RELINK, or it takes a neighbour's only road away with it.
+            ///
+            /// This is the fault a dry run of the first version found, and it is worth stating
+            /// plainly because nothing refuses it: our edges naming a removed waypoint come back
+            /// from the validator as WARNINGS - "edge dropped: no waypoint 'brit-carp-3'" - the
+            /// shard drops them and reloads clean. In the trial box that silently cut brit-carp-4
+            /// loose, and brit-carp-4 is the only approach waypoint brit-shop-carpenter has. A
+            /// stranded shop that reloads without an error is precisely the shape of fault the
+            /// island check exists for.
+            ///
+            /// The editor's own hand-delete already knew: `deleteAndRelink` removes the edges
+            /// touching a waypoint and joins its two neighbours back up. This is that rule for a
+            /// merge - every surviving neighbour of a removed waypoint gets an edge to the proposed
+            /// waypoint the removal folded into, walked and subdivided like any other. A neighbour
+            /// that is itself being removed needs nothing: the road between the two of them is the
+            /// road being proposed.
+            /// </summary>
+            private bool PlanRelinks()
+            {
+                if (Removals.Count == 0)
+                {
+                    return false;
+                }
+
+                int before = Pending.Count;
+                var queued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < Removals.Count; i++)
+                {
+                    Removal removal = Removals[i];
+
+                    foreach (NavWaypoint neighbour in NavigationSystem.Graph.Neighbours(removal.Id))
+                    {
+                        if (_merged.ContainsKey(neighbour.Id))
+                        {
+                            continue;
+                        }
+
+                        string key = neighbour.Id + ">" + removal.Into;
+
+                        if (!queued.Add(key))
+                        {
+                            continue;
+                        }
+
+                        // Already a road between these two: the neighbour was reached by one of
+                        // their edges as well, and one hop is enough.
+                        if (HasEdge(neighbour.Id, removal.Into))
+                        {
+                            continue;
+                        }
+
+                        Relinks.Add(key);
+
+                        Pending.Add(new PendingEdge
+                        {
+                            Edge = new NavEdge
+                            {
+                                From = neighbour.Id,
+                                To = removal.Into,
+                                KindName = "walk",
+                                Tags = "road"
+                            },
+                            FromId = neighbour.Id,
+                            ToId = removal.Into,
+                            IsJoin = true,
+                            OurId = neighbour.Id
+                        });
+
+                        Links++;
+                    }
+                }
+
+                return Pending.Count > before;
+            }
+
+            private bool HasEdge(string a, string b)
+            {
+                for (int i = 0; i < Edges.Count; i++)
+                {
+                    if ((Insensitive.Equals(Edges[i].From, a) && Insensitive.Equals(Edges[i].To, b))
+                        || (Insensitive.Equals(Edges[i].From, b) && Insensitive.Equals(Edges[i].To, a)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            /// <summary>
+            /// After the relinks have walked: withdraw any removal whose relink failed, then write
+            /// the rewrites for the removals that stand.
+            ///
+            /// WITHDRAWN RATHER THAN FORCED. A relink that will not walk means the neighbour cannot
+            /// reach the new road, and removing the waypoint anyway would strand it. Keeping our
+            /// waypoint leaves two roads over one piece of ground, which is untidy and visible;
+            /// stranding a shop is neither. The author is told which, and can move the record and
+            /// re-run rather than discover it at the next audit.
+            /// </summary>
+            public void SettleMerges()
+            {
+                if (!Rebase || Removals.Count == 0)
+                {
+                    return;
+                }
+
+                var failed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < Failures.Count; i++)
+                {
+                    failed.Add(Failures[i].From + ">" + Failures[i].To);
+                    failed.Add(Failures[i].To + ">" + Failures[i].From);
+                }
+
+                for (int i = Removals.Count - 1; i >= 0; i--)
+                {
+                    Removal removal = Removals[i];
+                    bool broken = false;
+
+                    foreach (NavWaypoint neighbour in NavigationSystem.Graph.Neighbours(removal.Id))
+                    {
+                        if (_merged.ContainsKey(neighbour.Id))
+                        {
+                            continue;
+                        }
+
+                        if (failed.Contains(neighbour.Id + ">" + removal.Into))
+                        {
+                            broken = true;
+                            break;
+                        }
+                    }
+
+                    if (!broken)
+                    {
+                        continue;
+                    }
+
+                    Withdrawn.Add(String.Format(
+                        "{0} is KEPT: the relink from one of its neighbours to {1} would not walk,"
+                        + " and removing it would strand them",
+                        removal.Id, removal.Into));
+
+                    _merged.Remove(removal.Id);
+                    Removals.RemoveAt(i);
+                }
+
+                PlanRewrites();
+                PlanEdgeRemovals();
+            }
+
+            /// <summary>
+            /// Our own edges naming a removed waypoint, as editor shape ids, so Save deletes the
+            /// records rather than leaving them to be dropped at load.
+            ///
+            /// THE SHARD WOULD COPE, AND THAT IS THE PROBLEM. A dangling edge id is a warning here:
+            /// the edge is dropped and the reload succeeds. So a rebase that removed a waypoint and
+            /// left its edges behind would reload perfectly, every walk would work, and
+            /// `navigation.json` would carry a handful of edges naming records that no longer
+            /// exist - invisible until somebody greps the file, and re-introduced verbatim by the
+            /// next golden export. The editor's own hand-delete has always cascaded these
+            /// (`deleteAndRelink` removes the edges touching a waypoint before removing it); this
+            /// is the same cascade for a proposal, listed by the side that knows which edges they
+            /// are rather than reconstructed by the side that does not.
+            ///
+            /// In their STORED order, because that is the order the editor mints a shape id from -
+            /// `edge:from>to` - and `byFromTo` resolves it back the same way.
+            /// </summary>
+            private void PlanEdgeRemovals()
+            {
+                foreach (NavEdge edge in NavigationSystem.Store.Edges)
+                {
+                    if (_merged.ContainsKey(edge.From ?? "") || _merged.ContainsKey(edge.To ?? ""))
+                    {
+                        RemovedEdges.Add(String.Format("edge:{0}>{1}", edge.From, edge.To));
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Everything that named a removed waypoint, and what it has to name instead.
+            ///
+            /// WRITTEN OUT RATHER THAN LEFT TO THE RELOAD. On this shard a dangling edge id is a
+            /// warning and the edge is simply dropped, and a destination naming an unknown waypoint
+            /// is a warning too - so a removal with no rewrite reloads clean and quietly points a
+            /// shop's approach at nothing. The proposal therefore says what must change, and the
+            /// reference audit run after the save is what proves it did.
+            ///
+            /// A REWRITE CAN COLLAPSE A LIST. Two of our waypoints merging onto the same proposed
+            /// one leaves a route or an approach list naming it twice, and a route naming the same
+            /// step twice is legal but silly while a route left with fewer than two steps is FATAL
+            /// at load. So a rewritten list drops consecutive repeats, and a route that would fall
+            /// under two steps is reported instead of rewritten - there is a person to ask.
+            /// </summary>
+            private void PlanRewrites()
+            {
+                if (_merged.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (NavDestination destination in NavigationSystem.Destinations)
+                {
+                    string next;
+
+                    if (TryRewriteList(destination.WaypointIds, out next))
+                    {
+                        Rewrites.Add(new Rewrite
+                        {
+                            Kind = "destination",
+                            ShapeId = "dest:" + destination.Id,
+                            Owner = destination.Id,
+                            From = destination.WaypointIds,
+                            To = next
+                        });
+                    }
+                }
+
+                var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (NavArrival arrival in NavigationSystem.Store.Arrivals)
+                {
+                    int index;
+                    seen.TryGetValue(arrival.DestinationId ?? "", out index);
+                    seen[arrival.DestinationId ?? ""] = index + 1;
+
+                    string next;
+
+                    if (TryRewriteList(arrival.WaypointIds, out next))
+                    {
+                        Rewrites.Add(new Rewrite
+                        {
+                            Kind = "arrival",
+                            ShapeId = String.Format("arr:{0}#{1}", arrival.DestinationId, index),
+                            Owner = arrival.DestinationId,
+                            From = arrival.WaypointIds,
+                            To = next
+                        });
+                    }
+                }
+
+                foreach (NavRouteDef route in NavigationSystem.Routes)
+                {
+                    string next;
+
+                    if (!TryRewriteList(route.WaypointIds, out next))
+                    {
+                        continue;
+                    }
+
+                    if (Split(next).Count < 2)
+                    {
+                        // A route with fewer than two steps refuses the reload outright, so this
+                        // is not something to write and hope. brit-farmer-loop is the live case:
+                        // its last step is brit-arm-1, a leaf.
+                        SkippedNoReach.Add(String.Format(
+                            "route '{0}' would be left with fewer than two steps by these removals",
+                            route.Id));
+                        continue;
+                    }
+
+                    Rewrites.Add(new Rewrite
+                    {
+                        Kind = "route",
+                        ShapeId = "route:" + route.Id,
+                        Owner = route.Id,
+                        From = route.WaypointIds,
+                        To = next
+                    });
+                }
+            }
+
+            /// <summary>
+            /// Re-point a space-separated approach or step list through the merge map. False when
+            /// nothing in it moved, so an unchanged record is never written back.
+            /// </summary>
+            private bool TryRewriteList(string ids, out string next)
+            {
+                next = null;
+
+                List<string> parts = Split(ids);
+
+                if (parts.Count == 0)
+                {
+                    return false;
+                }
+
+                var rebuilt = new List<string>(parts.Count);
+                bool moved = false;
+
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    string id = parts[i];
+                    string onto;
+
+                    if (_merged.TryGetValue(id, out onto))
+                    {
+                        id = onto;
+                        moved = true;
+                    }
+
+                    // A list that named two of ours which merged onto the same record would
+                    // otherwise repeat it.
+                    if (rebuilt.Count > 0 && Insensitive.Equals(rebuilt[rebuilt.Count - 1], id))
+                    {
+                        continue;
+                    }
+
+                    rebuilt.Add(id);
+                }
+
+                if (!moved)
+                {
+                    return false;
+                }
+
+                next = String.Join(" ", rebuilt.ToArray());
+                return true;
+            }
+
+            private static List<string> Split(string ids)
+            {
+                var found = new List<string>();
+
+                if (String.IsNullOrEmpty(ids))
+                {
+                    return found;
+                }
+
+                string[] parts = ids.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    found.Add(parts[i]);
+                }
+
+                return found;
+            }
+
+            /// <summary>One proposed hop, and the geometry a merge is measured against.</summary>
+            private struct Hop
+            {
+                public NavWaypoint A;
+                public NavWaypoint B;
+
+                /// <summary>Distance from a tile to the nearest point on this hop.</summary>
+                public double DistanceTo(int x, int y)
+                {
+                    double ax = A.X, ay = A.Y, bx = B.X, by = B.Y;
+                    double dx = bx - ax, dy = by - ay;
+                    double length = dx * dx + dy * dy;
+
+                    // A hop of no length is a point; both ends are the same answer.
+                    double t = length <= 0.0
+                        ? 0.0
+                        : ((x - ax) * dx + (y - ay) * dy) / length;
+
+                    if (t < 0.0)
+                    {
+                        t = 0.0;
+                    }
+                    else if (t > 1.0)
+                    {
+                        t = 1.0;
+                    }
+
+                    double px = ax + t * dx - x;
+                    double py = ay + t * dy - y;
+
+                    return Math.Sqrt(px * px + py * py);
+                }
+
+                /// <summary>
+                /// Which end a merged record should name. The nearer of the two, because that is
+                /// the one a route through this hop reaches first from where our waypoint stood.
+                /// </summary>
+                public NavWaypoint NearerEnd(int x, int y)
+                {
+                    double da = (A.X - x) * (double)(A.X - x) + (A.Y - y) * (double)(A.Y - y);
+                    double db = (B.X - x) * (double)(B.X - x) + (B.Y - y) * (double)(B.Y - y);
+
+                    return da <= db ? A : B;
+                }
+            }
+
             public void FindIslands()
             {
                 var links = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -1577,6 +2194,35 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// One of our waypoints the rebase asks to remove, and the proposed one it folds into.
+        /// `Tiles` is how far it stood from the proposed road, which is what the author is really
+        /// judging: a merge at one tile is the same piece of road under two names, a merge at six
+        /// has moved something.
+        /// </summary>
+        private sealed class Removal
+        {
+            public string Id;
+            public string Into;
+            public int X;
+            public int Y;
+            public int Tiles;
+        }
+
+        /// <summary>
+        /// A record that named a removed waypoint, and the list it has to carry instead. `ShapeId`
+        /// is the editor's own identifier for the record, so accepting a proposal is a matter of
+        /// posting these as `updates` rather than of matching records up again on the way in.
+        /// </summary>
+        private sealed class Rewrite
+        {
+            public string Kind;
+            public string ShapeId;
+            public string Owner;
+            public string From;
+            public string To;
+        }
+
+        /// <summary>
         /// A corridor walked to a destination whose arrivals were all beyond the hop cap. Carries
         /// what the proposal lists: where it starts, how far it reaches, and whether that is far
         /// enough to want a look before Save.
@@ -1688,7 +2334,10 @@ namespace Server.Custom
                 .Append(",\"height\":").Append(job.Region.Height).Append("},\n");
             builder.Append("  \"skipped\": {\"authored\":").Append(job.SkippedAuthored)
                 .Append(",\"region\":").Append(job.SkippedRegion)
-                .Append(",\"noArrival\":").Append(job.SkippedNoArrival).Append("},\n");
+                .Append(",\"noArrival\":").Append(job.SkippedNoArrival)
+                .Append(",\"adopted\":").Append(job.SkippedAdopted).Append("},\n");
+            builder.Append("  \"rebase\": ").Append(job.Rebase ? "true" : "false").Append(",\n");
+            builder.Append("  \"mergeRadius\": ").Append(job.Rebase ? MergeRadius : 0).Append(",\n");
             builder.Append("  \"links\": ").Append(job.Links).Append(",\n");
             builder.Append("  \"blocked\": ").Append(job.Blocked ? "true" : "false").Append(",\n");
             builder.Append("  \"reachable\": ").Append(job.ReachedCount).Append(",\n");
@@ -1703,6 +2352,11 @@ namespace Server.Custom
             WriteStrings(builder, "folded", job.Folded, true);
             WriteStrings(builder, "corrected", job.Corrected, true);
             WriteCorridors(builder, job);
+            WriteRemovals(builder, job);
+            WriteRewrites(builder, job);
+            WriteStrings(builder, "relinks", job.Relinks, true);
+            WriteStrings(builder, "removedEdges", job.RemovedEdges, true);
+            WriteStrings(builder, "withdrawn", job.Withdrawn, true);
             WriteStrings(builder, "skippedNoReach", job.SkippedNoReach, true);
             WriteStrings(builder, "islands", job.Islands, false);
 
@@ -1721,6 +2375,54 @@ namespace Server.Custom
         /// the minted waypoint it ends on, its straight-line length, and whether that length wants
         /// a look (over two hops). A corridor that did not walk is in `failures` as well.
         /// </summary>
+        /// <summary>
+        /// The waypoints of ours a rebase asks to remove. Empty on an ordinary adopt, and the
+        /// editor draws nothing for an empty list, so an ordinary proposal is unchanged in shape.
+        /// </summary>
+        private static void WriteRemovals(StringBuilder builder, Job job)
+        {
+            builder.Append("  \"removals\": [\n");
+
+            for (int i = 0; i < job.Removals.Count; i++)
+            {
+                Removal removal = job.Removals[i];
+
+                builder.Append(i > 0 ? ",\n" : "");
+                builder.Append("    {\"id\":").Append(Json.Quote(removal.Id))
+                    .Append(",\"into\":").Append(Json.Quote(removal.Into))
+                    .Append(",\"x\":").Append(removal.X)
+                    .Append(",\"y\":").Append(removal.Y)
+                    .Append(",\"tiles\":").Append(removal.Tiles)
+                    .Append("}");
+            }
+
+            builder.Append(job.Removals.Count > 0 ? "\n" : "").Append("  ],\n");
+        }
+
+        /// <summary>
+        /// Every approach or step list that has to move because a removal took its waypoint away,
+        /// keyed by the editor's own shape id so accepting is a matter of posting them as updates.
+        /// </summary>
+        private static void WriteRewrites(StringBuilder builder, Job job)
+        {
+            builder.Append("  \"rewrites\": [\n");
+
+            for (int i = 0; i < job.Rewrites.Count; i++)
+            {
+                Rewrite rewrite = job.Rewrites[i];
+
+                builder.Append(i > 0 ? ",\n" : "");
+                builder.Append("    {\"kind\":").Append(Json.Quote(rewrite.Kind))
+                    .Append(",\"shape\":").Append(Json.Quote(rewrite.ShapeId))
+                    .Append(",\"owner\":").Append(Json.Quote(rewrite.Owner))
+                    .Append(",\"from\":").Append(Json.Quote(rewrite.From))
+                    .Append(",\"to\":").Append(Json.Quote(rewrite.To))
+                    .Append("}");
+            }
+
+            builder.Append(job.Rewrites.Count > 0 ? "\n" : "").Append("  ],\n");
+        }
+
         private static void WriteCorridors(StringBuilder builder, Job job)
         {
             builder.Append("  \"corridors\": [\n");

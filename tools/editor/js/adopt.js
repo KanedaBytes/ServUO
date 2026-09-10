@@ -104,6 +104,47 @@ export function survivors(proposal) {
 }
 
 /**
+ * The shape ids Save must DELETE: our own waypoints the proposed road runs through.
+ *
+ * REBASE ONLY, and empty on every other proposal, which is what keeps the ordinary flow unchanged.
+ * A rebase proposes road over ground we authored, so the two graphs would otherwise both be
+ * written and the town would carry a second road network laid over the first - the exact fault the
+ * authored-region skip exists to prevent. `removals` is how the shard says which of ours its road
+ * replaces; every one carries the proposed waypoint it folds into and how far it stood from it.
+ *
+ * THE EDGES GO TOO, and they are listed by the shard rather than worked out here. A dangling edge
+ * id is only a WARNING on this shard - the edge is dropped and the reload succeeds - so a rebase
+ * that removed a waypoint and left its edges behind would reload perfectly while navigation.json
+ * quietly carried edges naming records that no longer exist, and the next golden export would
+ * write them straight back. The editor's own hand-delete has always cascaded these; `removedEdges`
+ * is the same cascade for a proposal, from the side that knows the edges' stored order - which is
+ * what an `edge:from>to` shape id is minted from.
+ *
+ * Waypoints last, so an edge is resolved while both its ends still exist.
+ */
+export function removals(proposal) {
+    return [
+        ...(proposal.removedEdges || []),
+        ...(proposal.removals || []).map((removal) => `wp:${removal.id}`)
+    ];
+}
+
+/**
+ * The record updates that go with those removals: an approach or step list re-pointed onto the
+ * proposed waypoint its old one merged into.
+ *
+ * Each carries the editor's own shape id, so this is a straight map onto a save payload's
+ * `updates` rather than a second matching-up of records. `props.waypoints` is the field in every
+ * case - destinations, arrivals and routes all name their waypoints in one space-separated string.
+ */
+export function rewrites(proposal) {
+    return (proposal.rewrites || []).map((rewrite) => ({
+        id: rewrite.shape,
+        props: { waypoints: rewrite.to }
+    }));
+}
+
+/**
  * Whether Save must refuse this proposal outright: nothing in it reaches the graph we have.
  *
  * The shard decides (`blocked`), from what its flood reached. Every record in an island is
@@ -185,6 +226,52 @@ export function summary(proposal, createdCount) {
             lines.push(`  ${corridor.destination}: ${corridor.tiles} tile(s) from ${corridor.from}`
                 + ` to ${corridor.x},${corridor.y}, ${state}${flag}`);
         }
+    }
+
+    const removed = proposal.removals || [];
+
+    if (removed.length > 0) {
+        // A rebase is the one proposal that asks for a DELETION, so it says so at length. The
+        // distance is the number worth reading: a merge at one tile is the same piece of road
+        // under two names, a merge at the radius has moved where a route ends.
+        const radius = proposal.mergeRadius || 0;
+
+        lines.push('', `REBASE: ${removed.length} waypoint(s) of ours stand on the road being`
+            + ` proposed (within ${radius} tiles of it) and are REMOVED, each folded into the`
+            + ' proposed waypoint named beside it:');
+
+        for (const removal of removed) {
+            lines.push(`  ${removal.id} (${removal.x},${removal.y}) -> ${removal.into}`
+                + `, ${removal.tiles} tile(s) from the new road`);
+        }
+
+        const relinks = proposal.relinks || [];
+
+        if (relinks.length > 0) {
+            // A removal takes its edges with it, so every surviving neighbour of a removed
+            // waypoint gets a walked edge onto the road that replaced it. Without this the
+            // neighbour keeps a dangling edge, which the shard drops with a warning - and a
+            // shop whose only approach waypoint was that neighbour goes quiet.
+            lines.push('', `${relinks.length} edge(s) walked to keep the neighbours of a removed`
+                + ` waypoint on the road: ${relinks.join(', ')}`);
+        }
+
+        const moved = proposal.rewrites || [];
+
+        lines.push('', moved.length > 0
+            ? `${moved.length} record(s) named a removed waypoint and are re-pointed:`
+            : 'No destination, arrival or route named any of them.');
+
+        for (const rewrite of moved) {
+            lines.push(`  ${rewrite.kind} ${rewrite.owner}: "${rewrite.from}" -> "${rewrite.to}"`);
+        }
+    }
+
+    for (const withdrawn of proposal.withdrawn || []) {
+        // A removal taken back because its relink would not walk. Keeping our waypoint leaves
+        // two roads over one piece of ground, which is untidy and visible; removing it would
+        // strand a neighbour, which is neither.
+        lines.push('', `WITHDRAWN: ${withdrawn}`);
     }
 
     for (const island of proposal.islands || []) {
