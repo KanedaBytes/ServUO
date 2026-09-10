@@ -1179,13 +1179,13 @@
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-2</Name>
     <UniqueId>0c745d2c-f9aa-1193-4af4-9132cc8c55c3</UniqueId>
     <Map>Trammel</Map>
-    <X>1882</X>
-    <Y>2805</Y>
+    <X>1884</X>
+    <Y>2807</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1882</CentreX>
-    <CentreY>2805</CentreY>
-    <CentreZ>0</CentreZ>
+    <CentreX>1884</CentreX>
+    <CentreY>2807</CentreY>
+    <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
     <MinDelay>5</MinDelay>
@@ -1473,12 +1473,12 @@
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-smith-2</Name>
     <UniqueId>77e3e00a-f6e0-bc5a-a9e1-b4d905e37a3f</UniqueId>
     <Map>Trammel</Map>
-    <X>1940</X>
-    <Y>2762</Y>
+    <X>1933</X>
+    <Y>2771</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1940</CentreX>
-    <CentreY>2762</CentreY>
+    <CentreX>1933</CentreX>
+    <CentreY>2771</CentreY>
     <CentreZ>10</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
