@@ -570,11 +570,27 @@ namespace Server.Custom
             Write(rows);
         }
 
+        /// <summary>
+        /// A waypoint minted as part of a work site's corridor, rather than an authored point.
+        ///
+        /// THE PREFIXES COME FROM THE SCOUT'S OWN TABLE and used to be spelled out here, which is
+        /// how one of them came to be wrong: this tested "brit-minesouth-", a prefix no site has
+        /// ever minted, and did not test "brit-minewest-", which `BotWorkScout.Sites` gives the
+        /// west cliff. A west-cliff corridor waypoint would have been audited as an ordinary
+        /// arrival point - measured against the wrong rule, with nothing to say so - and the two
+        /// lists could only be reconciled by somebody opening both files. Now there is one list.
+        /// </summary>
         private static bool IsCorridor(string id)
         {
-            return id.StartsWith("brit-minenorth-", StringComparison.OrdinalIgnoreCase)
-                || id.StartsWith("brit-minesouth-", StringComparison.OrdinalIgnoreCase)
-                || id.StartsWith("brit-woodpath-", StringComparison.OrdinalIgnoreCase);
+            foreach (string prefix in BotWorkScout.CorridorPrefixes)
+            {
+                if (id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static Row Probe(

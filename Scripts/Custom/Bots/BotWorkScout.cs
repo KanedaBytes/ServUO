@@ -131,6 +131,29 @@ namespace Server.Custom
             },
         };
 
+        /// <summary>
+        /// The waypoint-id prefix each site's corridor is minted under, ending in the '-' that
+        /// separates the prefix from the hop number: "brit-minenorth-", "brit-minewest-",
+        /// "brit-woodpath-".
+        ///
+        /// PUBLISHED BECAUSE THE OTHER HALF USED TO GUESS. `BotSiteAudit.IsCorridor` had these
+        /// three spelled out as literals and one of them was wrong - it tested "brit-minesouth-",
+        /// which no site has ever minted, while the west cliff's real prefix "brit-minewest-" was
+        /// missing. So a west-cliff corridor waypoint would have been audited as an ordinary
+        /// arrival point and its reach reported against the wrong rule, silently, for as long as
+        /// nobody compared the two files. Reading the table is the only way the two cannot drift.
+        /// </summary>
+        public static IEnumerable<string> CorridorPrefixes
+        {
+            get
+            {
+                foreach (Site site in Sites)
+                {
+                    yield return site.Prefix + "-";
+                }
+            }
+        }
+
         public static void Run(Mobile from)
         {
             Map map = Map.Trammel;
