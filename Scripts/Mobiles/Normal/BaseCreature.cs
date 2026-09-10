@@ -4545,6 +4545,22 @@ namespace Server.Mobiles
 
         public override bool OnMoveOver(Mobile m)
         {
+            // CUSTOM SHARD EDIT - see Scripts/Custom/MODIFICATIONS.md, entry 5.
+            //
+            // A PlayerBot walks through an uncontrolled creature. Upstream uo-offline gets this
+            // free because their PlayerBot is a PlayerMobile, so the branch below never matches it
+            // and the base call reaches PlayerBot.CheckShove => true. Ours is a BaseCreature, so
+            // this branch refuses it before CheckShove is ever asked - and there is nothing on the
+            // Custom/ side to override, because the mobile being SHOVED is a stock creature this
+            // shard does not construct. Returns null for every other mover, leaving the two
+            // branches below exactly as upstream wrote them.
+            bool? bot = Server.Custom.BotShove.OnMoveOver(this, m);
+
+            if (bot.HasValue)
+            {
+                return bot.Value;
+            }
+
             if (m is BaseCreature && !((BaseCreature)m).Controlled)
             {
                 return (!Alive || !m.Alive || IsDeadBondedPet || m.IsDeadBondedPet) || (Hidden && IsStaff());

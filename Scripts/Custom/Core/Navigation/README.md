@@ -486,6 +486,50 @@ The arrival itself was the real fault and is fixed as data: `trinsic-dock-2`'s s
 from `2072,2865` z-15 to `2070,2863` z-2, the tile `[NavAudit`'s own nearest-standable field named,
 seven tiles from `uo-wp-990` and inside the hop cap. Unstandable arrivals: 20 -> 19.
 
+### What three measured windows say
+
+Same shard, same graph, sixty bots walking themselves. `[BotSendTo` needs a connected client, so
+nothing was steered in any of them.
+
+| | **A** 30 min, before | **B** 30 min, arrival + rescue | **C** 15 min, + the shove edit |
+| --- | --- | --- | --- |
+| terminal failures | 17 | 18 | 8 |
+| ... per minute | 0.57 | 0.60 | **0.53** |
+| on an **arrival** hop | 11 | 8 | 3 |
+| on a **waypoint** hop | 6 | 10 | 5 |
+| the `trinsic-dock-2` cascade | 8 | **0** | **0** |
+| struck edges | 3 | **0** | **0** |
+| unstandable arrivals | 20 | 19 | 19 |
+| rung entries (rungs 1-4) | - | 185 | 68 |
+| ... per minute | - | 6.17 | **4.53** |
+| next-step tile occupied | - | 40 | 5 |
+| ... **by something a bot may not push** | - | **36** | **0** |
+| arrival retargets | - | 26 | 7 |
+
+**The totals barely move and that is not the finding.** What moved is which failures they are.
+
+- **A -> B closed the two causes the work named.** The cascade is gone: no walk in B or C began on
+  a tile the walker had manufactured, and the three strikes on `uo-wp-990 <-> uo-wp-197-s1` went
+  with it. The arrival class fell from 11 to 8 while 26 retargets fired - 18 of them on a goal the
+  engine would not path to, each one an eighty-second ladder climb that no longer happens.
+- **The waypoint class rose from 6 to 10 in B**, which is the honest cost of the count staying
+  flat. Every one of those is the shape §3 describes: a bot far off its own hop. Measured,
+  `uo-wp-164-s1 -> uo-wp-164` and `uo-wp-138-s1 -> uo-wp-138` are both **13-tile roads for 12-tile
+  edges and both verify walkable**; the bots failing them were standing at `1882,2805` (a counter)
+  and `1850,2820` z10.
+- **B -> C is the shove edit, and `unshovable` going to exactly zero is the whole of it.** 36 rung
+  entries in thirty minutes were a bot refused by something it may not push; none in fifteen. Rung
+  entries fell 27% per minute with it. The 5 remaining occupied next-step tiles all held mobiles a
+  bot *can* push, which refuse nothing - that column is occupancy noise, not obstruction.
+
+**What is left is three records, and the audit now names all three.** `brit-square`'s arrival at
+`1475,1641` is a **stone wall** with no neighbour the engine will path to from the plaza side, and
+it accounts for 5 of C's 8 failures on its own; `trinsic-shop-provisioner-2`'s at `1882,2805` is a
+**counter** whose only standable neighbour is the shop floor a storey up, which strands a bot
+against a 12-tile hop at z 0; and something puts bots on `2026,2832` z 20 in Trinsic, 22 tiles from
+their own start waypoint. All three are authoring decisions rather than code, which is why they are
+written down here rather than guessed at.
+
 ### The seam for a custom pathfinder
 
 `MovementPath.OverrideAlgorithm` (`MovementPath.cs:58`) is a public static `PathAlgorithm` setter,

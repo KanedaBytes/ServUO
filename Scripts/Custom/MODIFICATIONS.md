@@ -115,8 +115,73 @@ only; `<Nullable>` stays unset, so no existing file changes meaning and no new w
 to this file conflicts loudly rather than silently. If upstream ever sets `LangVersion` itself,
 take theirs if it is C# 9 or higher.
 
-*(No `.cs` file under `Server/` or `Scripts/` has been modified — every entry above is a project,
-config or ignore file. Each future entry follows the format above.)*
+### 5. `Scripts/Mobiles/Normal/BaseCreature.cs` — a `PlayerBot` may walk over an uncontrolled creature
+
+```diff
+     public override bool OnMoveOver(Mobile m)
+     {
++        bool? bot = Server.Custom.BotShove.OnMoveOver(this, m);
++
++        if (bot.HasValue)
++        {
++            return bot.Value;
++        }
++
+         if (m is BaseCreature && !((BaseCreature)m).Controlled)
+         {
+             return (!Alive || !m.Alive || IsDeadBondedPet || m.IsDeadBondedPet) || (Hidden && IsStaff());
+         }
+ 
+         return base.OnMoveOver(m);
+     }
+```
+
+**The first `.cs` edit in this tree.** Written against ServUO `pub57` (assembly 57.4).
+
+**Why.** A bot cannot step onto a tile a stock NPC is standing on, and Britain's shop doorways are
+where stock NPCs stand permanently. Measured, over two windows:
+
+- `brit-shop-armorer`'s arrival at `1446,1648` is a **counter** (`[NavAudit`), its only standable
+  neighbour within one tile is `1445,1647`, and **Giles the Armorer stands on it**. Xaviera the
+  Weaponsmith stands beside him. Three of one thirteen-minute window's four terminal failures were
+  bots trying to get into or out of that shop.
+- The vendor in the Trinsic alchemist doorway that prompted this **never reached any ledger at
+  all**, because the stuck ladder waited her out — so the cost is systematically under-reported by
+  every instrument that only records terminal failures.
+
+**Why no `Custom/`-side approach works.** `OnMoveOver` is `virtual` on `Mobile`, and every mobile
+this shard constructs already routes a bot mover through `Scripts/Custom/Bots/BotShove.cs` — that
+is how a bot walks through another bot and through a daily-life actor. But the mobile being
+**shoved** here is a stock `BaseCreature` that the shard does not construct: an armorer, a banker,
+a guard, spawned by upstream data through upstream classes. There is no instance of ours to
+override and no hook between `Mobile.Move` and the occupant's `OnMoveOver`.
+
+**Why this file and not `Movement.cs`.** On a shard running `MovementImpl` this would need a second
+edit, because there a mobile is refused at `CheckMovement` before `OnMoveOver` is consulted
+(`Scripts/Services/Pathing/Movement.cs:345-356`, `:409`). **This shard runs `FastMovementImpl`,
+which never builds a mobile list at all** (`FastMovement.cs:23-26`, `:361-484`), so the occupant's
+`OnMoveOver` is the only gate and this is the only edit. That is not an assumption: the
+`Nav.Movement` health check reports the installed implementation on every `[CoreSmoke`, and it
+reads `FastMovementImpl`. **If a merge ever flips that back, this edit stops being sufficient and
+the two-edit version has to be reconsidered rather than assumed.**
+
+**What it costs.** It applies to **every** uncontrolled creature, monsters included — a bot walks
+through a dragon. That is upstream uo-offline's rule too (`PlayerBot.CheckShove => true`,
+`CustomBots/PlayerBot.cs:587-595`, with no engine change on their side at all), and there is no
+combat layer here yet for a narrower rule to serve. Revisit with the combat session; seam 13 in the
+Bots README is the place it will be felt first.
+
+**What it deliberately does not change.** `Scripts/Mobiles/PlayerMobile.cs:3487-3494` is untouched,
+so **a bot still yields to a real player**, and a real player shoving a bot still pays the engine's
+full-stamina rule. That half of the deviation was always the right half.
+
+**Merge note.** Three lines at the top of one method, above two branches left exactly as upstream
+wrote them, with a `CUSTOM SHARD EDIT` comment naming this entry. An upstream change to
+`OnMoveOver` will conflict loudly. If it does, the guard goes back at the top of whatever the new
+body is.
+
+*(Entry 5 is the only `.cs` edit; entries 1 to 4 are project,
+config or ignore files. Each future entry follows the format above.)*
 
 ---
 

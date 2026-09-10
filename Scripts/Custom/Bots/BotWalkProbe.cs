@@ -183,9 +183,10 @@ namespace Server.Custom
                     bot.SetBehavior(BotBehaviors.Create("Traveler"), "probe setup");
                 }
 
-                // CONVERGE. One destination for all five, chosen for crowding rather than at
-                // random: a bank is the busiest tile pattern the graph has, and it is where a real
-                // bot crowd will form.
+                // CONVERGE. One destination for all five, chosen for difficulty rather than at
+                // random: a destination whose arrival tile nothing can stand on if the graph has
+                // one, because that is the case the last hop has to retarget out of, and a bank
+                // otherwise, which is the busiest tile pattern the graph has.
                 NavDestination target = PickBusiest(destinations);
 
                 Log.Info(
@@ -511,8 +512,54 @@ namespace Server.Custom
             _paceWalker = null;
         }
 
+        /// <summary>
+        /// The destination to crowd, preferring one whose arrival tile is genuinely bad.
+        ///
+        /// THE HARDEST CASE THIS PROBE CAN SET UP, and until now it never set it up at all.
+        /// A bank plaza is a crowding test: five bots competing for four open tiles, which
+        /// reaches the middle rungs and proves the ladder. It says nothing about the last hop,
+        /// because a bank arrival is a tile in the open that anybody can walk to.
+        ///
+        /// Nineteen authored arrivals on this graph are tiles nothing can stand on - a counter,
+        /// a brick wall, a table, an oak tree - and a bot sent to one has to retarget inside
+        /// the arrival range or it cannot finish the walk at all. That was 7 of 17 terminal
+        /// failures in one measured window and the probe was blind to every one of them.
+        ///
+        /// READ OFF THE LIVE SCAN rather than hard-coded, deliberately: the whole point of
+        /// fixing an arrival is that it stops being on this list, and a probe naming a
+        /// destination by hand would keep testing a case somebody had already repaired while
+        /// missing whichever one broke next. When the list is empty the graph has no bad
+        /// arrivals left, and the bank is the right fallback.
+        /// </summary>
         private static NavDestination PickBusiest(List<NavDestination> destinations)
         {
+            NavResampleZ.Result placement = NavResampleZ.Scan();
+
+            foreach (NavResampleZ.Stranded stranded in placement.Cannot)
+            {
+                if (!String.Equals(stranded.Kind, "arrival", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < destinations.Count; i++)
+                {
+                    if (!Insensitive.Equals(destinations[i].Id, stranded.Id))
+                    {
+                        continue;
+                    }
+
+                    Log.Info(
+                        "Walk probe: crowding '{0}', whose arrival at {1},{2} is unstandable - {3}.",
+                        stranded.Id,
+                        stranded.X,
+                        stranded.Y,
+                        stranded.BlockerName ?? "no blocker named");
+
+                    return destinations[i];
+                }
+            }
+
             // A bank if there is one - it is the tile pattern a real crowd forms on. Otherwise
             // whatever the graph offers first, which is still a shared target for all five.
             for (int i = 0; i < destinations.Count; i++)

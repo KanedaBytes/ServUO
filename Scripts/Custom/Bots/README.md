@@ -294,10 +294,35 @@ miner stood one tile from the forge for the whole work probe with Elara on the s
 the **shoved** side consents: every bot and every daily-life actor routes a bot mover through
 `BotShove.OnMoveOver`, and there it is the free pass.
 
-**What a bot cannot push**: a real player, or a stock NPC - a vendor, a guard, an animal - because
-those two overrides are upstream files and stay as they are. Upstream's bots push both. A walker
-wedged behind one has the blocker named in its rung log (`blocked by <name> (<type>) at x,y`), so
-the case can be revisited with evidence.
+**This deviation is now half retired, with the evidence it asked for.** It said a bot cannot push a
+real player or a stock NPC, and that a wedged walker would name its blocker "so the case can be
+revisited with evidence". The evidence arrived and it was decisive, so the stock-NPC half is gone
+and the player half stays.
+
+Getting it needed a better instrument first. `DescribeBlocker` named a mobile on the **goal** tile
+and otherwise listed whatever was near the walker, and a wedge is almost never caused by somebody
+standing on a goal twelve tiles away - it is caused by somebody on the tile the walker is trying to
+step onto right now. Over one run of 133 rung entries, exactly **one** said "blocked by" (a dog),
+while 75 of the 76 that carried a mobile list at all had a stock NPC or an animal within two tiles:
+"a vendor was near the wedge" was well supported and "a vendor caused it" was not.
+
+`NavWalker` now asks the engine for the first direction of the path from here to the goal and names
+who is standing on **that** tile - the one `Mobile.Move` hands to an occupant's `OnMoveOver`, and
+therefore the only one whose occupant can refuse the step. Over a 30-minute window of 185 rung
+entries: **40 had a mobile on the next-step tile, and 36 of the 40 were mobiles a bot may not
+push.** `Bots.Population` carries the running count.
+
+So `Scripts/Mobiles/Normal/BaseCreature.cs` gains a three-line guard routing a `PlayerBot` mover
+through `BotShove` before its own branch - the first `.cs` edit in this tree, logged as entry 5 in
+`MODIFICATIONS.md` with why no `Custom/`-side approach works and what it costs. Upstream needs no
+engine edit for this at all, because their `PlayerBot` is a `PlayerMobile` and falls through to
+`CheckShove => true` on its own (`CustomBots/PlayerBot.cs:587-595`); ours is a `BaseCreature`, and
+the mobile being shoved is a stock creature this shard does not construct, so there is nothing of
+ours to override.
+
+**What a bot still cannot push**: a real player. `PlayerMobile.OnMoveOver` is untouched, so a bot
+yields to a player and a player shoving a bot still pays the engine's full-stamina rule. That half
+of the deviation was always the right half.
 
 ### A station is a place, and the stand tile is chosen on arrival
 
@@ -1951,6 +1976,23 @@ one destination at once so they compete for the same arrival tiles, then dispers
 **Pass is "nobody stuck, and no `Teleport` rung fired."** Rungs 2 to 4 firing is *information* — a
 sidestep that worked is the ladder doing its job. The rung line prints either way, because a run
 where nothing escalated is worth knowing about too: it means the contention did not bite.
+
+**It crowds the WORST arrival the graph has, not the busiest one.** A bank plaza is a crowding
+test - five bots competing for four open tiles - and it says nothing about the last hop, because a
+bank arrival is a tile in the open that anybody can walk to. Nineteen authored arrivals on this
+graph are tiles nothing can stand on: a counter, a brick wall, a table, an oak tree. A bot sent to
+one has to retarget inside the arrival range or it cannot finish the walk at all, and that was 7 of
+17 terminal failures in one measured window while this probe reported clean.
+
+`PickBusiest` therefore reads `NavResampleZ.Scan()` and prefers a destination with an unstandable
+arrival, falling back to the bank when there is none. **Read off the live scan rather than
+hard-coded**, because the point of fixing an arrival is that it stops being on that list - a probe
+naming a destination by hand would go on testing a case somebody had already repaired while missing
+whichever one broke next. It says which it chose and why:
+
+```
+Walk probe: crowding 'brit-bank', whose arrival at 1432,1692 is unstandable - brick wall.
+```
 
 **"Stuck" is the walker's own answer**, `NavWalker.CurrentRung != None`, not a guess from outside.
 The first version of this probe called a bot stuck if it was still walking when the window closed,
