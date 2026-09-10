@@ -460,6 +460,32 @@ Two things follow, and both are already acted on:
   from where a bot actually stands. `NavWalkFailures`' `cause` field is the instrument for that,
   not the audit.
 
+### A strike is not always a verdict on the edge
+
+`uo-wp-990 <-> uo-wp-197-s1` carried three strikes and there is nothing wrong with it. Measured
+with the engine, both directions:
+
+| probe | answer |
+| --- | --- |
+| `nav-route 2069,2856 2066,2854` | **4 tiles**, every hop verified |
+| `nav-hop verify` 2069,2856,-2 -> 2066,2854,-2 and the reverse | walkable both ways |
+| the leg that actually failed, 2072,2865,-15 -> 2066,2854,-2 | **no path** |
+| from where the validated rescue now lands, 2070,2863,-2 -> 2066,2854,-2 | walkable both ways |
+
+A three-tile edge with a four-tile road. Every one of its failures started eleven tiles away at
+`2072,2865` - open water under the pier, where the old rescue had put the bot after the PREVIOUS
+hop failed at `trinsic-dock-2`'s arrival. **The strike was earned by the tile the walker
+manufactured, not by the edge**, so no waypoints were added and none were needed.
+
+That is the general shape and it is worth naming: `NavEdgeHealth` strikes the edge a hop lay
+between, and the top rung is reached from wherever the ladder has drifted to. A struck edge should
+be walked **from the failing bot's own start tile** - which is why `NavWalkFailure` records
+`fromX/fromY/fromZ` at all - before anything is concluded about the road.
+
+The arrival itself was the real fault and is fixed as data: `trinsic-dock-2`'s second arrival moves
+from `2072,2865` z-15 to `2070,2863` z-2, the tile `[NavAudit`'s own nearest-standable field named,
+seven tiles from `uo-wp-990` and inside the hop cap. Unstandable arrivals: 20 -> 19.
+
 ### The seam for a custom pathfinder
 
 `MovementPath.OverrideAlgorithm` (`MovementPath.cs:58`) is a public static `PathAlgorithm` setter,

@@ -1445,7 +1445,7 @@
     {"destination":"trinsic-shop-provisioner-7","x":2022,"y":2844,"z":0,"exclusive":false,"range":2,"waypoints":"uo-trinsic-shop-provisioner-7-s1","source":"uo-offline"},
     {"destination":"trinsic-dock","x":2072,"y":2848,"z":-2,"refZ":-15,"exclusive":false,"range":2,"waypoints":"uo-wp-197","source":"uo-offline"},
     {"destination":"trinsic-dock-2","x":2072,"y":2848,"z":-2,"refZ":-15,"exclusive":false,"range":2,"waypoints":"uo-wp-197 uo-wp-990","source":"uo-offline"},
-    {"destination":"trinsic-dock-2","x":2072,"y":2865,"z":-15,"exclusive":false,"range":2,"waypoints":"uo-wp-197 uo-wp-990","source":"uo-offline"}
+    {"destination":"trinsic-dock-2","x":2070,"y":2863,"z":-2,"exclusive":false,"range":2,"waypoints":"uo-wp-197 uo-wp-990","source":"uo-offline"}
   ],
   "zones": [
     {"id":"brit-town","map":"Trammel","x":1416,"y":1498,"width":324,"height":279,"tags":"town britain guarded"},
