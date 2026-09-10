@@ -317,14 +317,21 @@ second storey to the ground. `TryResolveZ`'s **return value** draws the line the
 means nothing standable was found near the stored Z, and those records are **reported and left
 alone**, because they are misplaced rather than stale and moving them would bury the fault.
 
-The editor asks the *other* question and so uses the *other* function. A `z?` badge on a marker
-means the record disagrees with `StandingZ` by more than a storey — that the marker is being drawn
-somewhere the record is not, which is what `landz.at()` answers from the same accessor the pick map
-uses. Same record, two questions, two right answers.
+**The editor asks the same question, because it used to ask the other one and that was the bug.**
+Its `z?` badge compared the stored Z against the pick map's `StandingZ` and flagged anything more
+than a storey out — which is every record standing on something other than bare ground, so it read
+**13** (`town-2` on the bridge deck over a riverbed at -15, `uo-wp-79` on the Trinsic bridge, stock
+`trammel.xml` spawners on upper floors) while `[NavAudit` read **0**. Two rules, two answers, and
+the editor's named nothing anybody could fix. `[NavAudit` now exports the records themselves as
+`staleZRecords` beside the count, the editor badges membership in that list and nothing else, a
+nav save re-runs the audit quietly so the badge is at most one save behind, and read-only layers
+— stock spawners, entities, the uo-offline reference — are never badged at all. `landz` still
+answers the properties row's `z? 28 (ground -15)` and the cursor readout; it just does not decide.
 
 **Neither finds a record authored on the wrong storey.** `trinsic-shop-tailor-2`'s tile has two
 standable levels and the resample *confirmed* the upper one, because a hint wrong by more than the
-window is ratified rather than corrected. Only a person spots that, which is what the badge is for.
+window is ratified rather than corrected. Only a person spots that, and `[TileProbe <x> <y>` is
+what shows them the two levels.
 
 ## 5d-1b — uo-offline's navigation as a base
 

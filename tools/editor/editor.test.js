@@ -176,33 +176,68 @@ test('no tool creates a daily-life record, because adding one stays a JSON edit'
 
 // --- shapes.js ------------------------------------------------------------------------------------
 
-test('the z? flag never fires on a Z it has not measured', () => {
-    // THE CRY-WOLF PROPERTY, and the only half of this rule worth a test outside a browser.
+test('the z? flag never fires on a Z the shard has not called stale', () => {
+    // THE CRY-WOLF PROPERTY, and the half of this rule worth a test outside a browser.
     //
-    // isStaleZ runs for every point marker on every frame, and landz answers null until its batch
-    // arrives - forever, if MapExport has not been built. If "we do not know yet" rendered as
-    // "this is wrong", every marker on the map would wear a z? until the first batch landed, and a
-    // badge that is on everything is a badge nobody reads.
-    //
-    // There is no fetch in this process, so landz can only answer null here. That makes the true
-    // case untestable from Node and this one exact.
-    const far = {
+    // isStaleZ runs for every point marker on every frame and the answer comes from the last
+    // [NavAudit. Before one has run the set is empty, and that has to read as "nothing is stale"
+    // rather than as "everything is" - a badge that is on everything is a badge nobody reads.
+    shapes.setStaleZFlags(null);
+
+    const wp = {
         layer: 'nav', kind: 'point', map: 'Trammel',
         points: [[1434, 1697, 9999]], props: {}, fields: []
     };
 
-    assert.strictEqual(shapes.isStaleZ(far), false, 'unknown ground must not read as stale');
+    assert.strictEqual(shapes.isStaleZ(wp), false, 'no audit yet must not read as stale');
 
     // And the shapes that have no Z to be stale about.
     assert.strictEqual(shapes.isStaleZ(zone('z', 0, 0, 4, 4, '')), false, 'a rect has no z');
     assert.strictEqual(shapes.isStaleZ({ kind: 'point' }), false, 'no points at all');
     assert.strictEqual(shapes.isStaleZ(null), false);
+
+    shapes.setStaleZFlags([{ id: 'wp', kind: 'waypoint', x: 1434, y: 1697, z: 9999, resolvedZ: 0 }]);
+    assert.strictEqual(shapes.isStaleZ(wp), true, 'a record the shard listed must badge');
+
+    shapes.setStaleZFlags(null);
 });
 
-test('one storey is the threshold, and it is the one the resample reports against', () => {
-    // Shared with NavResampleZ.LargeCorrection on the shard, which is what makes "corrections over
-    // 20" in that report and "z?" on this map the same claim about the same record.
-    assert.strictEqual(shapes.STALE_Z, 20);
+test('the three records that made the editor and the shard disagree are not badged', () => {
+    // THE 13-VERSUS-0. The editor used to compare a stored Z against the pick map's land Z and
+    // flag anything more than a storey off, which is every record standing on something other
+    // than bare ground. All three of these are correct records:
+    //
+    //   town-2      1405,1625 z 28 - the bridge deck over a riverbed at -15
+    //   uo-wp-79    1473,2159 z 6  - the Trinsic bridge, refZ -15
+    //   trammel.xml 1416,1595 z 51 - a stock spawner on an upper floor, and not ours to fix
+    //
+    // The shard's resample places all three and reports 0 stale, so an empty list is the whole
+    // test: whatever landz would have said about them no longer enters into it.
+    shapes.setStaleZFlags([]);
+
+    const town2 = {
+        layer: 'nav', kind: 'point', map: 'Trammel',
+        points: [[1405, 1625, 28]], props: {}, fields: []
+    };
+    const bridge = {
+        layer: 'nav', kind: 'point', map: 'Trammel',
+        points: [[1473, 2159, 6]], props: {}, fields: []
+    };
+
+    assert.strictEqual(shapes.isStaleZ(town2), false, 'a bridge deck is not a stale Z');
+    assert.strictEqual(shapes.isStaleZ(bridge), false, 'the Trinsic bridge is not a stale Z');
+
+    // A stock spawner is refused before the set is even consulted, so it stays unbadged even when
+    // the shard does name its tile - it is somebody else's content and read-only here.
+    const stock = {
+        layer: 'spawners-stock', kind: 'point', map: 'Trammel',
+        points: [[1416, 1595, 51]], props: {}, fields: []
+    };
+
+    shapes.setStaleZFlags([{ id: 'x', kind: 'waypoint', x: 1416, y: 1595, z: 51, resolvedZ: 0 }]);
+    assert.strictEqual(shapes.isStaleZ(stock), false, 'a stock spawner must never be badged');
+
+    shapes.setStaleZFlags(null);
 });
 
 test('every editable layer names the file it is saved to, and the request that reloads it', () => {

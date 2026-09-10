@@ -533,7 +533,45 @@ namespace Server.Custom
             // The stale-Z count, so [NavAudit answers "how many records are not where they say"
             // without anybody having to run a second command. Zero after a resample, which makes
             // it a regression guard rather than a status line.
-            builder.Append("  \"staleZ\": ").Append(resample.Changes.Count).Append("\n");
+            builder.Append("  \"staleZ\": ").Append(resample.Changes.Count).Append(",\n");
+
+            // AND THE RECORDS THEMSELVES, because a count cannot badge a marker.
+            //
+            // The editor used to decide stale-Z for itself, comparing a record's stored Z against
+            // the pick map's StandingZ - one line of map.GetAverageZ, which sees land and nothing
+            // else. That flags every bridge deck (town-2 stands at z 28 over a riverbed at -15),
+            // every upper floor and every stock spawner on a second storey, and it read 13 while
+            // the shard's own resample read 0. Two rules, two answers, and the editor's was the
+            // one nobody could act on.
+            //
+            // So the shard exports its answer and the editor consumes it. THE RULE IS
+            // NavWalker.TryResolveZ - where a mobile carrying the stored Z as a hint would actually
+            // stand - which is what the record is FOR, and which counts a bridge deck or a floor
+            // static at the stored Z as exactly right. See NavResampleZ for why a record it cannot
+            // place at all goes in `unstandable` above rather than here.
+            builder.Append("  \"staleZRecords\": [\n");
+
+            for (int i = 0; i < resample.Changes.Count; i++)
+            {
+                NavResampleZ.Change change = resample.Changes[i];
+
+                builder.Append("    {\"id\":").Append(Json.Quote(change.Id));
+                builder.Append(",\"kind\":").Append(Json.Quote(change.Kind));
+                builder.Append(",\"x\":").Append(change.X);
+                builder.Append(",\"y\":").Append(change.Y);
+                builder.Append(",\"z\":").Append(change.OldZ);
+                builder.Append(",\"resolvedZ\":").Append(change.NewZ);
+                builder.Append("}");
+
+                if (i < resample.Changes.Count - 1)
+                {
+                    builder.Append(",");
+                }
+
+                builder.Append("\n");
+            }
+
+            builder.Append("  ]\n");
             builder.Append("}\n");
 
             string error;

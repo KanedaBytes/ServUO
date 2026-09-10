@@ -1242,6 +1242,26 @@ was wrong with a record and three of them could only say so as a mark on a dot**
 | `[NavAudit`'s unstandable arrivals | a `z?` badge on a marker, and a line in a banner capped at twelve |
 | `[NavAudit`'s blocked / far / occupied edges | the same banner, same cap |
 | the `z?` and `!` badges (`shapes.js`) | the marker, and nowhere else |
+
+**The `z?` badge is the shard's answer, and used not to be.** It compared a record's stored Z
+against the pick map's `StandingZ` - one line of `map.GetAverageZ`, which sees land and nothing
+else - and flagged anything more than a storey off. That is every record standing on something
+other than bare ground: `town-2` at z 28 over a riverbed at -15, `uo-wp-79` on the Trinsic bridge
+deck, stock `trammel.xml` spawners on second storeys. The editor read **13** while `[NavAudit` read
+**0**, and not one of the 13 was actionable.
+
+There is one rule now and it is `NavWalker.TryResolveZ`'s: a record is stale when a mobile carrying
+its stored Z as a hint would stand somewhere else, so a bridge deck or a floor static **at** the
+stored Z counts as exactly right. `[NavAudit` exports the list as `staleZRecords` beside the count
+it already wrote, `shapes.setStaleZFlags` consumes it the same way `setUnstandableFlags` consumes
+the unstandable arrivals, and **a nav save re-runs the audit quietly** so the badge is never more
+than one save behind. The Problems panel's `stale-z` count therefore equals the shard's by
+construction rather than by coincidence.
+
+Read-only layers are never badged at all - stock spawners, live entities and the uo-offline
+reference are somebody else's content, and a flag on one is a fault nobody in this editor can fix.
+`landz` still answers the properties row's `z? 28 (ground -15)` and the cursor readout, because
+that number is worth *seeing* on the record you have selected. It just does not decide.
 | the replicated shard validator | runs on **every** edit and produces `{severity, where, message, shapeId}` per finding - of which exactly one, `fatal[0]`, reached the status line |
 
 That last row is the one worth noticing: `validatePreview()` was computing a full report on every

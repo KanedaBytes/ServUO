@@ -290,6 +290,18 @@ export function setUnstandableFlags(arrivals) {
     unstandable = new Set((arrivals || []).map((a) => a.x + ',' + a.y));
 }
 
+/**
+ * Records the shard says are not where a mobile carrying their Z would stand, keyed by tile.
+ *
+ * The same shape as `unstandable`, from the same file, for the same reason: the question is the
+ * walker's - `NavWalker.TryResolveZ` - and the browser cannot ask it. See `isStaleZ`.
+ */
+let staleZ = new Set();
+
+export function setStaleZFlags(records) {
+    staleZ = new Set((records || []).map((r) => r.x + ',' + r.y));
+}
+
 export function setAuditFlags(problems) {
     audited = new Set(
         (problems || [])
@@ -519,30 +531,42 @@ function drawShape(ctx, view, shape, isSelected, isHovered) {
     drawZBadge(ctx, shape, sx, sy);
 }
 
-/** One storey. A record further than this from the ground under it is drawn where it is not. */
-export const STALE_Z = 20;
-
 /**
- * The `z?` badge, and the reason it is measured against the PICK MAP rather than the walker.
+ * The `z?` badge, and why it is the SHARD's answer rather than one derived here.
  *
- * Two different Z questions run in this tree and they have different right answers. `NavResampleZ`
- * asks "where would a mobile stand", through NavWalker.TryResolveZ, because that is what the record
- * is FOR. This asks "is the marker being drawn where the record actually is", and the thing that
- * decides that is the pick map's StandingZ - the same number landz.at() serves, from the same
- * accessor (IsoTileRenderer.StandingZ, via TileServer's landz query).
+ * THIS USED TO ARGUE THE OPPOSITE, at length, and the argument is what produced the fault. It said
+ * two different Z questions run in this tree with two different right answers: `NavResampleZ` asks
+ * "where would a mobile stand" through NavWalker.TryResolveZ, and this asked "is the marker drawn
+ * where the record is", through the pick map's StandingZ - one line of map.GetAverageZ, which sees
+ * land and nothing else.
  *
- * So a badge here means the marker is in the wrong PLACE ON SCREEN, which is the fault that made
- * somebody drag a record that was never wrong: Britain's upper town stands at Z 20-30, and a
- * record left at z 0 draws about 2.7 tiles off along the isometric diagonal.
+ * That second question is real, but it is not a fault, and answering it in a badge meant flagging
+ * every record standing on something other than bare ground: `town-2` at z 28 over a riverbed at
+ * -15, `uo-wp-79` on the Trinsic bridge deck, and stock trammel.xml spawners on second storeys.
+ * The editor read 13 while `[NavAudit` read 0, and of the 13 not one was actionable.
+ *
+ * So there is one rule now and it is the shard's: a record is stale when `NavResampleZ` says a
+ * mobile carrying its stored Z as a hint would stand somewhere else. A bridge deck or a floor
+ * static AT the stored Z counts as exactly right, which is the whole difference. `[NavAudit`
+ * exports the list as `staleZRecords`, `save()` re-runs the audit, so the badge is never more than
+ * one save stale - and the Problems panel's count equals the shard's by construction.
+ *
+ * `landz` is still what the properties row and the cursor readout show, because "stored 28, ground
+ * -15" is genuinely worth SEEING on the record you have selected. It just does not decide.
  *
  * Drawn in both views for free, because view.toScreen is the only place the projections differ.
- * In radar it is still worth showing: the marker is drawn in the right place there, but the record
- * is still wrong and radar is where somebody is most likely to be looking at a list of them.
  */
 function drawZBadge(ctx, shape, sx, sy) {
+    // NEVER on somebody else's content. Stock spawners, live entities and the uo-offline reference
+    // layer are all read-only here, so a badge on one is a fault nobody in this editor can fix -
+    // and the stock spawners were the loudest source of the 13.
+    if (READ_ONLY_LAYERS.has(shape.layer)) {
+        return;
+    }
+
     // Two different faults, two glyphs, and a record can carry both.
     //
-    //   z?  the marker is drawn somewhere the record is not      (measured here, from landz)
+    //   z?  a mobile carrying this Z would stand somewhere else   (measured by the shard)
     //   !   nothing can stand on this tile at any height          (measured by the shard)
     //
     // The second is the more serious of the two and reads that way: a stale Z is a record that
@@ -587,20 +611,22 @@ export function isUnstandable(shape) {
 }
 
 /**
- * Whether a point record's stored Z disagrees with the ground under it by more than a storey.
+ * Whether the shard says a mobile carrying this record's Z would stand somewhere else.
  *
- * Null-safe on purpose: landz answers null until its batch arrives and forever if MapExport has
- * not been built, and "we do not know yet" must never render as "this is wrong".
+ * Empty until an audit has run, which reads as "nothing is stale" rather than as "everything is" -
+ * the same way `unstandable` behaves, and the same reason: not knowing yet must never render as a
+ * fault. `save()` runs the audit after a nav save, so the answer is at most one save behind.
  */
 export function isStaleZ(shape) {
     if (!shape || shape.kind !== 'point' || !shape.points || !shape.points[0]) {
         return false;
     }
 
-    const [x, y, z] = shape.points[0];
-    const ground = groundAt(x, y);
+    if (READ_ONLY_LAYERS.has(shape.layer)) {
+        return false;
+    }
 
-    return ground !== null && ground !== undefined && Math.abs((z || 0) - ground) > STALE_Z;
+    return staleZ.has(shape.points[0][0] + ',' + shape.points[0][1]);
 }
 
 /** The shape a click would take right now - same rules as hitTest, ignoring handles. */

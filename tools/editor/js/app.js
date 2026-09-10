@@ -25,7 +25,8 @@ import { api } from './api.js';
 import { View, DEFAULT_FACET, BRITAIN } from './view.js';
 import {
     LAYERS, LAYER_ORDER, draw as drawShapes, drawEntities, drawDraft, hasGeometry,
-    READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, setUnstandableFlags, BEHAVIOR_COLORS, setHopFlags,
+    READ_ONLY_LAYERS, SPAWNER_LAYERS, REFERENCE_LAYERS, setAuditFlags, setUnstandableFlags,
+    setStaleZFlags, BEHAVIOR_COLORS, setHopFlags,
     hitTest, pick, entityAt, grabsOverEntity, nearSegment, geometryOf, applyGeometry, moveShape,
     resizeRect, moveNode, syncDerived, isStaleZ, isUnstandable
 } from './shapes.js';
@@ -4046,8 +4047,12 @@ function renderProblems() {
         return;
     }
 
+    // Read-only layers are excluded before the predicates run, not after. A stock spawner on an
+    // upper floor is not a problem this editor can do anything about - it writes Spawns/Custom and
+    // nothing else - and the stock spawners were the noisiest part of the count that used to
+    // disagree with the shard's.
     const flagged = state.shapes
-        .filter((shape) => shape.kind === 'point')
+        .filter((shape) => shape.kind === 'point' && !READ_ONLY_LAYERS.has(shape.layer))
         .map((shape) => ({ shape, unstandable: isUnstandable(shape), staleZ: isStaleZ(shape) }))
         .filter((entry) => entry.unstandable || entry.staleZ);
 
@@ -4300,6 +4305,17 @@ async function save() {
     hideBannerIfClean();
     await refreshShapes({ force: true });
     setStatus('Saved and reloaded.', 'ok');
+
+    // AND RE-ASK THE SHARD what it now thinks, when the nav data was part of what moved.
+    //
+    // The `z?` badge and the unstandable `!` are both the shard's answers, computed by [NavAudit
+    // over the file as it stands. Editing a Z and leaving the old answer on the marker is the same
+    // class of fault as the editor deriving its own answer was - the map showing something the
+    // shard does not agree with - so a nav save pays for one audit. Awaited so the status line is
+    // settled before it returns, quiet so the audit's findings do not talk over the save's.
+    if (files.includes(LAYERS.nav.file)) {
+        await runAudit({ quiet: true });
+    }
 }
 
 /**
@@ -4490,10 +4506,36 @@ function wireAudit() {
         return;
     }
 
-    button.addEventListener('click', async () => {
-        button.disabled = true;
-        setStatus('Auditing every walk edge against the map...', 'ok');
+    button.addEventListener('click', () => runAudit({ quiet: false }));
+}
 
+/**
+ * Runs [NavAudit, takes its flags, and draws what it found.
+ *
+ * A FUNCTION RATHER THAN A CLICK HANDLER because a save calls it too. The `z?` badge is the
+ * shard's answer now (see shapes.js drawZBadge), and an answer that only refreshes when somebody
+ * presses a button would go stale the moment anybody edited a Z - which is the fault this change
+ * is fixing, moved one step along. Re-running after a nav save costs one audit per save and keeps
+ * the badge at most one save behind.
+ *
+ * `quiet` is what a save passes: take the flags and redraw, but leave the banner alone and do not
+ * overwrite the save's own status line. A save that succeeded and an audit that found twenty
+ * pre-existing warnings are two different messages, and the one somebody just asked for is the
+ * save. A quiet run says nothing on failure either - "Audit failed" over the top of "Saved and
+ * reloaded" reads as the save having failed.
+ */
+async function runAudit({ quiet } = { quiet: false }) {
+    const button = $('run-audit');
+
+    if (button) {
+        button.disabled = true;
+    }
+
+    if (!quiet) {
+        setStatus('Auditing every walk edge against the map...', 'ok');
+    }
+
+    {
         try {
             const dropped = await api.request('nav-audit', '');
             const ack = await api.awaitAck('nav-audit', { nonce: dropped.nonce, timeoutMs: 60000 });
@@ -4501,15 +4543,18 @@ function wireAudit() {
             state.audit = await api.audit();
             setAuditFlags(state.audit.problems);
             setUnstandableFlags(state.audit.unstandable);
+            setStaleZFlags(state.audit.staleZRecords);
 
             // Occupied findings are a pass. NavAudit.TryRun returns `blocked == 0`, so an audit
             // that found nothing but mobiles standing on edges has not failed, and must not paint
             // the status bar red - the shard's own contract says occupancy is a warning.
             const blocked = hasBlocked(state.audit.problems);
 
-            setStatus(ack.message, blocked ? 'error' : 'ok');
+            if (!quiet) {
+                setStatus(ack.message, blocked ? 'error' : 'ok');
+            }
 
-            if (state.audit.problems.length > 0) {
+            if (!quiet && state.audit.problems.length > 0) {
                 showBanner(
                     `${ack.message}\n\n`
                     + state.audit.problems.slice(0, 12).map(auditLine).join('\n')
@@ -4518,7 +4563,7 @@ function wireAudit() {
                             + ' Verify before editing.'
                         : ''),
                     'warn');
-            } else {
+            } else if (!quiet) {
                 hideBanner();
             }
 
@@ -4526,11 +4571,15 @@ function wireAudit() {
             updateCounts();
             requestRender();
         } catch (error) {
-            setStatus(`Audit failed: ${error.message}`, 'error');
+            if (!quiet) {
+                setStatus(`Audit failed: ${error.message}`, 'error');
+            }
         } finally {
-            button.disabled = false;
+            if (button) {
+                button.disabled = false;
+            }
         }
-    });
+    }
 }
 
 /**

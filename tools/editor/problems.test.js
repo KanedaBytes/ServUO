@@ -187,3 +187,31 @@ test('the shard still measures a nearest standable tile, which is what makes a r
     assert.ok(cs.includes('BlockerName'),
         'NavResampleZ.Stranded no longer names the blocking static');
 });
+
+test('the shard exports the stale-Z records themselves, not only a count', () => {
+    // THE 13-VERSUS-0, AS A GUARD. The editor used to decide stale-Z for itself by comparing a
+    // stored Z against the pick map's land Z, which flagged every bridge deck, every upper floor
+    // and every stock spawner on a second storey - 13 of them, against the shard's 0. There is one
+    // rule now and it is NavWalker.TryResolveZ's, exported by [NavAudit as `staleZRecords` and
+    // consumed by shapes.setStaleZFlags.
+    //
+    // If the array goes away the editor badges nothing at all and says so nowhere, which is a
+    // quieter regression than the one it replaced. Hence a test that reads the writer.
+    const cs = fs.readFileSync(NAV_AUDIT_CS, 'utf8');
+
+    // Matched unquoted. In the C# source the key is written `\"staleZRecords\"`, so the closing
+    // quote of the JSON key is preceded by a backslash and `"staleZRecords"` is not a substring of
+    // the file at all - a detail that cost a green-looking test once already.
+    assert.ok(cs.includes('staleZRecords'),
+        'NavAudit no longer writes a "staleZRecords" array; the z? badge would never fire');
+
+    const start = cs.indexOf('staleZRecords');
+    const emitted = [...cs.slice(start).matchAll(/\\"([a-zA-Z]+)\\":/g)].map((m) => m[1]);
+
+    // `x` and `y` are the key shapes.js builds its set from; the rest are there so a Problems row
+    // can say "stored 28, would stand at 10" without a second round trip.
+    for (const field of ['x', 'y', 'z', 'resolvedZ']) {
+        assert.ok(emitted.includes(field),
+            `NavAudit stopped emitting "${field}" for a stale-Z record. Emitted: ${emitted.join(', ')}`);
+    }
+});
