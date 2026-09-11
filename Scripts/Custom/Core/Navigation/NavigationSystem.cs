@@ -130,6 +130,21 @@ namespace Server.Custom
             get { return Config.Get("Custom.NavRouteCacheMax", 512); }
         }
 
+        /// <summary>
+        /// How long a cached route may be served before it is searched again, whatever the fleet's
+        /// edge health has done.
+        ///
+        /// The backstop, not the mechanism: a strike or an expiry invalidates the cache the
+        /// instant it happens, through NavEdgeHealth.Version, and this only catches anything that
+        /// could change a route's cost without going through that table. Five minutes, because a
+        /// cold search is one A* over a thousand nodes and a route nobody has asked for in five
+        /// minutes is not the one holding the shard up. Zero disables the age check entirely.
+        /// </summary>
+        public static int RouteCacheTtlSeconds
+        {
+            get { return Config.Get("Custom.NavRouteCacheTtlSeconds", 300); }
+        }
+
         // ---- state ----
 
         public static NavGraph Graph

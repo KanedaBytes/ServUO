@@ -96,6 +96,10 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Work", BuildWorkHealthResult);
             HealthCheck.Register("Bots.Recipe", BotPopulationProbe.BuildHealthResult);
 
+            // One timer, at the rate it says. Registered here beside the call below rather than in
+            // BotTickManager, so the guard and the thing it guards are read together.
+            HealthCheck.Register("Bots.Cadence", BotTickManager.BuildHealthResult);
+
             // Called here for ordering AND called again by reflection, because ScriptCompiler
             // invokes every public static Initialize it can find. That is why BotTickManager's is
             // idempotent - see the note there; it ran two timers and the whole bot layer at double

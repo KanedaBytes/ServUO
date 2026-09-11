@@ -1390,7 +1390,7 @@ namespace Server.Custom
 
             if (blocker != null)
             {
-                bool shovable = NavWalkFailures.Shovable(blocker);
+                bool shovable = NavWalkFailures.MayBotPass(blocker);
 
                 if (Ledger)
                 {
@@ -1411,11 +1411,11 @@ namespace Server.Custom
                     shovable ? "" : " - WHICH A BOT MAY NOT PUSH");
             }
 
-            // The body on the goal tile, when there is one. A bot walks through other bots and
-            // the daily-life actors (BotShove), so a rung that fires against a mobile is one it
-            // cannot push - a real player, a vendor, a guard, an animal - and that is the case
-            // the deviation was named for. Naming the blocker is what turns "wedged at 1450,1683"
-            // into evidence.
+            // The body on the goal tile, when there is one. A bot walks through every occupant
+            // but a real player (BotShove, and the BaseCreature delegation), so a mobile named
+            // here is usually evidence that the town is busy rather than that the rules refused
+            // the step - the exception being a player, which is the one refusal left. Naming the
+            // blocker is what turns "wedged at 1450,1683" into evidence either way.
             what += DescribeBlocker(step);
 
             Log.Debug(
@@ -1456,18 +1456,25 @@ namespace Server.Custom
         /// live mobile within two tiles of the walker otherwise; empty when it stands alone. A
         /// player is named as such rather than by class, because that is the one blocker a bot is
         /// meant to yield to. The near list exists because a bot wedged two tiles from a shop
-        /// counter has nothing on the counter tile: what it cannot pass is the vendor in the
-        /// doorway, and that is exactly the case the yield-to-stock-NPCs decision wants evidence of.
+        /// counter has nothing on the counter tile: what it is stuck behind is whoever is in the
+        /// doorway, and a name there is what turns a wedge into something anybody can chase.
         /// </summary>
         /// <summary>
         /// Fleet-wide counts of rung entries where the tile the next step wanted was occupied,
-        /// and of how many of those occupants a bot may not push.
+        /// and of how many of those occupants the engine would actually have refused.
         ///
-        /// The second number is the whole instrument. It is what "the stock-NPC shove costs us N
-        /// stalls an hour" has to be measured with, because the terminal ledger cannot see it: a
-        /// wedge that the ladder eventually recovers from never reaches the ledger at all, and the
-        /// one Sean actually watched - a vendor in the Trinsic alchemist doorway - was exactly
-        /// that. Reported on Bots.Population beside the rung totals.
+        /// The pair is the instrument, and it needs both numbers: the terminal ledger cannot see
+        /// either, because a wedge the ladder eventually recovers from never reaches it - and the
+        /// one Sean actually watched, a vendor in the Trinsic alchemist doorway, was exactly that.
+        /// Reported on Bots.Population beside the rung totals.
+        ///
+        /// THE SECOND NUMBER ONLY COUNTS REAL REFUSALS SINCE 7e. It was `Shovable`, a three-name
+        /// category test, and by then the engine had long since stopped refusing a stock NPC to a
+        /// bot - so a vendor in a doorway was booked as unpushable about a step that was allowed,
+        /// which inflated the one count that argues for editing further upstream files. It is now
+        /// MayBotPass, which is the engine's own answer, so a non-zero reading here means a real
+        /// player stood in the way (REVIEW.md section 4). Every earlier reading of this counter is
+        /// a count of occupied tiles, not of refusals.
         /// </summary>
         private static int _nextStepBlocked;
 

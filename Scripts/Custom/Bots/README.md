@@ -453,7 +453,7 @@ Door recoveries in the walk probe.
 
 Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
 
-### Bots walk through crowds, and yield to players and stock NPCs
+### Bots walk through crowds, and yield to players
 
 Upstream's rule is `PlayerBot.CheckShove => true` (`PlayerBot.cs:504-512`), with its reason in the
 same comment: the engine's full-stamina shove rule "bounced every road-weary bot off the permanent
@@ -497,25 +497,41 @@ ours to override.
 yields to a player and a player shoving a bot still pays the engine's full-stamina rule. That half
 of the deviation was always the right half.
 
-**And the rule is now symmetric, which it was not.** Everything above is about a bot as the
-*mover*. A bot as the *shoved* side refused every uncontrolled creature, including the daily-life
-actors it may itself walk through - not by anybody's decision, but because `BaseCreature.OnMoveOver`
-turns them all away and `PlayerBot` inherits that. So the town jammed in one direction only: a GG
-shopkeeper walking home at dusk stopped dead at a bot standing in its doorway, while the same bot
-would have walked straight through the shopkeeper.
+**And the reverse direction was answered too, which it had not been.** Everything above is about a
+bot as the *mover*. A bot as the *shoved* side refused every uncontrolled creature, including the
+daily-life actors it may itself walk through - not by anybody's decision, but because
+`BaseCreature.OnMoveOver` turns them all away and `PlayerBot` inherits that. So the town jammed in
+one direction only: a GG shopkeeper walking home at dusk stopped dead at a bot standing in its
+doorway, while the same bot would have walked straight through the shopkeeper.
 
-`BotShove.OnMoveOver` now answers the reverse case too, and **the pass is exactly as wide as the one
-going the other way**: `NavWalkFailures.Shovable` - a `PlayerBot` or an `IDailyLifeActor` - decides
-both directions, so the rule and the measurement cannot disagree about which bucket a mobile is in.
-No new upstream edit was needed, because `BaseCreature.OnMoveOver` passes the *stock* creature as
-the shoved side and the new branch cannot fire from there.
+`BotShove.OnMoveOver` now answers that case as well. No new upstream edit was needed, because
+`BaseCreature.OnMoveOver` passes the *stock* creature as the shoved side and the new branch cannot
+fire from there.
 
-**It stops at `IDailyLifeActor` on purpose.** A stock vendor in a doorway still jams a bot, and a
-bot still jams a stock vendor - which is the row above, held open deliberately, with window D's six
-unshovable rung entries (`Jeanette (InnKeeper) at 1457,1526` and its run) as the evidence still
-being gathered. Widening the symmetric pass to every uncontrolled creature would settle that
-question sideways, and would also go further than uo-offline, whose `PlayerBot` is a `PlayerMobile`
-and therefore blocks uncontrolled creatures outright.
+**The two directions are NOT the same rule, and writing them as one predicate cost a year of bad
+measurement.** Forward, a bot passes every occupant but a real player - the stock-NPC half of the
+deviation is retired, above. Reverse, the pass stops at `IDailyLifeActor`: a stock vendor standing
+in a doorway a bot occupies still jams, which is the deviation held open deliberately, and widening
+it here would settle that question sideways and go further than uo-offline, whose `PlayerBot` is a
+`PlayerMobile` and therefore blocks uncontrolled creatures outright.
+
+`NavWalkFailures.MayBotPass` answers the forward question and `ConsentsToBotPass` the reverse one.
+Until 7e both were `Shovable`, a three-name category test that had stopped describing the engine the
+moment `BaseCreature.OnMoveOver` began delegating: the rung log and the walk audit's `BUSY` and
+`FRAGILE` rows called a stock vendor on the next-step tile "WHICH A BOT MAY NOT PUSH" about a step
+the engine allows - and the count of exactly those rows is the evidence for editing further upstream
+files, so the fault argued for the expensive answer. Window D's six unshovable rung entries
+(`Jeanette (InnKeeper) at 1457,1526` and its run) are a *dated* reading taken under that
+classification, not current telemetry. `Describe` also split `Player` on the NetState, so a
+link-dead player was labelled a PlayerBot - as something a bot may walk through, about the one
+occupant in the world that refuses; every test there is now a type.
+
+`[BotSmoke` runs `BotShoveProbe` (reported as `Bots.Shove`), which spawns a bot, the walk audit's
+own probe class, a daily-life townsfolk, a stock vendor and an accountless `PlayerMobile`, and
+asserts for every ordered pair that the diagnostic's verdict **equals the engine's** - the real
+`OnMoveOver` call, not a restatement of the predicate. The one path it does not call is a player
+mover onto a bot, which falls through to the engine's full-stamina rule and would cost ten stamina
+to ask; there the assertion is that `BotShove` returns null and stays out of it.
 
 ### A station is a place, and the stand tile is chosen on arrival
 

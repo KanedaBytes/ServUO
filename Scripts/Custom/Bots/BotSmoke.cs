@@ -37,6 +37,7 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Life", BotLifeProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Speech", BotChatProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Shift", BotWorkProbe.BuildHealthResult);
+            HealthCheck.Register("Bots.Shove", BotShoveProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -408,6 +409,10 @@ namespace Server.Custom
             {
                 from.SendMessage(problems.Count > 0 ? 0x35 : 0x3B2, "Bot smoke: " + _last.Detail);
             }
+
+            // Synchronous, and run before the chain rather than in it: it spawns five mobiles,
+            // asks them about each other and deletes them, all inside one call. Nothing waits.
+            BotShoveProbe.Run(map, location);
 
             // Asynchronous by nature - a bot answers an invitation on a delay, on purpose - so it
             // reports separately through Bots.Party rather than holding this result open.

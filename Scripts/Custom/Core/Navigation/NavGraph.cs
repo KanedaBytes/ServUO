@@ -135,8 +135,19 @@ namespace Server.Custom
 
         private readonly List<string> _warnings = new List<string>();
 
-        private readonly Dictionary<string, NavRoute> _cache =
-            new Dictionary<string, NavRoute>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// A cached route, with the two things that decide whether it may still be served: the
+        /// NavEdgeHealth version it was searched under, and when it was searched.
+        /// </summary>
+        private struct CacheEntry
+        {
+            public NavRoute Route;
+            public int Version;
+            public long Stamp;
+        }
+
+        private readonly Dictionary<string, CacheEntry> _cache =
+            new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
 
         private int[] _components;
         private int _componentCount;
@@ -527,14 +538,50 @@ namespace Server.Custom
 
         /// <summary>
         /// A* from one waypoint to another, returning the waypoint sequence inclusive of both
-        /// ends. Cached by (from, to); the cache is cleared on reload and whenever it overflows.
+        /// ends. Cached by (from, to); the cache is cleared on reload, whenever it overflows, and
+        /// whenever the fleet's edge-health table moves under it.
+        ///
+        /// THE CACHE USED TO OUTLIVE WHAT IT WAS BUILT FROM, and it made NavEdgeHealth largely
+        /// decorative. Penalties are read inside Search, on purpose - an edge's cost is computed
+        /// once at build time and a decaying penalty has to be applied per search or not at all -
+        /// but a cache hit returns BEFORE Search runs. So a struck edge kept carrying traffic for
+        /// as long as somebody's route stayed warm, and a detour around an edge that had recovered
+        /// outlived the recovery. Either way the strike taught the fleet nothing, which is the
+        /// whole purpose of the thing. (REVIEW.md F4.)
+        ///
+        /// Two conditions now gate a hit, and they close different holes:
+        ///
+        ///   version  - NavEdgeHealth.Version changes on every strike, clear, and expiry that
+        ///              actually drops a record. A mismatch means SOME penalty moved, and the
+        ///              whole cache goes. Not just this entry: the strike that moved is on an
+        ///              edge, and any route may cross it. At a thousand-odd edges a wholesale
+        ///              clear is one line, cannot go stale, and costs one A* per route afterwards
+        ///              over a few hundred nodes - the same argument the overflow clear makes.
+        ///   age      - a bounded TTL per entry, the backstop for anything that changes a route's
+        ///              cost WITHOUT touching edge health. It expires one entry, not the table,
+        ///              because age is a fact about that entry and nothing else.
+        ///
+        /// Expiry is swept here rather than waited for, because nothing else would notice it: the
+        /// records age inside StrikesOn, StrikesOn is only reached from a search, and the entire
+        /// point of a cache hit is that no search happens.
         ///
         /// The heuristic is Chebyshev distance scaled by the cheapest cost multiplier in the
-        /// data, which keeps it admissible when a tag makes an edge cheaper than its length
-        /// (a "road" at 0.9, say). Nodes on a different facet from the goal get a heuristic of
-        /// zero, so a cross-facet search degrades to Dijkstra rather than going wrong.
+        /// data, which keeps it admissible against a single discounting tag (a "road" at 0.9,
+        /// say). It is NOT unconditionally admissible: an edge multiplies ALL of its tags while
+        /// the heuristic takes only the cheapest one, so two stacked discounts can overshoot it,
+        /// and a gate edge is a flat cost for which geographic distance is no lower bound at all.
+        /// Neither case arises in the current data - gate routing is not active - but the claim
+        /// this comment used to make was wider than the code. Nodes on a different facet from the
+        /// goal get a heuristic of zero, so a cross-facet search degrades to Dijkstra rather than
+        /// going wrong.
         /// </summary>
-        public bool TryFindPath(string fromId, string toId, int cacheLimit, out NavRoute route, out string error)
+        /// <param name="cacheTtlSeconds">
+        /// How long a cached route may be served before it is re-searched, whatever edge health
+        /// has done. Zero or less disables the age check; the version check always applies.
+        /// </param>
+        public bool TryFindPath(
+            string fromId, string toId, int cacheLimit, int cacheTtlSeconds,
+            out NavRoute route, out string error)
         {
             route = null;
             error = null;
@@ -553,11 +600,31 @@ namespace Server.Custom
                 return false;
             }
 
+            // Before the lookup, not after: an expiry that has not been swept is a version that
+            // has not moved, and a stale hit would be served under it.
+            NavEdgeHealth.Sweep();
+
+            int health = NavEdgeHealth.Version;
             string key = fromId + ">" + toId;
 
-            if (_cache.TryGetValue(key, out route))
+            CacheEntry cached;
+
+            if (_cache.TryGetValue(key, out cached))
             {
-                return true;
+                if (cached.Version != health)
+                {
+                    _cache.Clear();
+                }
+                else if (cacheTtlSeconds > 0 && Core.TickCount - cached.Stamp >= cacheTtlSeconds * 1000L)
+                {
+                    // Subtraction, never a <: TickCount wraps (CLAUDE.md section 15).
+                    _cache.Remove(key);
+                }
+                else
+                {
+                    route = cached.Route;
+                    return true;
+                }
             }
 
             route = Search(from, to);
@@ -575,7 +642,12 @@ namespace Server.Custom
                 _cache.Clear();
             }
 
-            _cache[key] = route;
+            // `health` as it was read above, not a fresh read: the stamp has to name the penalty
+            // state this route was actually computed under. Nothing can have changed it in
+            // between - a search is synchronous on the game thread - and that is precisely why
+            // re-reading it here would be free to be wrong the day something can.
+            _cache[key] = new CacheEntry { Route = route, Version = health, Stamp = Core.TickCount };
+
             return true;
         }
 

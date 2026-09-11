@@ -49,8 +49,8 @@ namespace Server.Custom
     /// A mobile that MOVES under the bot shove rule: it may step onto an occupied tile, and the
     /// occupant consents through BotShove rather than refusing it as an uncontrolled creature.
     ///
-    /// It lives in Core, beside Shovable, rather than in Bots - because the two implementers sit
-    /// on opposite sides of that line and the rule has to be one rule. PlayerBot implements it
+    /// It lives in Core, beside the two shove predicates, rather than in Bots - because the two
+    /// implementers sit on opposite sides of that line and the rule has to be one rule. PlayerBot implements it
     /// (its CheckShove override already satisfies the member), and so does the walk audit's probe,
     /// which is in Core and must not reach up into Bots.
     ///
@@ -401,36 +401,117 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Whether a mobile of this kind consents to being walked through by a bot.
+        /// THE FORWARD QUESTION: may a bot step onto the tile this mobile is standing on?
         ///
-        /// The one line the shove question reduces to, kept beside Describe so the two can never
-        /// disagree about which bucket a mobile is in. NavWalker counts rung entries with it; the
-        /// answer is what separates "the world is busy" from "the rules refuse this".
+        /// A pure reading of what the engine will actually answer, for the instruments - the rung
+        /// log, the walk audit's BUSY and FRAGILE rows - which have to describe the rule rather
+        /// than a rule of their own. Mobile.Move asks the OCCUPANT (Mobile.cs:3216), and there are
+        /// exactly three answers:
+        ///
+        ///   BaseCreature  - BaseCreature.OnMoveOver routes a bot mover into BotShove.OnMoveOver
+        ///                   (BaseCreature.cs:4546, MODIFICATIONS entry 5), whose mover branch
+        ///                   returns CheckShove, which for every IBotMover is true. A stock
+        ///                   vendor, a guard, a llama and another bot are all the same answer.
+        ///   PlayerMobile  - refuses an uncontrolled creature outright unless somebody is dead or
+        ///                   a hidden staff member (PlayerMobile.cs:3486). THE ONE REFUSAL.
+        ///   anything else - Mobile.OnMoveOver defers to the mover's CheckShove (Mobile.cs:3506),
+        ///                   which is true.
+        ///
+        /// Mirrored rather than measured by calling OnMoveOver: that call is side-effect-free for
+        /// a bot mover today, in all three branches, and the day it is not, an instrument that
+        /// deducted a player's stamina to draw a log line would be a genuinely nasty bug. The
+        /// contract probe (BotShoveProbe, reported as Bots.Shove) asserts this against the real
+        /// OnMoveOver for every ordered pair, which is where the two are held together.
         /// </summary>
-        public static bool Shovable(Mobile mobile)
+        public static bool MayBotPass(Mobile occupant)
         {
-            string kind = Describe(mobile);
+            if (occupant == null || occupant.Deleted || occupant.Map == null)
+            {
+                return true;
+            }
 
-            return kind == "PlayerBot" || kind == "daily-life" || kind == "walk-probe";
+            var player = occupant as PlayerMobile;
+
+            if (player == null)
+            {
+                return true;
+            }
+
+            // PlayerMobile.OnMoveOver's own branch, in its own terms, for a LIVE bot mover - the
+            // only mover anything asks this about. Its full condition also passes when the mover
+            // itself is dead, which for a bot is a one-second window before it deletes itself.
+            return !player.Alive || player.IsDeadBondedPet || (player.Hidden && player.IsStaff());
         }
 
         /// <summary>
-        /// What KIND of thing this is, in the terms the shove rule is written in.
+        /// THE REVERSE QUESTION: may this mover step onto a bot's tile?
         ///
-        /// This is the classification the whole measurement turns on. A bot walks through another
-        /// bot and through a daily-life actor, because both consent through BotShove. It is refused
-        /// by a player and by any stock NPC or animal, because those two OnMoveOver overrides are
-        /// upstream files and stay as they are. So "who was on the tile" decides whether a failure
-        /// was avoidable with the rules we have, or needs the rules to change.
+        /// Deliberately narrower than MayBotPass. A bot lets through another bot, the walk audit's
+        /// probe, and a daily-life actor - which is the town's own traffic, and is exactly as wide
+        /// as it needs to be to stop a shopkeeper freezing in a doorway a bot is standing in. A
+        /// stock vendor still jams against a bot, and that asymmetry is a named deviation with its
+        /// own row in the Bots README, held open on purpose: widening it here would settle that
+        /// question sideways and go further than uo-offline, whose PlayerBot is a PlayerMobile and
+        /// blocks uncontrolled creatures outright.
+        /// </summary>
+        public static bool ConsentsToBotPass(Mobile mover)
+        {
+            if (mover == null || mover.Deleted)
+            {
+                return false;
+            }
+
+            return mover is IBotMover || mover is IDailyLifeActor;
+        }
+
+        /// <summary>
+        /// What KIND of thing this is, in the terms the shove rules are written in.
+        ///
+        /// EVERY TEST HERE IS A TYPE, IN ORDER, and the order is the whole of it. This used to ask
+        /// `mobile.Player` first and split it on the NetState - because a PlayerBot sets
+        /// Player = true to get past the party gate, so the flag alone cannot tell a bot from a
+        /// person. But a person's NetState is null the instant they link-dead, and a disconnected
+        /// player was therefore filed as a PlayerBot: as something a bot may walk through, about
+        /// the one occupant in the world that refuses (REVIEW.md section 4). A disconnected
+        /// PlayerMobile is still a PlayerMobile, and asking the type says so.
+        ///
+        /// IBotActor first: it is the bot's own interface and PlayerBot is its only implementer,
+        /// so it names a bot without Core reaching for the concrete class - the same way this file
+        /// has always tested IDailyLifeActor. IBotMover next, which after that leaves only the
+        /// walk audit's probe; it is asked before the body test because the probe's body is 0x190,
+        /// neither IsAnimal nor IsMonster, so it used to fall through to "npc" - the one bucket
+        /// meaning "a bot cannot push this", about the instrument standing in for a bot.
+        ///
+        /// IDailyLifeActor before the vendor and animal buckets, because it once was not: the test
+        /// here was for IBotActor, which no daily-life actor implements, so every townsfolk, patron
+        /// and GG vendor came back as "vendor" or "npc". That inflated the very bucket that argues
+        /// for editing upstream files - the expensive answer looked better supported than it was.
+        ///
+        /// The word this returns no longer decides anything: MayBotPass and ConsentsToBotPass are
+        /// the rules, and this is a label for a human reading a log line. That separation is the
+        /// point of the split - a bucket name and a movement rule drifted apart once already.
         /// </summary>
         public static string Describe(Mobile mobile)
         {
-            if (mobile.Player)
+            if (mobile is IBotActor)
             {
-                // A PlayerBot sets Player = true to get past the party gate, so the real-player
-                // test has to be the NetState, not the flag. Getting this backwards would file
-                // every bot-on-bot jam under "a player was standing there".
-                return mobile.NetState != null ? "player" : "PlayerBot";
+                return "PlayerBot";
+            }
+
+            if (mobile is IBotMover)
+            {
+                return "walk-probe";
+            }
+
+            if (mobile is IDailyLifeActor)
+            {
+                return "daily-life";
+            }
+
+            if (mobile is PlayerMobile || mobile.Player)
+            {
+                // Connected or not, staff or not. A link-dead player is a player.
+                return "player";
             }
 
             var creature = mobile as BaseCreature;
@@ -438,33 +519,6 @@ namespace Server.Custom
             if (creature == null)
             {
                 return mobile.GetType().Name;
-            }
-
-            // THE ONE QUESTION THAT MATTERS: does this mobile consent to being shoved?
-            //
-            // It is IDailyLifeActor, not IBotActor. IBotActor is the BOT's own interface - only
-            // PlayerBot implements it, and PlayerBot is already answered above - so testing for it
-            // here matched nothing at all, and every daily-life townsfolk, patron and GG vendor
-            // came back as "vendor" or "npc": as something a bot cannot push, when it can.
-            //
-            // That mis-attribution ran the wrong way for the decision it feeds. It inflates the
-            // "blocked by something unshovable" bucket, which is the bucket that argues for editing
-            // two upstream files - so the fault made the expensive answer look better supported
-            // than it is. Caught by reading the names in the first run's output: they were the
-            // shopkeepers.
-            if (creature is IDailyLifeActor)
-            {
-                return "daily-life";
-            }
-
-            // The walk audit's own probe. Asked before the body test, because its body is 0x190 -
-            // neither IsAnimal nor IsMonster - so it used to land in the final line as "npc": the
-            // one bucket that means "a bot cannot push this", about the instrument standing in for
-            // a bot. It is the only IBotMover that is not a PlayerBot, and a PlayerBot is already
-            // answered above by the Player branch.
-            if (creature is IBotMover)
-            {
-                return "walk-probe";
             }
 
             if (creature.Body.IsAnimal || creature.Body.IsMonster)

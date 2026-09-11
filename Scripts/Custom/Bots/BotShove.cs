@@ -28,21 +28,38 @@
 // creature and PlayerBot inherits that. So the town jammed in one direction
 // only: a GG shopkeeper walking home at dusk stopped dead at a bot standing in
 // its doorway, while the same bot would have walked straight through the
-// shopkeeper. The pass going the other way is now exactly as wide as this one
-// and no wider, and both are decided by the same predicate
-// (NavWalkFailures.Shovable), so the rule and the measurement cannot disagree
-// about which bucket a mobile is in.
+// shopkeeper. The pass going the other way is decided by
+// NavWalkFailures.ConsentsToBotPass - a bot, the walk probe, or a daily-life
+// actor - and is deliberately NARROWER than the one going this way, which is
+// every occupant but a real player. Writing the two as one predicate is what
+// made the instruments describe a rule the engine had stopped following.
 //
 // What stays the engine's: a real player shoving a bot reaches
 // BaseCreature.OnMoveOver's base branch and pays the player rule - full
 // stamina, minus ten (Mobile.cs:3516-3550). And a bot cannot push a real
-// player or a stock NPC, nor they it: those two OnMoveOver overrides are
-// upstream files and are left alone, so a bot yields to a vendor, a guard and
-// a player, and routes around them. Upstream's bots push both. Named
-// deviation; when a walker is wedged behind one, NavWalker names it in the
-// rung log so the case can be revisited with evidence rather than by feel.
+// player: PlayerMobile.OnMoveOver is an upstream file and is left alone, so a
+// bot yields to a player and routes around them.
+//
+// THE TWO DIRECTIONS ARE NOT THE SAME RULE, and writing them as one predicate
+// made the instrument lie about the engine for as long as they were. The
+// forward question - may a bot step onto this occupant's tile? - is answered
+// by BaseCreature.OnMoveOver, which now routes EVERY stock creature through
+// here: the mover is an IBotMover, CheckShove says yes, and the bot walks
+// through a vendor, a guard and a dog exactly as it walks through another bot.
+// The reverse question - may this mover step onto a BOT's tile? - is narrower
+// on purpose and stops at a daily-life actor, because widening it would settle
+// a deviation this shard is deliberately holding open (see the Bots README).
+//
+// MayBotPass answers the first, ConsentsToBotPass the second. NavWalker and the
+// walk audit ask the first, because a wedged walker is a forward step that was
+// refused, and for a year they asked the second - so a stock vendor on the next
+// tile was booked as "WHICH A BOT MAY NOT PUSH" about a step the engine allows,
+// and the count of those rows is the evidence for editing upstream files.
+// REVIEW.md section 4.
 
 using System;
+
+using Server.Mobiles;
 
 namespace Server.Custom
 {
@@ -92,13 +109,13 @@ namespace Server.Custom
             // standing in its doorway, while the same bot would have walked straight through the
             // shopkeeper.
             //
-            // THE PASS IS EXACTLY AS WIDE AS THE ONE GOING THE OTHER WAY, and no wider. Shovable
-            // is the single line the shove question reduces to - PlayerBot or IDailyLifeActor -
-            // and using it here rather than a second list means the rule and the measurement can
-            // never disagree about which bucket a mobile is in. A stock vendor in a doorway still
-            // jams a bot, and a bot still jams a stock vendor; that is a named deviation with its
-            // own row, and widening it here would quietly settle a question that row is holding
-            // open on purpose.
+            // THE PASS IS NARROWER THAN THE ONE GOING THE OTHER WAY, on purpose.
+            // ConsentsToBotPass is the whole of it - a bot, the walk probe, or an
+            // IDailyLifeActor - while a bot as the MOVER passes every occupant but a real player,
+            // because BaseCreature.OnMoveOver routes all of them through the branch above. A stock
+            // vendor still jams against a bot standing in a doorway; that is a named deviation
+            // with its own row in the README, and widening it here would quietly settle a question
+            // that row is holding open on purpose.
             //
             // Upstream needs none of this: their PlayerBot is a PlayerMobile, so a bot-on-bot
             // shove falls through to CheckShove => true on its own. Ours is a BaseCreature, which
@@ -114,18 +131,15 @@ namespace Server.Custom
         /// <summary>
         /// Whether a PlayerBot should let this mover onto its tile.
         ///
-        /// Only asked when the SHOVED side is a bot, and answered with the same predicate that
-        /// decides whether a bot may push the mover - so the two directions are one rule.
+        /// Only asked when the SHOVED side is a bot.
         /// </summary>
         private static bool IsSymmetricMover(Mobile shoved, Mobile mover)
         {
             // A real player is never handled here. PlayerMobile.OnMoveOver is upstream and is left
             // alone, so a bot yields to a player and a player shoving a bot still pays the
             // engine's full-stamina rule - the half of the deviation that was always right.
-            return shoved is PlayerBot
-                && mover != null
-                && !mover.Deleted
-                && NavWalkFailures.Shovable(mover);
+            return shoved is PlayerBot && NavWalkFailures.ConsentsToBotPass(mover);
         }
+
     }
 }

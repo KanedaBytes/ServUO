@@ -204,6 +204,7 @@ namespace Server.Custom
             passed &= CompleteLoopQueueProbes(report, probe);
             passed &= RunJsonConfigCheck(report);
             passed &= RunCrossingCheck(report);
+            passed &= RunRouteCacheCheck(report);
             passed &= RunPersistenceCheck(report, from);
 
             int failing, warning;
@@ -388,6 +389,152 @@ namespace Server.Custom
             }
 
             return ok;
+        }
+
+        /// <summary>
+        /// The route cache answers for what the fleet has learned, and forgets what it has
+        /// forgotten.
+        ///
+        /// A REGRESSION TEST for REVIEW.md F4. Edge penalties are read inside NavGraph.Search and
+        /// a cache hit returns before Search runs, so a warm route kept crossing an edge after
+        /// that edge was struck, and kept detouring around one after the strike had expired.
+        /// NavEdgeHealth existed, ran, logged - and changed nobody's route for as long as somebody
+        /// else's journey kept the entry warm.
+        ///
+        /// ON A GRAPH OF ITS OWN, four waypoints wide, rather than on the live one. The assertion
+        /// is "a strike moves the route", and on real data that needs a pair of towns whose second-
+        /// best road stays second-best through every edit anyone makes to navigation.json - which
+        /// is a test that breaks for reasons having nothing to do with the thing under test. Here
+        /// the alternative is arithmetic: A-B-C costs 16, A-D-C costs 24, and two strikes on A-B
+        /// price it at 28.
+        ///
+        /// The ids are prefixed so they cannot collide with a real edge in the shared health
+        /// table, and the strike is expired rather than cleared at the end, so what the last leg
+        /// exercises is the ORDINARY expiry path and not a test-only shortcut.
+        /// </summary>
+        private static bool RunRouteCacheCheck(List<string> report)
+        {
+            report.Add("-- navigation route cache --");
+
+            const string A = "smoke-cache-a";
+            const string B = "smoke-cache-b";
+            const string C = "smoke-cache-c";
+            const string D = "smoke-cache-d";
+
+            var store = new NavigationStore
+            {
+                Waypoints =
+                {
+                    new NavWaypoint(A, Map.Trammel, new Point3D(1000, 1000, 0)),
+                    new NavWaypoint(B, Map.Trammel, new Point3D(1008, 1000, 0)),
+                    new NavWaypoint(C, Map.Trammel, new Point3D(1016, 1000, 0)),
+                    new NavWaypoint(D, Map.Trammel, new Point3D(1008, 1012, 0))
+                },
+                Edges =
+                {
+                    new NavEdge(A, B),
+                    new NavEdge(B, C),
+                    new NavEdge(A, D),
+                    new NavEdge(D, C)
+                }
+            };
+
+            var graph = new NavGraph();
+            graph.Build(store, new Dictionary<string, double>(), 12);
+
+            bool ok = true;
+
+            try
+            {
+                NavRoute first, warm, struck, recovered;
+                string error;
+
+                if (!graph.TryFindPath(A, C, 512, 300, out first, out error))
+                {
+                    report.Add("  FAIL: the synthetic graph did not route at all - " + error);
+                    return false;
+                }
+
+                ok &= Leg(report, "the cheap road is chosen cold", first, B);
+
+                // The cache is doing something, proven by identity rather than asserted. Without
+                // this line every assertion below would also pass against a cache that was never
+                // consulted, which is the one way this test could quietly stop testing anything.
+                graph.TryFindPath(A, C, 512, 300, out warm, out error);
+
+                if (ReferenceEquals(first, warm))
+                {
+                    report.Add("  ok: the second lookup is served from the cache");
+                }
+                else
+                {
+                    ok = false;
+                    report.Add("  FAIL: the second lookup re-searched - the cache is not being used, "
+                        + "so nothing below is a test of invalidation");
+                }
+
+                // Two strikes: 1 + 0.75 x 2 = 2.5, which prices the 8-tile A-B leg at 20 and the
+                // whole direct road at 28 against the detour's 24.
+                NavEdgeHealth.Strike(A, B);
+                NavEdgeHealth.Strike(A, B);
+
+                graph.TryFindPath(A, C, 512, 300, out struck, out error);
+
+                ok &= Leg(report, "a strike reroutes a WARM route", struck, D);
+
+                NavEdgeHealth.ExpireNow(A, B);
+
+                graph.TryFindPath(A, C, 512, 300, out recovered, out error);
+
+                ok &= Leg(report, "the expiry brings the cheap road back", recovered, B);
+            }
+            catch (Exception ex)
+            {
+                ok = false;
+                report.Add("  FAIL: " + ex.Message);
+            }
+            finally
+            {
+                // Whatever happened above, the shared table goes back to what it was: these ids
+                // are not real edges and a leftover strike would sit in [NavEdges for a quarter of
+                // an hour claiming otherwise.
+                NavEdgeHealth.ExpireNow(A, B);
+                NavEdgeHealth.Sweep();
+            }
+
+            return ok;
+        }
+
+        /// <summary>Asserts the middle waypoint of a three-step synthetic route.</summary>
+        private static bool Leg(List<string> report, string what, NavRoute route, string expected)
+        {
+            string actual = route != null && route.Count == 3 ? route.Steps[1].WaypointId : null;
+
+            if (String.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                report.Add(String.Format("  ok: {0} (via {1})", what, expected));
+                return true;
+            }
+
+            report.Add(String.Format(
+                "  FAIL: {0} - expected a route via {1}, got {2}",
+                what,
+                expected,
+                route == null ? "no route" : DescribeRoute(route)));
+
+            return false;
+        }
+
+        private static string DescribeRoute(NavRoute route)
+        {
+            var ids = new List<string>();
+
+            for (int i = 0; i < route.Steps.Count; i++)
+            {
+                ids.Add(route.Steps[i].WaypointId ?? "?");
+            }
+
+            return String.Join(" -> ", ids);
         }
 
         private static bool RunLoggerCheck(List<string> report)

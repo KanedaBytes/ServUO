@@ -607,6 +607,15 @@ The unshovable column is not a regression of the shove edit. Every one of the si
 a doorway - `Jeanette (InnKeeper) at 1457,1526` accounts for a run of them on its own - which is the
 yield-to-stock-NPCs rule working as written. C's zero was fifteen quiet minutes, not a floor.
 
+> **Corrected in 7e, and the correction changes what this column means.** By window D the engine
+> had ALREADY stopped refusing those steps: `BaseCreature.OnMoveOver` delegates to `BotShove`, which
+> lets an `IBotMover` through every uncontrolled creature, so a bot could walk through Jeanette. The
+> label came from `NavWalkFailures.Shovable`, a category test that had not been updated to match,
+> and it is the label that was wrong rather than the walk. Read these six as *"a stock NPC was
+> standing on the next-step tile"*, which is a fact about a busy doorway, and not as *"the rules
+> refused this step"*, which is what the column heading says. `MayBotPass` now answers this from the
+> engine's own three branches, and `Bots.Shove` holds the two together. (REVIEW.md section 4.)
+
 **The failure per minute fell by 62% and the two waypoint failures that remain are not about roads
 at all.** Both carry the new progress field, which is what made them legible:
 
@@ -704,7 +713,8 @@ per-minute figure incomparable with A–D by construction.
   `unreachable 0` against D's 1 and 4 is Sean's fifteen relocations, and it agrees with
   `[NavAudit` independently reading 0 unstandable arrivals against D's 15.
 - **The unshovable column fell 6 → 1**, which is the shove symmetry: a daily-life actor can now
-  step through a bot as a bot steps through it.
+  step through a bot as a bot steps through it. (That remaining 1 is subject to the same 7e
+  correction as window D's six above: it names an occupant the engine would have let a bot past.)
 - **The tick cost says the population dial has room and is not the binding constraint.**
   `0.5 ms mean / 11 ms max of 2000 ms over 1144 passes at 60 bots` - a pass count taken while the
 behaviour ticker ran two timers, so it is twice the passes that interval should have produced (see

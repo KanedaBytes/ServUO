@@ -4,10 +4,19 @@
 //
 // It is worth being precise about what this does and does not prove. It is NOT a mock of the
 // bridge's internals - it speaks the real file protocol: it watches the request directory, reads
-// the token, DELETES IT FIRST, and only then writes <name>.ack.json in exactly the shape
-// RequestPoller.WriteAck builds by hand. That ordering and that shape are the contract between the
-// two processes, and they are where the stale-ack bug lived; a mock of the bridge would have
-// sailed straight past it.
+// the token, RUNS THE REQUEST, deletes the token, and only then writes <name>.ack.json in exactly
+// the shape RequestPoller.WriteAck builds by hand. That order and that shape are the contract
+// between the two processes, and they are where the stale-ack bug lived; a mock of the bridge
+// would have sailed straight past it.
+//
+// THE ORDER USED TO BE WRONG HERE, and it mattered. This deleted the token BEFORE calling respond,
+// while RequestPoller.Handle dispatches first and deletes afterwards (RequestPoller.cs:116-131).
+// Both files called that "delete first" and meant different things by it - the real one means
+// before the ACKNOWLEDGEMENT. The difference is the entire F3 window: the shard is holding a token
+// it has read and not yet deleted for as long as the request takes to run, and a second request
+// written into that window is deleted, unread, by the first one's cleanup. A fake that deletes up
+// front has no such window and cannot reproduce the defect it is supposed to guard (REVIEW.md
+// section 8).
 //
 // What it cannot prove is that the shard reloads anything. That is what the live check at the end
 // of the step is for.
@@ -60,14 +69,19 @@ function start(options) {
                 continue;
             }
 
-            // Delete first, always. A token that survives its own failure is retried every tick,
-            // and one that outlives its ack looks exactly like a bridge that never wrote it.
-            fs.rmSync(full, { force: true });
-
             seen.push({ name, body });
 
+            // Read, run, delete, acknowledge - RequestPoller.Handle's order exactly. The delete is
+            // before the ack and after the dispatch, and it is unconditional: a token that
+            // survives its own failure is retried every tick, and one that outlives its ack looks
+            // exactly like a bridge that never wrote it.
             const answer = respond ? respond(name, body) : { ok: true, message: 'ok' };
 
+            fs.rmSync(full, { force: true });
+
+            // A null answer is a shard that read the request and then said nothing - a crash
+            // between dispatch and acknowledgement. The token is gone either way, which is what
+            // makes that outcome UNKNOWN rather than merely failed.
             if (!answer) {
                 continue;
             }

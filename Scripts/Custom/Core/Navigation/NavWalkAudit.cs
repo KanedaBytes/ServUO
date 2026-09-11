@@ -258,7 +258,14 @@ namespace Server.Custom
         ///   IT COUNTS ITS STEPS. Nothing else does - NavWalker knows hops, not steps - and steps
         ///   against the straight line is the ratio the whole re-base argument rests on.
         /// </summary>
-        private class WalkAuditProbe : BaseCreature, IBotMover
+        /// <summary>
+        /// PUBLIC so the shove contract probe can spawn the REAL instrument rather than a
+        /// look-alike. That probe asserts the diagnostic's verdict against the engine's for
+        /// every ordered pair of actors, and a stand-in BaseCreature declared next to it would
+        /// be testing a second instrument's collision rules - which is the exact fault this
+        /// class's own comment above records having had.
+        /// </summary>
+        public class WalkAuditProbe : BaseCreature, IBotMover
         {
             private int _steps;
 
@@ -1142,7 +1149,7 @@ namespace Server.Custom
 
                 if (blocker != null)
                 {
-                    row.OccupiedUnshovable = !NavWalkFailures.Shovable(blocker);
+                    row.OccupiedUnshovable = !NavWalkFailures.MayBotPass(blocker);
                     row.Occupied = String.Format(
                         "{0} ({1}) at {2},{3}",
                         blocker.Name ?? "?",

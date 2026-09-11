@@ -195,7 +195,8 @@ namespace Server.Custom
             NavRoute found;
 
             if (!NavigationSystem.Graph.TryFindPath(
-                fromWaypoint, toWaypoint, NavigationSystem.RouteCacheMax, out found, out error))
+                fromWaypoint, toWaypoint, NavigationSystem.RouteCacheMax,
+                NavigationSystem.RouteCacheTtlSeconds, out found, out error))
             {
                 return false;
             }

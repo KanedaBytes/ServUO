@@ -123,9 +123,19 @@ namespace Server.Custom
                 message = ex.Message;
             }
 
-            // Delete FIRST, and always. A token that survives its own failure is retried on every
-            // tick for ever; and a token left on disk after a malformed request looks exactly
-            // like one the shard never noticed, which is the worst of both.
+            // Delete BEFORE THE ACKNOWLEDGEMENT, and always - which is AFTER the dispatch above,
+            // and the difference is not pedantry. The token sits on disk, read and not yet
+            // deleted, for as long as the request takes to run; a second request published into
+            // that window is deleted here, unread, by this one's cleanup. That is REVIEW.md's F3,
+            // it is a property of this ordering rather than a bug in it, and the fix is a request
+            // identity rather than a different order - the bridge's interim guard is to refuse a
+            // publish while a token for that operation is still on disk. The comment used to read
+            // "delete FIRST", and the fake shard in the editor tests read it as "before dispatch"
+            // and deleted up front, which left the suite unable to reproduce the window at all.
+            //
+            // Unconditional, whatever happened: a token that survives its own failure is retried
+            // on every tick for ever, and a token left on disk after a malformed request looks
+            // exactly like one the shard never noticed, which is the worst of both.
             try
             {
                 File.Delete(path);

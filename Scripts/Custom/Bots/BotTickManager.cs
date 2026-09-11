@@ -90,12 +90,120 @@ namespace Server.Custom
         /// </summary>
         public static void Initialize()
         {
+            _initCalls++;
+
             if (_timer != null)
             {
                 return;
             }
 
+            _timersStarted++;
             _timer = Timer.DelayCall(Interval, Interval, OnTick);
+        }
+
+        // ---- the guard on all of the above ----
+        //
+        // The defect this layer's numbers were all measured against was invisible: two timers,
+        // both working perfectly, and every per-pass figure quoted at half the wall clock it
+        // named. Nothing in the shard could have told anyone. The guard above makes it impossible
+        // to start twice; these make it impossible for it to happen again in some other way and go
+        // unnoticed - a second caller constructing its own Timer, a config change nobody applied,
+        // a timer that quietly died.
+        //
+        // TWO FACTS, because either alone can be fooled. The counters answer "how many timers were
+        // started", which catches the duplicate directly; the observed cadence answers "how often
+        // does a pass actually happen", which catches anything at all that makes the answer differ
+        // from Custom.BotTickSeconds - including a timer this class never made.
+
+        private static int _initCalls;
+        private static int _timersStarted;
+
+        private static DateTime _cadenceSince;
+        private static long _cadencePasses;
+
+        /// <summary>
+        /// How the behaviour ticker is actually running, against how it is configured.
+        ///
+        /// Registered as Bots.Cadence, so it reports through [CoreSmoke and health.json.
+        ///
+        /// The bands are wide at the bottom and tight at the top on purpose. A pass is SKIPPED
+        /// while the world is saving or loading, so a shard that has just saved legitimately reads
+        /// a little under its configured rate and a lower band that was tight would cry wolf after
+        /// every autosave. There is no corresponding reason to be over: nothing skips a pass into
+        /// existence, so anything meaningfully above the configured rate is a second ticker, which
+        /// is the thing being guarded against and is a failure, not a warning. 1.5x rather than
+        /// 2.0x so a doubled cadence is caught even if one of the two timers is stalling.
+        ///
+        /// Measured from the FIRST pass rather than from boot, and not counting that pass: n
+        /// passes span n-1 intervals, and over a short window that off-by-one is worth more than
+        /// the bands are.
+        /// </summary>
+        public static HealthResult BuildHealthResult()
+        {
+            if (_timersStarted != 1)
+            {
+                return HealthResult.Fail(String.Format(
+                    "{0} behaviour timer(s) started from {1} Initialize call(s) - exactly one is "
+                    + "correct, and two runs the whole bot layer at double cadence",
+                    _timersStarted,
+                    _initCalls));
+            }
+
+            if (_timer == null)
+            {
+                return HealthResult.Fail("the behaviour timer is gone - no bot has a brain");
+            }
+
+            double interval = Interval.TotalSeconds;
+
+            if (interval <= 0.0)
+            {
+                return HealthResult.Fail("Custom.BotTickSeconds is " + interval);
+            }
+
+            if (_cadencePasses <= 0)
+            {
+                return HealthResult.Ok(String.Format(
+                    "1 timer from {0} Initialize call(s); no pass measured yet", _initCalls));
+            }
+
+            double elapsed = (DateTime.UtcNow - _cadenceSince).TotalSeconds;
+            double expected = elapsed / interval;
+
+            string measured = String.Format(
+                "1 timer from {0} Initialize call(s); {1} pass(es) in {2:0}s = {3:0.000}/s against "
+                + "the configured {4:0.000}/s",
+                _initCalls,
+                _cadencePasses,
+                elapsed,
+                elapsed > 0.0 ? _cadencePasses / elapsed : 0.0,
+                1.0 / interval);
+
+            // Too little to say anything with. A handful of passes over a few seconds is noise,
+            // and reporting a band breach from it would train everyone to ignore this line.
+            if (elapsed < 60.0 || _cadencePasses < 10)
+            {
+                return HealthResult.Ok(measured + " (warming up)");
+            }
+
+            double ratio = _cadencePasses / expected;
+
+            if (ratio >= 1.5 || ratio <= 0.5)
+            {
+                return HealthResult.Fail(String.Format(
+                    "{0} - {1:0.00}x the configured rate. Over is a second ticker; under is a "
+                    + "timer that is not running.",
+                    measured,
+                    ratio));
+            }
+
+            if (ratio > 1.2 || ratio < 0.8)
+            {
+                return HealthResult.Warn(String.Format(
+                    "{0} - {1:0.00}x the configured rate", measured, ratio));
+            }
+
+            return HealthResult.Ok(String.Format("{0} ({1:0.00}x)", measured, ratio));
         }
 
         /// <summary>Called by a behaviour before it plans. False means "not this tick".</summary>
@@ -143,6 +251,19 @@ namespace Server.Custom
             }
 
             long startedAt = Core.TickCount;
+
+            // The cadence window opens on the first pass and that pass is not counted: see
+            // BuildHealthResult. Its own counter rather than _passes, which ResetCost() zeroes
+            // whenever a probe wants a fresh cost reading - a guard that a probe can reset is a
+            // guard that is off for as long as anybody is measuring.
+            if (_cadenceSince == DateTime.MinValue)
+            {
+                _cadenceSince = DateTime.UtcNow;
+            }
+            else
+            {
+                _cadencePasses++;
+            }
 
             _plansLeft = PlansPerTick;
             _noDestination = 0;

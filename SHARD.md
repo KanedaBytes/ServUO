@@ -179,12 +179,18 @@ carried across.
 
 Rules in force for bots and occupied tiles, each with its row in the README's Deviations table:
 
-- **A bot walks through other bots and daily-life actors, free** - uo-offline's `CheckShove => true`,
-  with the reason recorded (the engine's full-stamina rule jammed their plazas). A `BaseCreature` is
-  refused before its `CheckShove` is asked, so the *shoved* side consents through `BotShove`. A real
-  player shoving a bot pays the player rule. **A bot yields to real players and stock NPCs** - a
-  vendor, a guard, an animal - because those two `OnMoveOver` overrides are upstream files; when a
-  walker is wedged, its rung log names what stands on the goal tile or within two tiles of it.
+- **A bot walks through every occupant but a real player** - uo-offline's `CheckShove => true`, with
+  the reason recorded (the engine's full-stamina rule jammed their plazas). A `BaseCreature` is
+  refused before its `CheckShove` is asked, so the *shoved* side consents through `BotShove`, and
+  `BaseCreature.OnMoveOver` routes every stock creature - a vendor, a guard, an animal - through it
+  too (MODIFICATIONS entry 5). **A bot still yields to a real player**: `PlayerMobile.OnMoveOver` is
+  upstream and untouched, and a player shoving a bot pays the player rule.
+- **The reverse pass is narrower, on purpose**: a bot lets through another bot, the walk probe and a
+  daily-life actor, and a stock vendor still jams against it. `BotShove.MayBotPass` answers the
+  forward question and `ConsentsToBotPass` the reverse one; they were one predicate until 7e, which
+  is what made the rung log call a stock NPC unpushable about a step the engine allows. `[BotSmoke`'s
+  `Bots.Shove` asserts both against the real `OnMoveOver` for every ordered pair. When a walker is
+  wedged, its rung log names who is standing on the tile the next step wants.
 - **An arrival can be a place**: `NavArrival.range` rides on the route's last step and the walker
   accepts arrival from inside it. The forge arrivals author 2 (uo-offline's `DriftArriveRange`);
   banks, shops and guard posts keep the tile. A shop spot is scattered by `Custom.NavArrivalScatter`

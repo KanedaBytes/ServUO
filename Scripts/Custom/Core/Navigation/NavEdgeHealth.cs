@@ -74,6 +74,27 @@ namespace Server.Custom
             new Dictionary<string, Record>(StringComparer.Ordinal);
 
         /// <summary>
+        /// Bumped whenever the penalty a search would read has changed - a strike, an expiry that
+        /// actually dropped a record, a clear.
+        ///
+        /// THE ROUTE CACHE IS WHY THIS EXISTS. Penalties are read inside NavGraph.Search, and a
+        /// cache hit returns before the search runs (NavGraph.cs:556), so a warm route went on
+        /// using an edge after that edge was struck and went on avoiding one after the strike
+        /// expired. The learning was real and the fleet never saw it. NavGraph stamps each cached
+        /// route with this number and refuses a hit that does not match, which is the whole of the
+        /// invalidation: one int compared per lookup, no subscription, no per-edge bookkeeping.
+        ///
+        /// An int and not a hash of the table: it only ever has to answer "has anything moved
+        /// since", and a counter cannot collide with itself the way a truncated hash can.
+        /// </summary>
+        public static int Version
+        {
+            get { return _version; }
+        }
+
+        private static int _version;
+
+        /// <summary>
         /// The cost multiplier for an edge, 1.0 when it has no history.
         ///
         /// Linear in strikes, as upstream's is, but gentler: 1 + 0.75 * strikes, so one strike
@@ -103,6 +124,7 @@ namespace Server.Custom
             if (DateTime.UtcNow >= record.Expires)
             {
                 _records.Remove(Key(from, to));
+                _version++;
                 return 0;
             }
 
@@ -145,6 +167,10 @@ namespace Server.Custom
             // forgive it in the middle of the run that proves it.
             record.Expires = DateTime.UtcNow + StrikeTtl;
 
+            // After the record is settled, not before: this is what tells the route cache that
+            // every warm route through this edge is now answering with the old cost.
+            _version++;
+
             Log.Debug(
                 "edge '{0}' <-> '{1}' takes a strike ({2}) - cost x{3:0.00} for {4:0} minute(s).",
                 from,
@@ -182,14 +208,96 @@ namespace Server.Custom
                 _records.Remove(key);
             }
 
+            if (expired.Count > 0)
+            {
+                _version++;
+            }
+
             lines.Sort(StringComparer.Ordinal);
 
             return lines;
         }
 
+        /// <summary>
+        /// Drop every expired record, and say whether anything went.
+        ///
+        /// EXPIRY USED TO BE INVISIBLE TO EVERYTHING BUT A READ. Records are aged lazily inside
+        /// StrikesOn, which is only reached from a search - and a cached route does not search.
+        /// So a strike could expire with nothing ever noticing: the version would not move, the
+        /// cached detour would stay, and the edge would be avoided long after it had recovered.
+        ///
+        /// NavGraph.TryFindPath calls this before every cache lookup. The table is tens of
+        /// entries and the sweep is a walk of it, which is cheaper than the dictionary lookup it
+        /// sits in front of; making expiry deterministic at the one place that cares is worth far
+        /// more than saving it.
+        /// </summary>
+        public static bool Sweep()
+        {
+            if (_records.Count == 0)
+            {
+                return false;
+            }
+
+            List<string> expired = null;
+            DateTime now = DateTime.UtcNow;
+
+            foreach (var pair in _records)
+            {
+                if (now < pair.Value.Expires)
+                {
+                    continue;
+                }
+
+                if (expired == null)
+                {
+                    expired = new List<string>();
+                }
+
+                expired.Add(pair.Key);
+            }
+
+            if (expired == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < expired.Count; i++)
+            {
+                _records.Remove(expired[i]);
+            }
+
+            _version++;
+
+            return true;
+        }
+
         public static void Clear()
         {
+            if (_records.Count == 0)
+            {
+                return;
+            }
+
             _records.Clear();
+            _version++;
+        }
+
+        /// <summary>
+        /// Age a record out now, for the contract test in [CoreSmoke.
+        ///
+        /// The test has to show a cached detour going away when its strike expires, and the real
+        /// TTL is fifteen minutes. It sets the expiry into the past rather than deleting the
+        /// record, so what runs afterwards is the ORDINARY expiry path - Sweep, the version bump,
+        /// the cache miss - and not a second, test-only route through the code.
+        /// </summary>
+        public static void ExpireNow(string from, string to)
+        {
+            Record record;
+
+            if (_records.TryGetValue(Key(from, to), out record))
+            {
+                record.Expires = DateTime.UtcNow.AddSeconds(-1.0);
+            }
         }
 
         /// <summary>

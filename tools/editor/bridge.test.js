@@ -950,3 +950,67 @@ test('the restart launcher is one fixed script, with nothing the caller supplies
     assert.ok(script.includes('build.ps1'),
         'a restart rebuilds, so a failed build still refuses to launch');
 });
+
+// ---- the request window (REVIEW.md F3, interim) -------------------------------------------------
+
+test('a second request for the same operation is refused while the first is still on disk', async () => {
+    // No fake shard: the token stays where the bridge put it, which is exactly the state of a
+    // shard that has not polled yet. Overwriting it would discard a request somebody asked for.
+    const first = await call('POST', '/api/request/nav-reload');
+
+    assert.strictEqual(first.status, 202);
+
+    const second = await call('POST', '/api/request/nav-reload');
+
+    assert.strictEqual(second.status, 409);
+    assert.match(second.body.error, /has not picked up/);
+
+    // And the first request is still intact - the refusal protected it rather than replacing it.
+    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'nav-reload.token')), true);
+});
+
+test('a pending request does not block a different operation', async () => {
+    await call('POST', '/api/request/nav-reload');
+
+    const other = await call('POST', '/api/request/health');
+
+    assert.strictEqual(other.status, 202, 'busy is per operation, not a global lock');
+});
+
+test('a token is published by rename, and leaves no staging file behind', async () => {
+    const { status, body } = await call('POST', '/api/request/nav-reload');
+
+    assert.strictEqual(status, 202);
+
+    const left = fs.readdirSync(REQUESTS).filter((name) => name.endsWith('.tmp'));
+
+    assert.deepStrictEqual(left, [], 'the staged file is renamed, not copied and left');
+
+    // The staging name must not end in .token either, or the poller's *.token glob would pick a
+    // half-written file up as a request.
+    const written = fs.readFileSync(path.join(REQUESTS, 'nav-reload.token'), 'utf8');
+
+    assert.strictEqual(written.trim(), '#' + body.nonce, 'the whole token, not a truncated one');
+
+    const source = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
+
+    assert.ok(/renameSync\(staged, file\)/.test(source),
+        'writeFileSync truncates before it writes; a poll landing in that window reads half a token');
+});
+
+test('the fake shard dispatches before it deletes, as RequestPoller does', async () => {
+    // The ordering IS the contract, and the fake had it backwards: it deleted up front, so the
+    // window in which the shard holds a token it has read did not exist in the tests at all.
+    let tokenDuringDispatch = null;
+
+    runShard((name) => {
+        tokenDuringDispatch = fs.existsSync(path.join(REQUESTS, name + '.token'));
+        return { ok: true, message: 'ok' };
+    });
+
+    const { body } = await call('POST', '/api/save/navigation', moveWaypoint(await currentHash()));
+
+    assert.strictEqual(body.reloaded, true);
+    assert.strictEqual(tokenDuringDispatch, true,
+        'the token is still on disk while the request runs - that window is F3');
+});

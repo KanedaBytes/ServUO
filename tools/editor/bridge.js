@@ -887,6 +887,27 @@ function readBody(request, limit) {
 /**
  * Writes a request token, and returns the nonce that identifies this run of it.
  *
+ * PUBLISHED BY RENAME, AND ONLY ONTO AN EMPTY SLOT. Both are interim protections against the same
+ * defect (REVIEW.md F3): the shard reads a token, dispatches it, and only then deletes the file, so
+ * a second request written into that window is deleted unread by the first one's cleanup - and two
+ * requests dropped between two polls collapse into one whatever the shard does. A nonce cannot help
+ * with either; it stops a caller believing somebody else's acknowledgement, which is a different
+ * hole.
+ *
+ *   rename    - fs.writeFileSync truncates and then writes, so a poll landing between the two
+ *               reads an empty or half-written token. A rename within one directory is atomic on
+ *               NTFS and POSIX alike, so the shard sees the whole file or no file. AtomicFile.Write
+ *               does exactly this from the other side, for the same reason.
+ *   busy      - a token file still on disk means the shard has not picked that operation up yet.
+ *               Overwriting it silently discards a request somebody asked for; a 409 says so. Per
+ *               OPERATION rather than global: a nav-reload has no reason to refuse because a
+ *               botinfo is pending.
+ *
+ * NEITHER IS THE FIX. A request still has no identity of its own, so a crash between dispatch and
+ * acknowledgement is still "outcome unknown", and a second request arriving a millisecond after the
+ * shard's read still lands on an empty slot and is still at the mercy of the delete that follows.
+ * The request-ID protocol is scheduled before 7f; these two close the windows that cost nothing.
+ *
  * TWO THINGS STOP A STALE ACK BEING READ AS THIS RUN'S ANSWER, and they close different holes.
  *
  * The ack file is never deleted by the shard - it is overwritten in place - and /api/ack reports
@@ -906,17 +927,33 @@ function writeToken(name, body) {
         throw Object.assign(new Error('Bad request name.'), { status: 400 });
     }
 
+    fs.mkdirSync(whitelist.REQUEST_DIR, { recursive: true });
+
+    if (fs.existsSync(file)) {
+        throw Object.assign(
+            new Error(`The shard has not picked up the last '${name}' request yet.`),
+            { status: 409 });
+    }
+
     const nonce = NONCED.has(name) ? crypto.randomUUID().slice(0, 8) : null;
     const text = [(body || '').trim(), nonce ? `#${nonce}` : ''].filter(Boolean).join(' ');
     const ack = whitelist.resolveAck(name);
-
-    fs.mkdirSync(whitelist.REQUEST_DIR, { recursive: true });
 
     if (ack) {
         fs.rmSync(ack, { force: true });
     }
 
-    fs.writeFileSync(file, text + '\n', 'utf8');
+    // A unique staging name, so two writers cannot collide on the temp file either, and in the
+    // same directory, because a rename across volumes is a copy and is not atomic.
+    const staged = `${file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+
+    try {
+        fs.writeFileSync(staged, text + '\n', 'utf8');
+        fs.renameSync(staged, file);
+    } catch (error) {
+        fs.rmSync(staged, { force: true });
+        throw error;
+    }
 
     return nonce;
 }
@@ -1132,7 +1169,20 @@ async function runRestart() {
             continue;
         }
 
-        const nonce = writeToken('health', '');
+        let nonce;
+
+        try {
+            nonce = writeToken('health', '');
+        } catch (error) {
+            // The previous poll's token is still on disk, which is the normal state of a shard
+            // that is not up yet. Wait for the next second rather than treating it as an answer.
+            if (error.status === 409) {
+                continue;
+            }
+
+            throw error;
+        }
+
         const ack = await waitForAck('health', nonce, 2000);
 
         if (ack && ack.ok) {
@@ -1157,7 +1207,22 @@ async function reloadFor(name) {
     // landing outside - the same shape as the whitelist here, enforced on both sides rather than
     // trusted from one.
     const relative = whitelist.spawnRelative(name);
-    const nonce = writeToken(request, relative || '');
+
+    let nonce;
+
+    try {
+        nonce = writeToken(request, relative || '');
+    } catch (error) {
+        // A reload that is already pending is not a failed SAVE: the file is written, and the
+        // shard is about to read a request for it anyway. Reported the same way a refused reload
+        // is - written, not reloaded, with the reason - rather than as a 500 over the whole save.
+        if (error.status !== 409) {
+            throw error;
+        }
+
+        return { reloaded: false, message: error.message, errors: [], warnings: [] };
+    }
+
     const ack = await waitForAck(request, nonce, ACK_TIMEOUT_MS);
 
     if (!ack) {
