@@ -703,8 +703,20 @@ namespace Server.Custom
             base.OnDeath(c);
 
             // The mount does not survive its rider. Upstream dismounts in OnBeforeDeath
-            // (PlayerBot.cs:779); ServUO has no such hook, so it happens here - after the corpse
-            // is built, which is the only ordering difference.
+            // (PlayerBot.cs:779) and so could we: ServUO HAS that hook, public virtual on Mobile
+            // at Mobile.cs:4186, called from Kill at Mobile.cs:3995. The comment here said it did
+            // not, which was wrong, and the real reason to release the mount in OnDeath instead is
+            // the hook's signature: it returns bool, and a false from it - or from
+            // Region.OnBeforeDeath one line above it - CANCELS the death outright. Releasing there
+            // would strip the mount off a bot that then does not die.
+            //
+            // The cost of that choice is real and is REVIEW.md F2, not a hypothetical: the murder
+            // report throws inside base.OnDeath above, so a reportable death never reaches this
+            // line at all and the mount is left parked (BotDeathProbe cleans up after it on
+            // purpose). OnBeforeDeath runs BEFORE that throw. So if the cast is ever the thing
+            // that has to be lived with rather than fixed, moving cleanup there is the move - and
+            // it needs the cancellation case handled, which is why it is written down rather than
+            // done quietly.
             //
             // ReleaseMount, not Dismount: Dismount now PARKS the animal, and a horse standing
             // patiently beside its rider's corpse waiting for an order is not the picture.
