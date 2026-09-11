@@ -259,6 +259,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
 | `[NavResampleZ [apply]` | Administrator | Report every record whose stored Z is not where a mobile would stand, and with `apply` correct them. Records it cannot place are reported and never moved (token: `nav-resample-z`) |
 | `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
+| `[BotOrphans` | Administrator | Names the owner of every item ServUO's boot cleanup is about to reap. `Custom.BotOrphanScanOnStart=True` runs it headlessly 0.5 s before `Cleanup.Run` |
 | `[Vocabulary` | Administrator | Write what the shard actually loaded - every spawnable creature type, which are vendors, and the C# enums - for the editor's dropdowns |
 
 ## Custom spawns
@@ -529,6 +530,27 @@ at once and the audit cannot see why - and a bot standing still can be failing a
   committing, like the `*OnStart` flags.
 
 ## Health checks
+
+**`Cleanup: Detected N inaccessible items` is not the bots.** That line appears on every boot —
+30, 288, 50, 240, 240, 136 and 132 across this session's boots — and the standing suspicion was
+that it was the packs and purses of PlayerBots, which delete themselves on load because nothing
+about a bot survives a restart. Measured with `[BotOrphans`, which names each item's owner half a
+second before `Cleanup.Run` takes the evidence away:
+
+> **132 items with no facet. 0 belong to a PlayerBot.** 66 `Backpack` and 66 `Gold`, and every
+> `Gold`'s parent is one of those backpacks — so each pack holds exactly one gold pile and nothing
+> else.
+
+Two independent reasons that rules bots out. `Mobile.Delete` **already** cascades — `Mobile.cs:3747`
+runs `OnDelete`, then `OnParentDeleted` on every item, which is `Delete()`, which recurses into its
+own contents — so a bot takes its backpack, its gear and its bank box with it. And a bot's pack is
+never gold-only: `EquipmentTable.RollOutfit` allocates six to twenty items before the gold, and a
+contained item inherits its owner's facet, so an orphaned bot pack would bring its robe, shoes and
+tools into the same count. One backpack holding one gold pile is `BaseCreature.AddLoot`/`PackGold`.
+
+**No fix was written, because nothing was ours to fix.** Where those loot packs come from is a
+separate question about ServUO's own creature lifecycle.
+
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is
