@@ -670,9 +670,16 @@ Same shard, same graph, 60 bots, **17m 11s**, nothing steered. The first window 
 `Custom.MeasurementProfile`, and the first measurement of last session's skip and re-anchor fixes,
 which were built *after* window D.
 
-**Read the last column, not the second.** A profile window doubles the target, thirds the visit
-windows and flattens the session curve, so it produces walks several times faster than wall time —
-which is the point, and which makes its per-minute figure incomparable with A–D by construction.
+**Read the last column, not the second.** A profile window thirds the visit windows and flattens the
+session curve, so it produces walks faster than wall time — which is the point, and which makes its
+per-minute figure incomparable with A–D by construction.
+
+> **It said "doubles the target" too, and that dial has since been deleted because it never did
+> anything.** The multiplier moved `BotSession.TargetNow`, the session *ceiling*, while the
+> population is `GG_BotPop.xml`'s spawner slots — this very window recorded `target 120 now
+> (peak 60)` beside `60 bot(s) live` and nobody read the two numbers together. So window E's walks
+> were bought by the visit divisor and the flat curve alone, at **60 bots, not 120**. The figures
+> below are unaffected; what changes is what they are a measurement *of*.
 
 | | **C** 15 min | **D** 30 min | **E** 17 min, profile |
 | --- | --- | --- | --- |

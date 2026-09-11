@@ -72,6 +72,10 @@ const FILES = {
     // What the engine sees at a tile. Written by the `tile-probe` token, read by the inspector.
     tileProbe: path.join(REPO_ROOT, 'Data', 'Live', 'tile-probe.json'),
 
+    // [BotPace's sampler lines. Its own file rather than a field on health.json, because the value
+    // is in the LINES and a pace reported as one number is no answer.
+    botPace: path.join(REPO_ROOT, 'Data', 'Live', 'bot-pace.json'),
+
     // Authoring input, not live data: uo-offline's navigation converted into our schema.
     // Read-only by construction - resolveSave has no entry for it, so the save endpoint
     // cannot name it however the request is spelled.

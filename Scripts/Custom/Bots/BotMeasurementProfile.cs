@@ -9,12 +9,13 @@
 // window long enough to say anything.
 //
 // The quantity that costs time is not the walker, it is the WALKING. A bot spends most of its life
-// standing in a shop it walked to. So this turns three dials that all buy the same thing:
+// standing in a shop it walked to. So this turns two dials that both buy the same thing:
 //
-//   population target x2   more walkers, so more walks per minute
 //   visit windows / 3      each bot leaves sooner, so it walks again sooner
 //   session curve flat     the curve exists to make 05:00 quieter than 19:00, which is exactly
 //                          what a measurement must not have
+//
+// THERE WAS A THIRD, AND IT NEVER WORKED. See the note below.
 //
 // WHAT IT IS NOT
 // --------------
@@ -34,50 +35,44 @@ namespace Server.Custom
 {
     public static class BotMeasurementProfile
     {
-        // THE POPULATION DIAL IS BOUNDED BY THE SPAWNER FILE, AND MEASURING IT SAID SO.
+        // THE POPULATION DIAL IS GONE, BECAUSE MEASURING IT SAID IT WAS NEVER THERE.
         //
-        // Multiplier doubles BotSession.TargetNow, which is the SESSION ceiling - how many
-        // lifecycle bots may be live. It is not how many exist. The population is a file:
-        // BotPopulation.Build derives the recipe from `config.Target` (BotPopulation.cs:287) and
-        // [GG_Reimport turns that into GG_BotPop.xml's spawner slots, so a target of 120 against
-        // 60 authored slots fills all 60 and stops.
+        // It multiplied BotSession.TargetNow, which is the SESSION ceiling - how many lifecycle
+        // bots may be LIVE. It is not how many EXIST. The population is a file: BotPopulation.Build
+        // derives the recipe from `config.Target` (BotPopulation.cs:287) and [GG_Reimport turns that
+        // into GG_BotPop.xml's spawner slots, so a ceiling of 120 against 60 authored slots fills
+        // all 60 and stops.
         //
         // Measured, window E: `target 120 now (peak 60)` beside `60 bot(s) live`. The doubling
-        // therefore contributed nothing to that window; what bought its walks was the visit
-        // divisor and the flat curve, and it still ran at about 22 walks a minute.
+        // contributed nothing to that window; what bought its walks was the visit divisor and the
+        // flat curve, and it still ran at about 22 walks a minute.
         //
-        // NOT FIXED HERE, deliberately. Doubling the real population means regenerating spawners
-        // into Spawns/Custom - a tracked file, rewritten by a switch that is supposed to be
-        // reversible by flipping one line back to False. Raising `population.target` in
-        // Data/Custom/bots.json and running [GG_Reimport is the honest way to do it, and the tick
-        // cost says it is affordable: 0.5 ms mean and 11 ms max against a 2000 ms budget at 60
-        // bots leaves room for a great deal more than 120.
+        // THE TWO WAYS TO FIX IT WERE BOTH WORSE THAN DELETING IT.
+        //
+        // Making it real means regenerating spawners into Spawns/Custom - a tracked file, rewritten
+        // by a switch whose whole contract is that flipping one line back to False undoes it - and
+        // a crash mid-window would leave the doubled file committed. Leaving it in place means a
+        // banner, a health warning and two READMEs all claiming "population x2" about a number that
+        // does not move, which is worse than a missing feature: it is a measurement that lies about
+        // its own conditions.
+        //
+        // The honest way to raise the population is the one already written down - raise
+        // `population.target` in Data/Custom/bots.json, then [BotPopulationGen, [GG_Reimport,
+        // [BotPopulationAudit - and the tick cost says it is affordable: 0.4 ms mean and 13 ms max
+        // against a 2000 ms budget at 60 bots. `Bots.Recipe` prints that cost beside the live count
+        // precisely so the next value is arithmetic rather than nerve.
+        //
+        // THE TICK-BUDGET CLAMP WENT WITH IT. It existed only to bound a multiplier that no longer
+        // exists, and a clamp with nothing to clamp is a branch nobody can ever see run. The
+        // threshold it encoded - half the budget, so there is headroom for the max as well as the
+        // mean - survives as the stopping rule for the population scale test, in the Bots README.
 
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
-
-        /// <summary>What the target is multiplied by while the profile is on.</summary>
-        public const double TargetMultiplier = 2.0;
 
         /// <summary>What a visit window is divided by while the profile is on.</summary>
         public const double VisitDivisor = 3.0;
 
-        /// <summary>
-        /// The share of the tick budget above which the profile stops doubling.
-        ///
-        /// The doubling is CLAMPED BY WHAT A TICK COSTS, because "twice as many bots" is a request
-        /// and not a promise: BotTickManager measures the mean and max cost of a population pass
-        /// against Custom.BotTickSeconds, and a population that cannot be ticked inside its own
-        /// budget does not walk faster, it walks in slow motion - which would corrupt the very
-        /// measurement the profile exists to take.
-        ///
-        /// Half, so there is headroom for the max as well as the mean: the tick cost is a mean over
-        /// passes and a single pass can be several times it.
-        /// </summary>
-        public const double TickBudgetShare = 0.5;
-
         private static Timer _banner;
-
-        private static bool _clamped;
 
         /// <summary>Read once at Configure. A measurement profile must not change mid-window.</summary>
         private static bool _enabled;
@@ -85,46 +80,6 @@ namespace Server.Custom
         public static bool Enabled
         {
             get { return _enabled; }
-        }
-
-        /// <summary>Whether the tick cost has forced the multiplier back down. See TickBudgetShare.</summary>
-        public static bool Clamped
-        {
-            get { return _clamped; }
-        }
-
-        /// <summary>
-        /// The multiplier in force right now: 1.0 with the profile off, 2.0 with it on, and back
-        /// toward 1.0 while a tick pass is costing more than half its budget.
-        /// </summary>
-        public static double Multiplier
-        {
-            get
-            {
-                if (!_enabled)
-                {
-                    return 1.0;
-                }
-
-                double budgetMs = BotTickManager.Interval.TotalMilliseconds;
-
-                if (budgetMs <= 0.0 || BotTickManager.PassCount <= 0)
-                {
-                    return TargetMultiplier;
-                }
-
-                if (BotTickManager.PassMeanMs <= budgetMs * TickBudgetShare)
-                {
-                    _clamped = false;
-                    return TargetMultiplier;
-                }
-
-                // Over budget: fall back to plain 1.0 rather than to something in between. A
-                // multiplier that drifts with the tick cost would make the population oscillate,
-                // and a population that oscillates is a worse thing to measure than a small one.
-                _clamped = true;
-                return 1.0;
-            }
         }
 
         public static void Configure()
@@ -166,9 +121,7 @@ namespace Server.Custom
             Utility.WriteConsoleColor(
                 ConsoleColor.Yellow,
                 String.Format(
-                    "  population x{0:F0}{1}, visit windows /{2:F0}, session curve FLAT.",
-                    TargetMultiplier,
-                    _clamped ? " (CLAMPED to x1 by tick cost)" : "",
+                    "  visit windows /{0:F0}, session curve FLAT. Population is UNCHANGED.",
                     VisitDivisor));
             Utility.WriteConsoleColor(
                 ConsoleColor.Yellow,
@@ -191,9 +144,7 @@ namespace Server.Custom
                 "======================================================================");
 
             Log.Warn(
-                "Measurement profile is ON: population x{0:F0}{1}, visits /{2:F0}, curve flat. {3}",
-                TargetMultiplier,
-                _clamped ? " (clamped to x1 by tick cost)" : "",
+                "Measurement profile is ON: visits /{0:F0}, curve flat, population unchanged. {1}",
                 VisitDivisor,
                 BotTickManager.DescribeCost());
         }
@@ -208,10 +159,8 @@ namespace Server.Custom
         private static HealthResult BuildHealthResult()
         {
             return HealthResult.Warn(String.Format(
-                "MEASUREMENT PROFILE ON - population x{0:F0}{1}, visits /{2:F0}, curve flat. "
-                + "Per-minute figures are not comparable to earlier windows; read per walk. {3}",
-                TargetMultiplier,
-                _clamped ? " (clamped to x1 by tick cost)" : "",
+                "MEASUREMENT PROFILE ON - visits /{0:F0}, curve flat, population unchanged. "
+                + "Per-minute figures are not comparable to earlier windows; read per walk. {1}",
                 VisitDivisor,
                 BotTickManager.DescribeCost()));
         }

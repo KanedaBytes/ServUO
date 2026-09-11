@@ -532,12 +532,26 @@ at once and the audit cannot see why - and a bot standing still can be failing a
   **A short window over-reports the BankSitter.** Its only residual is the once-per-visit walk to the
   scattered spot `PickScatteredHome` chose, so a two-minute window - in which every bot has just
   arrived - read 2.97 where the full fifteen read 0.41. Give it the whole window.
-- **`Custom.MeasurementProfile=True`** buys walks instead of wall time: population target doubled
-  (clamped back to x1 while a tick pass costs more than half its budget), visit windows divided by
-  3, session curve flattened. A loud yellow banner prints once a minute and `[CoreSmoke` reports it
-  as a **WARN**. **A profile window is not comparable to an earlier one except per walk** - it
-  changes crowding, and a per-minute figure measures crowding. Put it back to `False` before
+- **`Custom.MeasurementProfile=True`** buys walks instead of wall time: visit windows divided by 3
+  and the session curve flattened. A loud yellow banner prints once a minute and `[CoreSmoke`
+  reports it as a **WARN**. **A profile window is not comparable to an earlier one except per walk**
+  - it changes crowding, and a per-minute figure measures crowding. Put it back to `False` before
   committing, like the `*OnStart` flags.
+
+  **It used to claim a third dial, and the third dial never worked.** It doubled
+  `BotSession.TargetNow`, which is the session *ceiling* - how many lifecycle bots may be live, not
+  how many exist. The population is `GG_BotPop.xml`'s spawner slots, so a ceiling of 120 against 60
+  authored slots fills all 60 and stops: window E measured `target 120 now (peak 60)` beside
+  `60 bot(s) live`. It is gone rather than fixed, because making it real means a reversible switch
+  rewriting a tracked file. **Raising the population is `population.target` in `bots.json`, then
+  `[BotPopulationGen` → `[GG_Reimport` → `[BotPopulationAudit`.** The tick-budget clamp went with
+  it; it bounded a multiplier that no longer exists.
+- **`[BotPace auto`** samples any bot already walking, with no client to target one with -
+  `[BotPace` itself `BeginTarget`s a mobile, so the one instrument that reads both the pace written
+  to `CurrentSpeed` and the delay `DoMoveImpl` derives from it was unreachable from a headless run.
+  The `bot-pace` token is the same thing from the bridge; both write `Data/Live/bot-pace.json`.
+  Baseline at 60 bots: *"engine delay 100ms matches the pace: the bot steps at the pace it was
+  given"*, 10.0 tiles per second, 203 of 203 steps at run pace.
 
 ## Health checks
 

@@ -85,18 +85,19 @@ namespace Server.Custom
             get { return Config_.CurveAt(DateTime.Now.Hour); }
         }
 
-        /// <summary>How many LIFECYCLE bots should be live right now. Fixtures are not in this number.</summary>
+        /// <summary>
+        /// How many LIFECYCLE bots should be live right now. Fixtures are not in this number.
+        ///
+        /// THE MEASUREMENT PROFILE NO LONGER MULTIPLIES THIS, and the reason is worth keeping here
+        /// rather than only where the dial was: this is a CEILING, not a population. The population
+        /// is GG_BotPop.xml's spawner slots, derived from `population.target`, so a ceiling raised
+        /// above the number of authored slots fills every slot and stops - which is exactly what
+        /// window E measured, `target 120 now (peak 60)` beside `60 bot(s) live`. Raising the real
+        /// population means raising `population.target` and regenerating. See BotMeasurementProfile.
+        /// </summary>
         public static int TargetNow
         {
-            // BotMeasurementProfile.Multiplier is 1.0 unless Custom.MeasurementProfile is on, and
-            // falls back to 1.0 on its own while a tick pass is costing more than half its budget:
-            // twice as many bots that cannot be ticked inside the budget do not walk faster, they
-            // walk in slow motion, which corrupts the measurement the profile exists to take.
-            get
-            {
-                return Math.Max(
-                    1, (int)(Config_.Target * CurveNow * BotMeasurementProfile.Multiplier));
-            }
+            get { return Math.Max(1, (int)(Config_.Target * CurveNow)); }
         }
 
         public static int LogoutsSinceBoot

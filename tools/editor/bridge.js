@@ -48,7 +48,7 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
     'botpop-audit', 'botpop-gen', 'botinfo',
-    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe'
+    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe', 'bot-pace'
 ]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a
@@ -605,6 +605,12 @@ const ROUTES = {
     '/api/tile-probe': (request, response) => {
         sendJson(response, 200,
             readJson(whitelist.FILES.tileProbe) || { utc: null, lines: [] });
+    },
+
+    /** The last [BotPace sample. Written by the `bot-pace` token, N seconds after it is dropped. */
+    '/api/bot-pace': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.botPace) || { utc: null, bot: null, lines: [] });
     },
 
     /** How the last restart is going. See handleRestart. */

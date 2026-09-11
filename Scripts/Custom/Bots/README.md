@@ -1803,6 +1803,7 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[BotSmoke` | Administrator | Spawn one bot per class, check every one against the caps, delete them |
 | `[BotTrace on\|off` | GameMaster | Target a bot; echo everything it does to the console. `[BotTrace off all` quiets every traced bot, `[BotTrace list` names them |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; sample its steps for N seconds (default 30) and report the walker tick, the pace it was given, the delay the engine used, the interval between steps and how many carried the running bit |
+| `[BotPace auto [seconds]` | GameMaster | The same, with **no target**: takes any bot already walking a route. This is the form a headless run can use, and it is why the token exists — the targeted form was the only one, so the one instrument that reads both the pace given and the delay the engine used was unreachable from a run with no client. Refuses when no bot is walking rather than waiting, because a sampler that waited would report a window that never started as a window with no problems (token: `bot-pace`, body a window length or `last`; answers to `Data/Live/bot-pace.json`) |
 | `[BotPopulationAudit` | Administrator | What the recipe would produce for each town, and whether `GG_BotPop.xml` still matches it. Spawns nothing and writes nothing (token: `botpop-audit`) |
 | `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`. Run `[GG_Reimport` afterwards (token: `botpop-gen`) |
 | `[BotPopulation` | Administrator | Live count against the curve target, the tick cost, and how many bot spawners exist |
@@ -1899,6 +1900,22 @@ Sixty bots cost two hundredths of one percent of the tick budget. **Raising the 
 arithmetic question rather than a nerve one**, which is the whole reason the measurement exists.
 Upstream measures nothing and ships 1600 behind a comment reading *"with <500 bots this is
 trivially cheap"* — two numbers that cannot both be opinions about the same code.
+
+**And the one dial that pretended to raise it has been removed.** `Custom.MeasurementProfile` used
+to double `BotSession.TargetNow` — which is the session **ceiling**, how many lifecycle bots may be
+*live*, and not how many *exist*. The population is spawner slots in a generated file, so a ceiling
+of 120 against 60 authored slots fills all 60 and stops. Window E measured exactly that and wrote it
+down: `target 120 now (peak 60)` beside `60 bot(s) live`.
+
+It is gone rather than fixed. Making it real means a switch whose whole contract is that flipping
+one line back to `False` undoes it, rewriting a tracked file — and a crash mid-window would leave
+the doubled `GG_BotPop.xml` committed. Leaving it in place meant a banner, a health warning and two
+READMEs all claiming "population ×2" about a number that does not move, which is worse than a
+missing feature: it is a measurement lying about its own conditions. The tick-budget clamp went with
+it, because it bounded a multiplier that no longer exists.
+
+The profile still does the two things that worked: **visit windows ÷ 3** and a **flat session
+curve**. Raising the real population is the three commands at the top of this section.
 
 Everything is config, in `bots.json`'s `population` block: `target`, `perSpawner`, `spawnerRange`,
 `respawnMinutes`, `sessionMinutes`, `curve` and `roles`. **`perTown` is deliberately empty**: with
@@ -2607,6 +2624,58 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
+- **THE POPULATION SCALE TEST, READY TO RUN AND DELIBERATELY NOT RUN.** *Deferred by Sean until
+  after the bot-class spike, because a `PlayerMobile` rewrite would change what the curve measures.
+  Everything it needs is shipped; this is the procedure, so the next session does not re-derive it.*
+
+  `bots.json` ships `target: 60` against a graph with 115 arrival points, chosen as *"a fraction of
+  upstream's 1600, and measure"* — and the measurement was never taken. `BotTickManager` reports
+  **0.4 ms mean / 13 ms max against a 2000 ms budget at 60 bots**, two hundredths of one percent, so
+  the headroom is large and unquantified.
+
+  **`Custom.MeasurementProfile` stays OFF throughout.** It changes crowding, and crowding is part of
+  what is being measured.
+
+  At each of **100, 200, 400**: raise `population.target` in `Data/Custom/bots.json`, run
+  `[BotPopulationGen` → `[GG_Reimport` → `[BotPopulationAudit`, let it settle, then **10 minutes**.
+
+  | what | where it comes from |
+  | --- | --- |
+  | behaviour tick mean / max | `BotTickManager.DescribeCost()`, on `Bots.Recipe` and `Bots.Population` |
+  | does the pace hold | **`[BotPace auto`**, or the `bot-pace` token — see below |
+  | shard cycles per second | `Core.AverageCPS` / `CyclesPerSecond`, on the `Core.Process` health check |
+  | walk failures per 100 walks | `NavWalkFailures`; `walk-failures clear` per step |
+  | world save time | `Core.Process` again — it brackets `BeforeWorldSave` to `AfterWorldSave` |
+  | memory | `GC.GetTotalMemory` and `WorkingSet64`, same check |
+  | per-town split vs target | `[BotPopulationAudit`'s own share report |
+
+  **Stop at the step where the pace slips or tick max crosses half the budget** — 1000 ms of the
+  2000 ms `Custom.BotTickSeconds`. Half rather than all, so there is headroom for the max as well as
+  the mean: the tick cost is a mean over passes and a single pass can be several times it. That
+  threshold is the one `BotMeasurementProfile.TickBudgetShare` encoded before its clamp was deleted;
+  it survives here as a rule rather than as code.
+
+  Then report the curve, propose a standing population, and **put `bots.json` back to 60** with
+  `GG_BotPop.xml` regenerated to match, unless Sean picks otherwise.
+
+  **The baselines to compare against, all measured this session at 60 bots and 219,308 items:**
+
+  | | |
+  | --- | --- |
+  | behaviour tick | 0.4 ms mean / 13 ms max of 2000 ms |
+  | world save | **0.26 s** |
+  | memory | 385 MB managed, 529 MB working set |
+  | cycles per second | 80.7 mean |
+  | pace | *"engine delay 100ms matches the pace: the bot steps at the pace it was given"* — 10.0 tiles/s, 203 of 203 steps at run pace |
+
+  **`[BotPace` needed a no-client form, and that is shipped.** It is the only thing in the tree that
+  reads both the pace written to `CurrentSpeed` and the delay `DoMoveImpl` derives from it off a
+  live walker, and says which one the bot actually stepped at — and it `BeginTarget`s a mobile, so
+  it was unreachable from exactly the kind of run this test is. **`[BotPace auto [seconds]`** takes
+  any bot already walking a route; the `bot-pace` token is the same thing from the bridge, and both
+  write `Data/Live/bot-pace.json` whether or not anybody is holding a gump. `auto` **refuses** when
+  no bot is walking rather than waiting for one, because a sampler that waited would report a window
+  that never started as a window with no problems.
 - **~~THE BANK FLOOR IS NOT SHORT; `BotCrowds` CANNOT SEE ITS OWN GARRISON.~~** *Fixed. Both halves
   applied, `GG_BotPop.xml` regenerated and re-imported, and the facet-wide consequence measured over
   two fifteen-minute windows - see the table at the end of this entry. Kept in full because the

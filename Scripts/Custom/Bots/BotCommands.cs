@@ -56,20 +56,155 @@ namespace Server.Custom
             CommandReport.Send(from, "[BotSteps", BotStepCensus.Describe());
         }
 
-        [Usage("BotPace [seconds]")]
-        [Description("Target a walking bot; samples its steps for N seconds (default 30) and reports the pace the engine actually used against the pace it was given.")]
+        [Usage("BotPace [auto] [seconds]")]
+        [Description("Target a walking bot - or `auto` to take any bot already walking - and sample its steps for N seconds (default 30), reporting the pace the engine actually used against the pace it was given.")]
         private static void BotPace_OnCommand(CommandEventArgs e)
         {
+            int at = 0;
+            bool auto = e.Length > 0 && Insensitive.Equals(e.GetString(0), "auto");
+
+            if (auto)
+            {
+                at = 1;
+            }
+
             int seconds = 30;
 
-            if (e.Length > 0)
+            if (e.Length > at)
             {
-                seconds = Math.Max(5, Math.Min(120, e.GetInt32(0)));
+                seconds = ClampSeconds(e.GetInt32(at));
+            }
+
+            if (auto)
+            {
+                string error;
+
+                if (!TryStartPace(null, seconds, e.Mobile, out error))
+                {
+                    e.Mobile.SendMessage(0x35, error);
+                }
+                else
+                {
+                    e.Mobile.SendMessage(String.Format("Sampling for {0}s.", seconds));
+                }
+
+                return;
             }
 
             e.Mobile.SendMessage(String.Format("Target the bot to sample for {0}s.", seconds));
             e.Mobile.BeginTarget(12, false, TargetFlags.None,
                 (m, targeted) => BotPace_OnTarget(m, targeted, seconds));
+        }
+
+        private static int ClampSeconds(int seconds)
+        {
+            return Math.Max(5, Math.Min(120, seconds));
+        }
+
+        /// <summary>
+        /// Sample a bot's stepping WITHOUT A CLIENT, which is the whole reason this exists.
+        ///
+        /// [BotPace is the only thing in the tree that reads both the pace written to CurrentSpeed
+        /// and the delay DoMoveImpl derives from it off a live walker, and says which one the bot
+        /// actually stepped at. It was also unreachable from a headless run: the command
+        /// BeginTargets a mobile, so the population scale test - which has to ask "does the pace
+        /// hold at 400 bots" - had no way to ask it at all.
+        ///
+        /// `bot` null means "any bot already walking a route", which is the right question for a
+        /// measurement: the scale test does not care WHICH bot, it cares whether the population as
+        /// a whole is still stepping at the rate it was given. It refuses rather than waiting when
+        /// none is walking, because a sampler that silently waited would report a window that never
+        /// started as a window with no problems.
+        ///
+        /// Sweeps LiveRegistry rather than World.Mobiles, the way BotTickManager does - and type-
+        /// tests for PlayerBot, because LiveRegistry is not a bot registry: it also holds
+        /// DailyLifeTownsfolk and the GG shopkeepers.
+        /// </summary>
+        public static bool TryStartPace(PlayerBot bot, int seconds, Mobile report, out string error)
+        {
+            error = null;
+            seconds = ClampSeconds(seconds);
+
+            if (bot == null)
+            {
+                foreach (Mobile mobile in LiveRegistry.Snapshot())
+                {
+                    var candidate = mobile as PlayerBot;
+
+                    if (candidate == null || candidate.Deleted)
+                    {
+                        continue;
+                    }
+
+                    var walking = candidate.Behavior as TravelerBehavior;
+
+                    if (walking != null && walking.Walker != null && walking.Walker.Active
+                        && walking.Walker.Sampler == null)
+                    {
+                        bot = candidate;
+                        break;
+                    }
+                }
+
+                if (bot == null)
+                {
+                    error = "no bot is walking a route right now - try again in a few seconds.";
+                    return false;
+                }
+            }
+
+            var traveler = bot.Behavior as TravelerBehavior;
+            NavWalker walker = traveler == null ? null : traveler.Walker;
+
+            if (walker == null || !walker.Active)
+            {
+                error = String.Format(
+                    "{0} is not walking a route ({1}).",
+                    bot.Name, bot.Behavior == null ? "no behaviour" : bot.Behavior.GetType().Name);
+                return false;
+            }
+
+            if (walker.Sampler != null)
+            {
+                error = String.Format("{0} is already being sampled.", bot.Name);
+                return false;
+            }
+
+            var sampler = new NavPaceSampler();
+            walker.Sampler = sampler;
+
+            PlayerBot sampled = bot;
+
+            Timer.DelayCall(TimeSpan.FromSeconds(seconds), () =>
+            {
+                if (walker.Sampler == sampler)
+                {
+                    walker.Sampler = null;
+                }
+
+                List<string> lines = sampler.Report(NavWalker.TickInterval);
+
+                foreach (string line in lines)
+                {
+                    Log.Info("[BotPace] {0}: {1}", sampled.Name, line);
+                }
+
+                if (!sampled.Deleted)
+                {
+                    BotLog.Note(sampled, BotLogKind.Pace, String.Join(" | ", lines.ToArray()));
+                }
+
+                // The snapshot is written whether or not anybody is holding a gump, because the
+                // headless caller is the bridge and it has no Mobile to send a report to.
+                BotPaceSnapshot.Write(sampled, seconds, lines);
+
+                if (report != null && !report.Deleted)
+                {
+                    CommandReport.Send(report, String.Format("[BotPace {0}", sampled.Name), lines);
+                }
+            });
+
+            return true;
         }
 
         /// <summary>
@@ -88,52 +223,17 @@ namespace Server.Custom
                 return;
             }
 
-            var traveler = bot.Behavior as TravelerBehavior;
-            NavWalker walker = traveler == null ? null : traveler.Walker;
+            string error;
 
-            if (walker == null || !walker.Active)
+            // One path for both forms. The targeted one used to carry the whole sampler inline,
+            // which is how it came to be unreachable without a client in the first place.
+            if (!TryStartPace(bot, seconds, from, out error))
             {
-                from.SendMessage(0x35, String.Format(
-                    "{0} is not walking a route ({1}). [BotSendTo it somewhere first.",
-                    bot.Name, bot.Behavior == null ? "no behaviour" : bot.Behavior.GetType().Name));
+                from.SendMessage(0x35, error + " [BotSendTo it somewhere first.");
                 return;
             }
-
-            if (walker.Sampler != null)
-            {
-                from.SendMessage(0x35, String.Format("{0} is already being sampled.", bot.Name));
-                return;
-            }
-
-            var sampler = new NavPaceSampler();
-            walker.Sampler = sampler;
 
             from.SendMessage(String.Format("Sampling {0}'s steps for {1}s...", bot.Name, seconds));
-
-            Timer.DelayCall(TimeSpan.FromSeconds(seconds), () =>
-            {
-                if (walker.Sampler == sampler)
-                {
-                    walker.Sampler = null;
-                }
-
-                List<string> lines = sampler.Report(NavWalker.TickInterval);
-
-                foreach (string line in lines)
-                {
-                    Log.Info("[BotPace] {0}: {1}", bot.Name, line);
-                }
-
-                if (!bot.Deleted)
-                {
-                    BotLog.Note(bot, BotLogKind.Pace, String.Join(" | ", lines.ToArray()));
-                }
-
-                if (from != null && !from.Deleted)
-                {
-                    CommandReport.Send(from, String.Format("[BotPace {0}", bot.Name), lines);
-                }
-            });
         }
 
         [Usage("BotTrace on | off | off all | list")]

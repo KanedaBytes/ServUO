@@ -1107,6 +1107,43 @@ namespace Server.Custom
                     return true;
                 }
 
+                // How fast is a bot actually stepping, without a client to target one with.
+                //
+                // STARTED, NOT RUN: the sample is a window of N seconds and the ack cannot wait for
+                // it, so the answer lands in Data/Live/bot-pace.json. The body is the window length;
+                // "last" reads back the sample already taken rather than starting another, which is
+                // what a caller wants after it has waited.
+                case "bot-pace":
+                {
+                    string first = FirstWord(body);
+
+                    if (Insensitive.Equals(first, "last"))
+                    {
+                        message = BotPaceSnapshot.Describe();
+                        return true;
+                    }
+
+                    int paceSeconds;
+
+                    if (!Int32.TryParse(first, out paceSeconds))
+                    {
+                        paceSeconds = 30;
+                    }
+
+                    string paceError;
+
+                    if (!BotCommands.TryStartPace(null, paceSeconds, null, out paceError))
+                    {
+                        message = paceError;
+                        return false;
+                    }
+
+                    message = String.Format(
+                        "sampling a walking bot for {0}s; the answer lands in {1}",
+                        paceSeconds, BotPaceSnapshot.Path);
+                    return true;
+                }
+
                 default:
                     message = "unknown request";
                     return false;
