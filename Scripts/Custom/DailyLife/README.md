@@ -11,6 +11,38 @@ Ported from the ModernUO shard's `Custom/DailyLife/`, keeping its scheduler and 
 and replacing two things wholesale: coordinates became nav ids, and all movement goes through
 `NavWalker`. **No actor owns its own pathing.**
 
+## Current contract
+
+What daily life guarantees today, each with the condition that controls it.
+
+- **Every location in the config is a nav id**, including the clock anchor. There are no coordinates
+  in this file, and no actor owns its own pathing.
+- **Phase boundaries must stay identical to `LightCycle.ComputeLevelFor`** (`LightCycle.cs:70-81`),
+  so NPC behaviour and the light a player sees cannot disagree. Change one and you must change the
+  other. `IsAfterDark()` is the single predicate every consumer uses.
+- **The hour is sampled at the town anchor, not globally.** `Clock.GetTime` adds `MapIndex * 320`
+  minutes per facet and `x / 16` for longitude, so "the hour" differs by over seven hours across one
+  map.
+- **Boot order is explicit and ServUO's `[CallPriority]` default is 0, not ModernUO's 50.** The day
+  cycle is `-10`, the system `-5`, the consumers untagged. Copying ModernUO's `10` across would run
+  the day cycle *after* its consumers.
+- **Driving the stock vendors is respawn-safe, and this was verified rather than assumed.**
+  `XmlSpawner2.Defrag` applies no distance, map or home check, `SmartSpawning` is false and
+  `DespawnTime` 0 on all 2,572 Trammel spawners, and ServUO's own return-home is dead because
+  `IsSpawnerBound()` requires `Spawner is Spawner` while `XmlSpawner : Item, ISpawner`. These are the
+  answers to the two questions `Scripts/Custom/MODIFICATIONS.md` used to list as open.
+- **The six vendor subclasses carry six overrides each, not one.** See below; the original reason is
+  still the reason they exist.
+- **Patrons, townsfolk and watchmen are ephemeral; the GG vendors are not.** `Commuting` is
+  deliberately unserialized either way, so a save mid-walk comes back with the flag clear and the
+  schedule snaps the vendor where the phase says it belongs.
+- **The vendor migration is explicit, confirmed, one-time and reversible**, never a boot-time
+  mutation.
+
+This file carries no dated investigation long enough to need a History section; where a section is a
+finding rather than a rule, it says so and carries its date - the convention the other three custom
+READMEs state in full.
+
 ## Phases
 
 `<4` night, `<6` dawn, `<22` day, else dusk — boundaries deliberately identical to
@@ -38,6 +70,9 @@ above `NavigationSystem`'s 100, because every id here needs the graph.
 
 ## The shopkeeper problem, and why there are vendor subclasses
 
+*The respawn-safety findings here were measured 5 September 2026 (`e643bc3e`) and are what
+closed the two open questions in `../MODIFICATIONS.md`. The rules they settled are in force.*
+
 Driving the stock vendors is **respawn-safe** — `XmlSpawner2.Defrag` (`XmlSpawner2.cs:7990`) drops
 a spawn only when it is deleted, tamed, or despawn-timed-out in an inactive sector; no distance,
 map or home check. `SmartSpawning` is `False` on all 2,572 Trammel spawners and `DespawnTime` is
@@ -49,8 +84,17 @@ map or home check. `SmartSpawning` is `False` on all 2,572 Trammel spawners and 
 `Utility.RandomMinMax(30, 120)` — *seconds per step* — returned verbatim by
 `VendorAI.TransformMoveDelay` (`VendorAI.cs:148`), which ignores `CurrentSpeed`. Dusk to dawn is
 6 UO hours = **30 real minutes**; a 40-tile walk at that rate takes 20–80. So daily life ships six
-one-line subclasses (`Scripts/Custom/Mobiles/GGVendors.cs`) whose only job is to carry
-`DailyLifeAI` through `ForcedAI` (`BaseCreature.cs:3342`).
+subclasses (`Scripts/Custom/Mobiles/GGVendors.cs`), and `ForcedAI` (`BaseCreature.cs:3342`) is the
+seam `DailyLifeAI` goes through.
+
+**That is why they exist, and it is no longer all they do.** They were one-line subclasses when
+written and the description outlived them by four sessions. Each now carries six overrides: the
+`ForcedAI` that is the original reason, `OnMoveOver` forwarding to `BotShove` so a bot walks through
+a shopkeeper as a player would, `CheckVendorAccess` greying buy and sell while the shops are shut,
+`OnAfterSpawn` registering on the live map and asking the schedule to reconcile, `OnDelete`
+unregistering, and a `Deserialize` that re-registers because `OnAfterSpawn` does not fire on load
+and these persist. The shared halves live in `DailyLifeVendor`, because the six cannot share a base
+class - each derives from a different stock vendor.
 
 `DailyLifeAI` does exactly two things, both scoped to `Commuting` so an idle shopkeeper still
 paces its counter at the stock pace:
