@@ -35,9 +35,17 @@
 //
 //     node tools/editor/repoint-arrivals.js --tag britain             # dry run
 //     node tools/editor/repoint-arrivals.js --tag britain --write
+//     node tools/editor/repoint-arrivals.js --dest brit-home-jeweler --write
 //
 // `--tag` restricts it to destinations carrying that tag, because a town is the unit somebody
 // re-bases; without one it would re-point the whole facet, and Trinsic is deliberately untouched.
+//
+// `--dest` narrows it to ONE destination, which is the unit somebody RELOCATES. The smaller unit
+// earns its own flag because "nearest first" is not always an improvement: a waypoint an arrival
+// names may be a DOOR rather than a road, and prepending a road waypoint two tiles away moves the
+// last hop off the threshold and onto the street - brit-shop-tanner's cheapest approach went from
+// 1 walked tile to 20 that way, with no instrument reading wrong (see commit 118be12f). So a
+// whole-town pass is for a re-base, and a single moved record is re-pointed on its own.
 
 'use strict';
 
@@ -117,6 +125,8 @@ async function main() {
     const write = args.includes('--write');
     const tagAt = args.indexOf('--tag');
     const tag = tagAt >= 0 ? args[tagAt + 1] : null;
+    const destAt = args.indexOf('--dest');
+    const only = destAt >= 0 ? args[destAt + 1] : null;
     const portAt = args.indexOf('--port');
     const port = portAt >= 0 ? Number(args[portAt + 1]) : 8081;
     const homeAt = args.indexOf('--home');
@@ -169,6 +179,10 @@ async function main() {
     // arrivals were re-pointed to a waypoint three tiles away while the destination still named one
     // 208 tiles off, and the walk audit failed both of its approaches with no path at all.
     for (const destination of nav.destinations) {
+        if (only && destination.id !== only) {
+            continue;
+        }
+
         if (tag && !(destination.tags || '').split(/\s+/).includes(tag)) {
             continue;
         }
@@ -208,6 +222,10 @@ async function main() {
         const destination = destinations.get(arrival.destination);
 
         if (!destination) {
+            continue;
+        }
+
+        if (only && destination.id !== only) {
             continue;
         }
 

@@ -149,10 +149,10 @@ Where a fresh session should start, in order:
    sections first. Every place this port does something other than upstream is a row there, with
    the reason; every place it stops short is a seam with the session that restores it. If a
    behaviour looks wrong, check those two tables before reading code.
-2. **The reference is `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO`**, `Projects/UOContent/CustomBots/`
-   for source and `Distribution/Data/` for data - see the table at the top of `CLAUDE.md` for the
-   three trees that are *not* it. The rule for any design question is uo-offline's answer first,
-   deviate only at a named seam.
+2. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
+   source and `playerbots/data/` for data - see the table at the top of `CLAUDE.md` for the three
+   trees that are *not* it, including the installed snapshot this line used to name. The rule for
+   any design question is uo-offline's answer first, deviate only at a named seam.
 3. **`docs-src/uo-offline-port-survey.md`** for what has been ported and what the September 2026
    upstream release changed under files not yet reached.
 4. **Run `[BotSmoke`** and read `[CoreSmoke`. The chain is walk → life → chat → work; each probe's

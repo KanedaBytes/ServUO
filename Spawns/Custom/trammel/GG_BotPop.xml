@@ -423,12 +423,12 @@
     <Name>GG_BotPop_britain_shop_brit-shop-baker</Name>
     <UniqueId>1eef81fc-7ddd-5ea1-aa47-8a04181ab335</UniqueId>
     <Map>Trammel</Map>
-    <X>1450</X>
-    <Y>1617</Y>
+    <X>1456</X>
+    <Y>1612</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1450</CentreX>
-    <CentreY>1617</CentreY>
+    <CentreX>1456</CentreX>
+    <CentreY>1612</CentreY>
     <CentreZ>20</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
