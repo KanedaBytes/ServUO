@@ -16,9 +16,25 @@ namespace Server.Custom
     ///
     /// The standing-crowd floor is a design ADDITION, not a translation. Upstream kept its bank
     /// crowds with permanent spawner-held, lifecycle-exempt bots, and its lifecycle teleported
-    /// extra sitters to a uniformly random bank with no occupancy check at all. This shard walks,
-    /// so the floor is expressed as a PULL - an under-floor destination is simply somewhere bots
-    /// want to go - and nobody is placed, teleported or commandeered.
+    /// extra sitters to a uniformly random bank with no occupancy check at all. Ours is a PULL on
+    /// top of that: an under-floor destination is simply somewhere bots want to go, and nobody is
+    /// placed, teleported or commandeered to satisfy it.
+    ///
+    /// ON TOP OF THAT, AND THAT IS THE WHOLE POINT - this header used to say "this shard walks, so
+    /// the floor is expressed as a pull", which read as though we had no garrison at all. We do.
+    /// BotPopulation pins `FloorFor("bank")` BotRole.Fixed sitters at every bank, so the same number
+    /// sizes the garrison AND sets the threshold the garrison is meant to satisfy.
+    ///
+    /// WHICH MEANS EVERY FIXTURE MUST BE COUNTED HERE, and for a long time none of them was. This
+    /// method matches on DestinationId, and a seeded fixture had none - ApplySeed forwarded
+    /// _seedStation to a Crafter and a Gatherer and to nothing else, and the bank slot passed null
+    /// for it anyway - so twelve permanent sitters counted toward no destination's floor, every bank
+    /// read under 3 for ever, and the 4x pull ran permanently on top of a garrison that already met
+    /// the floor. Measured: exactly 3.00 standing at all four banks in 449 of 449 samples, total
+    /// crowd 3.43 to 4.94, and this count seeing 1.05 to 2.88 of it.
+    ///
+    /// So: a new behaviour that can be a FIXTURE needs a branch here, and it needs its DestinationId
+    /// set from the seed. Getting only one of the two is silent - the count simply reads low.
     ///
     /// GAME THREAD ONLY.
     /// </summary>

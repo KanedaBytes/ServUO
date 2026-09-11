@@ -254,19 +254,36 @@ recorded at `Scripts/Custom/Mobiles/README.md:76-85`.
 Both overrides go on the **mobile**, not on `BotAI`. Seam 5 keeps `BotAI` thin so it can become a
 `MeleeAI` or `MageAI` when combat lands, and hearing is not a property of how a bot fights.
 
-### The bank crowd is a pull, not a garrison
+### The bank crowd is a garrison AND a pull, and `life.crowds.bank` is both numbers
 
+**This section used to say "a pull, not a garrison", and that was wrong about our own code.**
 Upstream keeps bank crowds with `BankFixtures`: a spawner at every bank holding five permanent,
-**lifecycle-exempt**, curve-exempt sitters. Its lifecycle only ever adds extras, by teleporting a
-rolled BankSitter to a uniformly random bank with **no occupancy check at all**.
+**lifecycle-exempt**, curve-exempt sitters, and its lifecycle only ever adds extras by teleporting a
+rolled BankSitter to a uniformly random bank with **no occupancy check at all**. We have that too.
+`BotPopulation` reads `bankCrowd = store.Life.FloorFor("bank")` and pins exactly that many
+`BotRole.Fixed` sitters at every bank in the recipe - three each, four banks, twelve bots - so the
+garrison is there at 05:00 as at 19:00, by construction, and measured at **exactly 3.00 standing at
+all four banks in 449 of 449 samples**.
 
-This shard walks. So the floor is expressed as a weight multiplier on an under-floor destination -
-bots *want* to go where the crowd is thin - and nobody is placed, teleported or commandeered. The
-multiplier is capped at four times, and **bots already routing there count toward the floor**, so
-one empty slot does not pull every traveller in town.
+What is ours rather than theirs is the *second* use of the same number. The floor is also a weight
+multiplier on an under-floor destination - bots *want* to go where the crowd is thin - capped at four
+times, with **bots already routing there counting toward it** so one empty slot does not pull every
+traveller in town. Nobody is placed, teleported or commandeered to satisfy it.
 
-Consequence worth knowing: the floor is a tendency, not a guarantee. `Bots.Population` reports
-`banks below floor` rather than asserting it.
+**One number doing two jobs is why the defect was invisible for so long.** `life.crowds.bank = 3`
+sizes the garrison *and* sets the threshold the garrison is supposed to satisfy, so the two can only
+agree - and they did not, because `BotCrowds.CountFor` matches `BankSitterBehavior.DestinationId` and
+a seeded fixture had none: `PlayerBot.ApplySeed` forwarded `_seedStation` to a `CrafterBehavior` and a
+`GathererBehavior` and to nothing else, and `BotPopulation` passed `null` where the bank slot's
+station argument goes, so there was no token to forward. Twelve permanent sitters counted toward **no
+destination's floor at all**, every bank read under 3 for ever, and **the 4x pull ran permanently on
+top of a garrison that already met the floor** - a standing distortion of the whole destination roll,
+against shops, taverns and inns that had no such multiplier. Both halves are fixed; see the
+before-and-after table under *Later*.
+
+Consequence still worth knowing: the *pull* is a tendency, not a guarantee - `Bots.Population`
+reports `banks below floor` rather than asserting it. The *garrison* is a guarantee, and is the half
+that actually keeps a bank looking busy.
 
 ### The Shopper walks
 
@@ -2552,8 +2569,10 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
-- **THE BANK FLOOR IS NOT SHORT; `BotCrowds` CANNOT SEE ITS OWN GARRISON. Measured, not suspected,
-  and PROPOSED RATHER THAN APPLIED** because the fix changes the destination roll facet-wide.
+- **~~THE BANK FLOOR IS NOT SHORT; `BotCrowds` CANNOT SEE ITS OWN GARRISON.~~** *Fixed. Both halves
+  applied, `GG_BotPop.xml` regenerated and re-imported, and the facet-wide consequence measured over
+  two fifteen-minute windows - see the table at the end of this entry. Kept in full because the
+  measurement is the argument and a reader of an older diff will find the old framing.*
 
   The Britain rebase grew the roamer pool 26-49% per class and the suspicion was that the crowd of 3
   now ran one short. It does not. Every bank has **exactly three fixed-role sitters standing in it at
@@ -2602,6 +2621,51 @@ simply does not model a bot whose job is to stay put.
   A third option was considered and rejected: leaving the count alone and lowering
   `life.crowds.bank` to compensate. It gets the same traffic by writing down a number that is not
   the crowd anybody wants, and the next person to read `crowds` would be misled by it.
+
+  **What it actually did, measured.** Two fifteen-minute windows of 61 bots either side of the fix.
+  The floor now reads **0% under floor at every bank** where it read 74-100%, with the count seeing
+  3.09 to 4.51 where it saw 1.05 to 2.88 - and the standing crowd is unchanged at a minimum of 3 per
+  bank, because the garrison was always there.
+
+  Visit share by destination type, three ways, because "visit share" has three honest readings with
+  different biases and a real shift moves all of them:
+
+  | type | CHOSEN (the roll) | HEADING (in transit) | route events (after) |
+  | --- | --- | --- | --- |
+  | bank | 19.6% -> **8.5%** | 12.0% -> **9.5%** | **7.6%** |
+  | shop | 56.1% -> 50.6% | 54.4% -> 48.8% | 55.1% |
+  | tavern | 2.8% -> **8.5%** | 2.6% -> **7.4%** | **8.1%** |
+  | forge | 1.9% -> 0.6% | 0.4% -> 0.5% | 0.5% |
+  | other | 19.6% -> **31.7%** | 30.5% -> **33.7%** | **28.6%** |
+
+  **Bank visits halve and everything else takes the difference**, with taverns tripling and `other` -
+  inns, gates, plazas, and the docks and stables the rebase adopted - gaining most. `CHOSEN` counts a
+  Traveler's destination changing (unbiased, small: 107 and 164 rolls); `HEADING` counts Traveler
+  bot-samples by target (large, but weighted by journey length); the last column is every `departing
+  for` line in `botlog.json`, 185 of them, which is the authoritative record and agrees with `CHOSEN`
+  to within a point or two - a useful cross-check on the sampling. `STANDING` is deliberately not in
+  the table: it is dominated by the twelve bank fixtures and reads 33.8% before and after, which is
+  true and answers a different question.
+
+  Two things the after-window also says, neither of them about banks:
+
+  - **The per-tier mount curve is noisier than one window suggests.** Window C's 0.0 / 0.0 / 11.1 /
+    30.2 / 49.5 / 66.5 read as a clean monotonic ladder; window D's 0.0 / 0.0 / 35.6 / 27.2 / 36.5 /
+    25.6 does not. Sixty bots is about nine per tier, so a per-tier share is quantised to roughly 11
+    points and swings by more than that. **The `ALL` figure is the stable one** - 24.8% and 23.8% -
+    and the design is confirmed by the ends (Novice and Apprentice at zero in both) rather than by
+    the middle. Quoting window C's ladder as established would have been reading luck as a curve.
+  - **One edge produced four of five terminal walk failures**, and it is a real defect this session
+    did not cause: `uo-wp-194-s1` -> `uo-wp-194` failed once in window C and four times in D, the
+    rate rising only because traffic moved toward Trinsic's east side. `[NavHop` paths the edge in
+    both directions and in segments, `[TileProbe` says the goal tile is clean stone with no statics,
+    no items and all eight neighbour steps ALLOWED, `[NavAudit` walks it and `[WalkAudit` walked all
+    2,304 edges without a failure. **The bot was not on the waypoint.** It gave up at 2035,2832, one
+    tile southwest of `uo-wp-194-s1` at 2036,2830 - and `[NavHop` from *that* tile to the same goal
+    answers `ok:false`. A one-tile displacement drops a bot into a pocket the pathfinder will not
+    route out of. This is precisely the question `[WalkAudit` is structurally unable to ask, which
+    commit `118be12f` already wrote down: it starts every walk AT a waypoint, so it can never ask
+    whether a bot standing *beside* one can route away from it.
 
 - **The name census drifts DOWN under a real population, and the cause is not fully found.**
   With sixty bots and the logout/refill cycle running, `NamePool.InUseCount` falls behind the live
