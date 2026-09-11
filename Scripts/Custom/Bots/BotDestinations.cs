@@ -13,6 +13,8 @@ namespace Server.Custom
     /// </summary>
     public static class BotDestinations
     {
+        private static readonly CustomLogger Log = CustomLogger.For("Bots");
+
         /// <summary>
         /// Pick a destination for this bot, or null when nothing is eligible.
         ///
@@ -227,9 +229,23 @@ namespace Server.Custom
             var parts = new List<string>();
             bool anyInPlay = false;
 
+            // A HAUL ROLL WAS INVISIBLE HERE, and that is why "where did the ore go" could only be
+            // answered by guessing. This filter was work sites only - a mine or a lumber camp -
+            // and a laden gatherer rolls forges and banks, so the one decision that ends an errand
+            // logged nothing at all. While hauling, the delivery points in the running are what
+            // matter, and the zero-weight remainder is left out so the line stays one line.
+            bool hauling = bot != null && bot.HaulPending;
+
             for (int i = 0; i < candidates.Count; i++)
             {
-                if (!BotWorkSites.IsWorkType(candidates[i].Type))
+                if (hauling)
+                {
+                    if (weights[i] <= 0.0)
+                    {
+                        continue;
+                    }
+                }
+                else if (!BotWorkSites.IsWorkType(candidates[i].Type))
                 {
                     continue;
                 }
@@ -271,6 +287,25 @@ namespace Server.Custom
             }
 
             string line = String.Join(", ", parts.ToArray());
+
+            if (hauling)
+            {
+                // On the console as well as in the event log, because a haul that goes to the
+                // wrong town is diagnosed from a probe run's console days later, and botlog.json
+                // only exists while the live map is on. One line per completed shift, which is
+                // rare enough to afford.
+                Log.Info(
+                    "{0} is hauling to '{1}', {2} tile(s) away: {3}",
+                    bot.Name,
+                    candidates[chosen].Id,
+                    Math.Max(
+                        Math.Abs(candidates[chosen].Location.X - bot.X),
+                        Math.Abs(candidates[chosen].Location.Y - bot.Y)),
+                    line);
+
+                BotLog.Note(bot, BotLogKind.Route, "haul choice: {0}", line);
+                return;
+            }
 
             if (!BotWorkSites.IsWorkType(candidates[chosen].Type))
             {
@@ -364,7 +399,38 @@ namespace Server.Custom
                         : 0.5;
                 }
 
-                return AnyStaffedStation(bot, raw) ? 0.02 : 9.0;
+                if (AnyStaffedStation(bot, raw))
+                {
+                    return 0.02;
+                }
+
+                // AND THE SAME NEAREST RULE WITH NOBODY THERE, which is the half that was missing.
+                //
+                // The rule above was added because a miner walked 255 tiles past a forge 36 tiles
+                // away, and it was added to the STAFFED branch only. So the moment nothing is
+                // staffed - which is exactly when a laden miner most needs a sensible fallback -
+                // distance dropped out of the roll entirely and all four forges weighed 9.0 apiece.
+                //
+                // Measured on this graph from 'brit-mine-north': a 59.8% chance of setting off for
+                // a forge that is not the nearest, and a 19.9% chance of 'trinsic-forge' - ONE
+                // THOUSAND ONE HUNDRED AND TWENTY-FOUR TILES away, in another town, with a forge at
+                // 36 and a bank at 169. At a bot's pace that walk is about four minutes of pure
+                // stepping, which is how a miner ends a seven-minute probe still carrying its load.
+                // Home bias makes it worse rather than better: a Trinsic-resident miner multiplies
+                // Trinsic's forge by 2.5 and heads home across the map with its ore.
+                // 0.01 for the others, which is a FALLBACK RATHER THAN A CHOICE, and the number
+                // was measured rather than picked. At 0.1 it was still about one roll in thirty,
+                // and one roll in thirty is one probe run in five: of five runs on the first cut
+                // of this fix, the four that rolled 'brit-forge' at ~30 tiles all delivered and
+                // the one that rolled 'brit-forge-south' at 245 failed. Distance is the whole
+                // outcome, so a second choice has to be rare enough that nobody ever sees it.
+                //
+                // Not zero, because the nearest bench could be excluded or unroutable and a laden
+                // bot with no positive candidate anywhere would have nothing to walk to at all.
+                // 0.01 against 9.0 is about one in nine hundred: an escape hatch, not an option.
+                return Insensitive.Equals(candidate.Id, NearestStationId(bot, profile))
+                    ? 9.0
+                    : 0.01;
             }
 
             if (Insensitive.Equals(candidate.Type, "bank"))
@@ -376,10 +442,92 @@ namespace Server.Custom
                 //
                 // With nobody there the bank is exactly right, and this returns to 2.0: ore in a
                 // bank box is ore kept, and it is what a player would have done.
-                return AnyStaffedStation(bot, raw) ? 0.02 : 2.0;
+                //
+                // Nearest, for the station branch's reason: 'trinsic-bank' is 1307 tiles from
+                // 'brit-mine-north' and 'brit-bank' is 169, and they weighed the same.
+                if (AnyStaffedStation(bot, raw))
+                {
+                    return 0.02;
+                }
+
+                return Insensitive.Equals(candidate.Id, NearestDeliveryBankId(bot)) ? 2.0 : 0.01;
             }
 
-            return 0.02;
+            // NOT A DELIVERY POINT AT ALL, AND 0.02 IS NOT THE SAME AS NEVER.
+            //
+            // Fifty-seven of this graph's sixty-five destinations are neither a forge nor a bank,
+            // and 0.02 apiece aggregates to 1.14 against the nearest staffed bench's 20.0 - a
+            // 5.4% chance per roll that a miner with a pack full of ore sets off for a tavern.
+            // Thirty-two of those fifty-seven are shops, where the 0.8 handoff then commits it to
+            // a two-to-six minute shopping visit with the ore still on its back: 2.4% per roll of
+            // the errand being abandoned outright rather than merely detoured.
+            //
+            // The intent was always "effectively never" - the header says hauling is a different
+            // errand from living in the town - and a small weight times a large number of
+            // candidates is not "effectively never", it is a slow leak. Zero is what was meant.
+            // It cannot strand a bot: four forges and four banks are always positive, and the
+            // caller reads any value >= 0 as a haul weight, so this stays distinct from the -1.0
+            // that means "not hauling, use the ordinary table".
+            return 0.0;
+        }
+
+        /// <summary>
+        /// The nearest station of this trade, staffed or not, by the destination's own tile.
+        ///
+        /// The sibling of NearestStaffedStationId, for the case where nobody is at any bench. That
+        /// one walks the live crafters because staffing is a fact about bots; this walks the graph,
+        /// because with nobody working there is no bot to ask and the question is only about where
+        /// the benches are.
+        /// </summary>
+        private static string NearestStationId(PlayerBot bot, CrafterProfile profile)
+        {
+            if (bot == null || profile == null)
+            {
+                return null;
+            }
+
+            return NearestId(bot, Nav.Destinations(bot.Map, profile.StationType, profile.StationTag));
+        }
+
+        /// <summary>The nearest bank, for a haul that has no bench to go to.</summary>
+        private static string NearestDeliveryBankId(PlayerBot bot)
+        {
+            return bot == null ? null : NearestId(bot, Nav.Destinations(bot.Map, "bank", null));
+        }
+
+        /// <summary>
+        /// Nearest by Chebyshev, skipping anything the work-site validator threw out.
+        ///
+        /// Straight line rather than walked road, deliberately and for NearestStaffedStationId's
+        /// reason: this decides between benches that are tens of tiles apart and ones that are a
+        /// thousand, and an A* per candidate per roll would cost far more than the answer is worth.
+        /// </summary>
+        private static string NearestId(PlayerBot bot, List<NavDestination> among)
+        {
+            string nearest = null;
+            int best = Int32.MaxValue;
+
+            for (int i = 0; among != null && i < among.Count; i++)
+            {
+                NavDestination candidate = among[i];
+
+                if (candidate == null || BotWorkSites.IsExcluded(candidate.Id))
+                {
+                    continue;
+                }
+
+                int distance = Math.Max(
+                    Math.Abs(candidate.Location.X - bot.X),
+                    Math.Abs(candidate.Location.Y - bot.Y));
+
+                if (distance < best)
+                {
+                    best = distance;
+                    nearest = candidate.Id;
+                }
+            }
+
+            return nearest;
         }
 
         /// <summary>

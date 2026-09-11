@@ -600,6 +600,105 @@ rolls like anybody else. A Trinsic-home Miner sees two mines, both Britain's, an
 Trinsic-home Smith sees `trinsic-forge` at 8 × 2.5 and mostly works at home. `Bots.Population`
 counts those residents (`no station at home:`) as a report, not a rule.
 
+### Trinsic's bank weighed what Britain's did, and the hand-over failed three runs in five
+
+**No commit broke the hand-over.** The work probe was reported failing — *"the miner is still
+carrying its load - it never reached a delivery point... miner ended as Traveler, 37 units mined"* —
+and the first job was to find the regression. There is not one:
+
+- All three suspects (the gatherer dismount/re-mount, the `CheckIdle` pin, the Shopper seed) are
+  **ancestors of the commit whose own message records the chain passing**, hand-over included.
+- Of the six commits since, exactly one touches `Scripts/Custom/Bots/` at all, and it touches the
+  measurement profile, `[BotPace` and `BotSession` — nothing on the delivery path.
+- It **passes on that build**, twice: standalone, and the full chain reading *"Bot smoke chain
+  complete"* with 43 mined and 25 delivered.
+
+It is a standing intermittent defect, and running the probe five times says how intermittent:
+**three failures in five**, every one of them Sean's message verbatim.
+
+| work probe, one boot per run | PASS | FAIL |
+| --- | --- | --- |
+| before | 2 | **3** |
+| after, non-nearest at 0.1 | 4 | 1 |
+| after, non-nearest at 0.01 | **6** | **0** |
+
+#### What was actually wrong
+
+`HaulWeightFor` has four branches and the nearest-bench rule was written into one of them. That rule
+exists because of a measured failure — *"a miner that filled its pack at `brit-mine-north` walked 255
+tiles to `britain-forge` past `brit-forge` 36 tiles away, both staffed, both weighing the same"* — and
+the fix, nearest staffed bench 20.0 against any other staffed bench 0.5, went into the **staffed**
+branch only. The unstaffed-station branch (9.0), the bank branch (2.0) and the everything-else branch
+(0.02) kept no distance term.
+
+**A forge survived that, and a bank did not.** `BotWorkSites.IsWorkType` returns true for `forge`, so
+a forge candidate already went through `DistanceFactor` *and* the route check. **A bank is not a work
+type**, so neither ever touched one. With nobody at a bench — which is where the unstaffed branch
+lives — every bank on the facet weighed a flat 2.0:
+
+| from `brit-mine-north` (1449,1521) | tiles | walking at 0.4 s/tile | weight, before |
+| --- | --- | --- | --- |
+| `brit-bank` | 169 | ~67 s | 2.00 |
+| `brit-bank-east` | 202 | ~80 s | 2.00 |
+| `trinsic-bank-2` | 1167 | ~466 s | **2.00** |
+| `trinsic-bank` | 1307 | **~522 s** | **2.00** |
+
+The probe leaves about 300 seconds after the shift ends. A haul that rolled a Trinsic bank was
+**structurally unable to arrive**, and it is a quarter of the bank weight. Home bias makes it worse
+rather than better: a Trinsic-resident miner multiplies its home town's bank by 2.5 and sets off
+across the map with the ore.
+
+**And 0.02 is not the same as never.** Fifty-seven of this graph's sixty-five destinations are
+neither a forge nor a bank. At 0.02 apiece they aggregate to **1.14 against the nearest staffed
+bench's 20.0 — 5.4% per roll**, in the *normal* staffed case, that a miner with a pack full of ore
+sets off for a tavern. Thirty-two of the fifty-seven are shops, where the 0.8 handoff then commits it
+to a two-to-six minute shopping visit with the ore still on its back. The intent was always
+"effectively never" — the method's own header says hauling is a different errand from living in the
+town — and a small weight times a large number of candidates is not "effectively never", it is a slow
+leak.
+
+#### The fix is one sentence in all four branches: while hauling, the errand is the delivery
+
+- A non-delivery destination weighs **0**, not 0.02. It cannot strand a bot — four forges and four
+  banks are always positive — and the caller reads any value `>= 0` as a haul weight, so zero stays
+  distinct from the `-1.0` that means "not hauling, use the ordinary table".
+- An unstaffed station and a bank both get the nearest rule the staffed branch already had.
+- Non-nearest gets **0.01** where the staffed branch uses 0.5, and the asymmetry is the point:
+  another *staffed* bench is a real second choice because somebody is there working, while another
+  *empty* forge is just a further-away version of the empty one nearby. It also keeps the 2.5 home
+  bias from lifting a far one back over a near one. **0.01 was measured, not picked** - see below.
+  It is not zero because the nearest bench could be excluded or unroutable, and a laden bot with no
+  positive candidate anywhere would have nothing to walk to at all: an escape hatch, not an option.
+
+**And a handoff no longer commits a bot that is still carrying.** `TryDeliver` runs before the
+handoff roll and clears `HaulPending` whenever it reaches a delivery point, so a flag still set there
+means the hand-over did **not** happen — most often because the bot settled a tile outside the
+arrival's apron, which the stand-tile sweep and the walker's free-tile shift both do. The roll would
+then commit it to the place anyway: a forge is 0.95, so a laden miner that stopped one tile short of
+the anvil had a nineteen-in-twenty chance of becoming a Crafter with the ore still in its pack — and
+`BotSession` refuses to log out a bot that is hauling, so it would carry it until something else
+moved it.
+
+#### The roll is in the log now, and was not
+
+`LogChoice` filtered to **work sites** — a mine or a lumber camp. A laden gatherer rolls forges and
+banks, so the one decision that ends an errand logged nothing at all, and "where did the ore go" could
+only be answered by guessing. It now reports a haul roll, on the console as well as in the event log,
+because a haul that goes to the wrong town is diagnosed from a probe run's console days later and
+`botlog.json` only exists while the live map is on. One line per completed shift:
+
+```
+Ivor is hauling to 'brit-forge', 34 tile(s) away: brit-bank w0.05, *brit-forge w8.15 80t,
+brit-forge-south w0.29 337t, brit-forge-south-2 w0.30 324t, trinsic-bank w0.02, trinsic-forge w0.03
+```
+
+**What the arithmetic does not do is predict three-in-five.** The terms above explain the failure
+*mode* and each is worth removing on its own, but they do not add up to the observed rate, so the
+fix is carried by the measurement rather than by the model. The likeliest remaining ingredient is a
+race the probe has with itself — whether its smith has clocked in by the time the 120-second shift
+ends, which decides whether the roll takes the staffed branch or the unstaffed one — and the haul log
+is now what would settle that on the next failure rather than another afternoon.
+
 ### An empty bench weighs what the bank weighs
 
 Upstream's haul roll gives *every* station of the right trade 9.0 against the bank's 2.0 and never

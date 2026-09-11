@@ -473,6 +473,27 @@ namespace Server.Custom
             // would otherwise send it away still carrying the ore.
             BotWorkDelivery.TryDeliver(bot, destination);
 
+            // AND IF THE LOAD IS STILL ON ITS BACK, THE ERRAND IS NOT OVER.
+            //
+            // TryDeliver clears HaulPending whenever it reaches a delivery point, so a flag still
+            // set here means the hand-over did NOT happen - most often because the bot settled a
+            // tile outside the arrival's apron, which the stand-tile sweep and the walker's own
+            // free-tile shift both do. The handoff roll would then commit it to the place anyway:
+            // a forge is 0.95, so a laden miner that stopped one tile short of the anvil had a
+            // nineteen-in-twenty chance of becoming a Crafter with the ore still in its pack, and
+            // BotSession refuses to log out a bot that is hauling, so it would carry it until
+            // something else moved it.
+            //
+            // Declining keeps it a Traveler, which re-rolls - now heavily toward the nearest
+            // delivery point, with the just-left discount steering it to the next one. Reasoned
+            // rather than measured ON ITS OWN: the repeat probe runs measure it together with the
+            // weight fix that made a non-delivery destination unreachable in the first place, and
+            // the weight fix is the half the numbers can be attributed to.
+            if (bot.HaulPending)
+            {
+                return false;
+            }
+
             string type = destination.Type;
 
             // A bot at its own station is not a passer-by, and the per-type number is wrong for
