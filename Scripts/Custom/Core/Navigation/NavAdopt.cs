@@ -550,8 +550,15 @@ namespace Server.Custom
                             continue;
                         }
 
-                        NavWaypoint ours = NavigationSystem.Graph.Nearest(
-                            new Point3D(outside.X, outside.Y, outside.Z), Map, JoinReach);
+                        // BY WALKED ROAD, NOT BY STRAIGHT LINE, which is the mistake the merge rule
+                        // at PlanMerges already learned and this one kept making. Nearest() is
+                        // pure Chebyshev with Z and walls ignored, and it is what put a
+                        // thirty-three tile road on brit-tan-1's four-tile join - eighteen of the
+                        // twenty highest-detour edges on the graph were joins. NearestByRoad
+                        // shortlists by line and then floods, and falls back to exactly this
+                        // waypoint when nothing floods, so it can only improve on the old answer.
+                        NavWaypoint ours = NavRejoin.NearestByRoad(
+                            Map, new Point3D(outside.X, outside.Y, outside.Z), JoinReach);
 
                         if (ours == null)
                         {
@@ -2102,6 +2109,15 @@ namespace Server.Custom
                     {
                         continue;
                     }
+
+                    // THE ROAD RULE, APPLIED ONCE RATHER THAN PER CANDIDATE. The scan above is
+                    // choosing two things at once - which waypoint of the stranded piece to join
+                    // FROM, and which of ours to join TO - over a piece that can hold hundreds, so
+                    // flooding inside it would cost a flood per piece-waypoint per candidate. The
+                    // cheap Chebyshev pass settles the first question and this re-asks only the
+                    // second, for the winner: one extra shortlist, six floods.
+                    ours = NavRejoin.NearestByRoad(
+                        Map, new Point3D(mine.X, mine.Y, mine.Z), JoinReach) ?? ours;
 
                     Pending.Add(new PendingEdge
                     {

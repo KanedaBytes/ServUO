@@ -718,6 +718,42 @@ namespace Server.Custom
                 // LoopQueue passes and reports progress through Data/Live/nav-adopt.json. The ack
                 // saying "started" is the honest answer to a request that cannot complete inside
                 // a poll.
+                // Re-pick every join in a region by WALKED road length instead of straight line.
+                // Body is a region, "x,y,width,height", like nav-adopt's. It proposes edges only -
+                // no waypoint is created, moved, renamed or deleted - and writes to the SAME
+                // proposal file, so accept-adopt.js accepts it with no change at all.
+                case "nav-rejoin":
+                {
+                    Rectangle2D rejoinRegion;
+
+                    if (!TryParseRegion(body, out rejoinRegion))
+                    {
+                        message = "nav-rejoin needs a region: 'x,y,width,height'";
+                        return false;
+                    }
+
+                    NavRejoinResult rejoin;
+
+                    if (!NavRejoin.TryRun(Map.Trammel, rejoinRegion, out rejoin, out error))
+                    {
+                        message = error;
+                        return false;
+                    }
+
+                    warnings = NavRejoin.Describe(rejoin);
+
+                    if (!NavRejoin.TryWrite(Map.Trammel, rejoin, out error))
+                    {
+                        message = error;
+                        return false;
+                    }
+
+                    message = rejoin.Summary + " Proposal at " + NavAdopt.ProposalPath
+                        + "; accept it with tools/editor/accept-adopt.js.";
+
+                    return true;
+                }
+
                 case "nav-adopt":
                 {
                     string[] parts = (body ?? "").Split(
@@ -1106,6 +1142,44 @@ namespace Server.Custom
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// "x,y,width,height" out of a token body, ignoring the bridge's '#nonce' and any words.
+        ///
+        /// Shared by nav-rejoin and nav-adopt so the two cannot drift on what a region looks like;
+        /// nav-adopt keeps its own loop because it also reads the `rebase` word out of the same
+        /// pass and a second walk of the same words to find one flag would be the worse trade.
+        /// </summary>
+        private static bool TryParseRegion(string body, out Rectangle2D region)
+        {
+            region = default(Rectangle2D);
+
+            string[] parts = (body ?? "").Split(
+                new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (parts[i].StartsWith("#"))
+                {
+                    continue;
+                }
+
+                string[] numbers = parts[i].Split(',');
+                int x, y, width, height;
+
+                if (numbers.Length == 4
+                    && Int32.TryParse(numbers[0], out x)
+                    && Int32.TryParse(numbers[1], out y)
+                    && Int32.TryParse(numbers[2], out width)
+                    && Int32.TryParse(numbers[3], out height))
+                {
+                    region = new Rectangle2D(x, y, width, height);
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void WriteAck(

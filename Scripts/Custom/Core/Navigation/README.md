@@ -1073,6 +1073,89 @@ the same `survivors()` rule, the same `unproject`, the same replicated validator
 run, the same `.bak` and atomic rename and reload token. Adopt still cannot write nav data; the
 proposal simply gained `removals`, `rewrites`, `relinks`, `removedEdges` and `withdrawn`.
 
+### A join is picked by walked road, not by straight line
+
+**The merge rule learned this and the join rule did not.** `NavAdopt.cs:1038` records it for the
+rebase merge in so many words — *"the waypoint that replaces it is four tiles away in a straight
+line and thirty-two by road, because the road goes round the building"* — and all four join sites
+kept picking their target with `NavGraph.Nearest`, which is pure Chebyshev: Z ignored, walls
+ignored. The evidence was sitting in the walk audit's own detour table: **eighteen of the twenty
+highest-detour edges on the graph were joins**, worst of them `brit-tan-1 ↔
+uo-road-to-britain-forge` at four tiles apart and thirty-three by road — a bot walking round three
+sides of a building on every trip.
+
+**Which end moves was settled by measurement, not preference.** A join is a pairing and either end
+could be re-picked:
+
+| | alternatives across the 38 joins |
+| --- | --- |
+| re-pick **our** end (keep their waypoint) | **17 joins have no other waypoint of ours within the hop cap at all**, and the two worst can only swap with each other — `brit-tan-1` and `brit-carp-2` are two doors on the same block, both thirty-odd tiles by road from the same street |
+| re-pick **their** end (keep ours) | **160**, and `brit-tan-1` alone has four |
+
+So our end is fixed, which is also the half that must not move: our records carry names, tags and
+positions somebody placed by eye.
+
+**`nav-rejoin` applies it to the graph we already have** — `NavRejoin.cs`, a token taking a region.
+It ranks every adopted waypoint within the hop cap, takes a **strictly** shorter road only,
+engine-verifies the winner both ways with `TryVerifyHopsBothWays`, and writes a proposal to the
+**same** `Data/Live/nav-adopt.json` that `tools/editor/accept-adopt.js` already accepts — same
+`survivors` rule, same replicated validator on a mandatory dry run, same `baseHash`, same `.bak`.
+It proposes **edges only**: no waypoint is created, moved, renamed or deleted, and `removals` and
+`rewrites` are structurally empty. `NavRejoin.NearestByRoad` is the rule itself, and `NavAdopt`'s
+own join sites now call it, so a future adopt does not repeat the mistake.
+
+#### The ruler was wrong first, and the aggregate hid it
+
+**The first version ranked by `NavCorridor.TryPath`, a breadth-first flood — and was graded on
+`MovementPath`.** They are not the same function: the flood is exhaustive and symmetric, the engine
+is greedy best-first with a 300-node budget and therefore **directional**. Ranking optimised one
+function and the walk audit reported the other, and in aggregate the flood looked like a fair proxy
+— 608 flood-tiles became 391 — **so nothing in the summary said anything was wrong.**
+
+Ranking by the engine's own route, both directions summed, is both more honest and about six times
+faster (0.4 s against 2.5 s for the same region), because a `MovementPath` costs roughly 0.15 ms
+and a flood roughly 22 ms. Both directions because a join is walked both ways and a one-way bargain
+is not one.
+
+#### And the ranker still does not predict the sweep, which is worth knowing rather than hiding
+
+`NavRejoin` scores `brit-tan-1 -> uo-rec-2-1` at **46 tiles both ways**. The walk audit then walks
+the same pair and reports **24 one way and 46 the other — 70**. Both are `MovementPath`; the
+difference is that the ranker probes with a **`Point3D`** and the sweep probes with the **mobile**,
+which is the first row of *What a clean audit does not tell you* met from a new direction.
+`FastAStarAlgorithm:92` sets `MoveImpl.AlwaysIgnoreDoors` and `IgnoreMovableImpassables` only when
+the caller is a `BaseCreature` — but that would make the Point3D answer *longer*, not shorter, so
+**it does not explain this and the cause is not yet established.** It is written down rather than
+guessed at.
+
+What that costs is honest to state: **`brit-tan-1`'s own join, the edge this whole rule was named
+after, is marginally worse by the sweep's measure — 33/33 = 66 before, 24/46 = 70 after** — while
+the graph as a whole is much better. The rule change is carried by the aggregate, not by its
+poster child, and the next person to improve this should make the ranker probe with a mobile.
+
+#### What it did to the graph
+
+Britain (`1385,1495 360x300`): **30 joins, 135 candidates, 126 pairs routed in 0.4 s — 20 improved,
+1286 engine tiles both ways becoming 794, 0 failures.** Waypoints, destinations, arrivals, zones
+and routes are byte-identical before and after; 20 edges were replaced by 20.
+
+Measured by a full `[WalkAudit`, 2508 walks before and 2510 after, **0 failures in both**:
+
+| | before | after |
+| --- | --- | --- |
+| **edges** at detour ≥ 2.0 | 33 of 2304 — **1.43%** | 11 of 2306 — **0.48%** |
+| edge mean ratio | 1.045 | **1.021** |
+| worst edge detour | 8.25 | **5.75** |
+| **arrivals** at detour ≥ 2.0 | 34 of 204 | 34 of 204 — unchanged, as it must be |
+| arrival mean ratio | 1.374 | 1.374 |
+
+The arrivals not moving at all is the check that this did what it said: only edges were touched.
+
+**One row reads worse by ratio while its walk gets shorter** — `brit-bake-1` 66 → 47 tiles at a
+detour of 5.50 → 6.71, because its straight line shrank from 12 to 7. That is *What the rebase did
+to them* met from the other side, and it is why the report prints walked tiles and the ratio side
+by side rather than the ratio alone.
+
 **But an edge reaching into that ground becomes a JOIN.** Skipping authored ground on its own
 guarantees the adopted region is an island - the road to Trinsic is exactly the edge whose Britain
 end was refused. So the endpoint inside the authored region is mapped to our nearest waypoint
