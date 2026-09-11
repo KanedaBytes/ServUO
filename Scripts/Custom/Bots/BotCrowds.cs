@@ -90,6 +90,22 @@ namespace Server.Custom
                     continue;
                 }
 
+                // A SHOPPER COUNTS TOO, and this branch was the other half of the pair the class
+                // header names. Nothing measurable moves today: bots.json's life.crowds holds only
+                // `bank: 3`, so FloorFor("shop") is 0 and no shop has a floor to be below. It is
+                // here because without it the count went WRONG at the moment a bot arrived - the
+                // Traveler branch below counts a bot routing to a shop and stops counting it the
+                // instant the visit behaviour takes over, so a shop with a floor would have read
+                // "nobody there" about a bot standing in the doorway. That is the same shape as the
+                // bank defect, and the cost of finding it the same way would be another window.
+                var shopper = bot.Behavior as ShopperBehavior;
+
+                if (shopper != null && Insensitive.Equals(shopper.DestinationId, destinationId))
+                {
+                    count++;
+                    continue;
+                }
+
                 var traveler = bot.Behavior as TravelerBehavior;
 
                 if (traveler != null

@@ -375,7 +375,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-alchemist/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-armorer</Name>
@@ -417,7 +417,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-armorer/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-baker</Name>
@@ -459,7 +459,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-baker/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-blacksmith</Name>
@@ -501,7 +501,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-blacksmith/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-bowyer</Name>
@@ -543,7 +543,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-bowyer/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-butcher</Name>
@@ -585,7 +585,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-butcher/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-healer</Name>
@@ -627,7 +627,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-healer/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-jeweler</Name>
@@ -669,7 +669,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-jeweler/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-mage</Name>
@@ -711,7 +711,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-mage/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-mage-east</Name>
@@ -753,7 +753,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-mage-east/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner</Name>
@@ -795,7 +795,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-provisioner/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner-east</Name>
@@ -837,7 +837,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-provisioner-east/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner-south</Name>
@@ -879,7 +879,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-provisioner-south/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-tanner</Name>
@@ -921,7 +921,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-tanner/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-tinker</Name>
@@ -963,7 +963,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-tinker/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-weaponer</Name>
@@ -1005,7 +1005,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-weaponer/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_shop_brit-shop-weaponer-east</Name>
@@ -1047,7 +1047,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/brit-shop-weaponer-east/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_britain_roam_brit-square_1</Name>
@@ -1425,7 +1425,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-alchemist/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner</Name>
@@ -1467,7 +1467,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-2</Name>
@@ -1509,7 +1509,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-2/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-3</Name>
@@ -1551,7 +1551,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-3/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-4</Name>
@@ -1593,7 +1593,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-4/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-5</Name>
@@ -1635,7 +1635,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-5/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-6</Name>
@@ -1677,7 +1677,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-6/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-provisioner-7</Name>
@@ -1719,7 +1719,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-provisioner-7/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-smith</Name>
@@ -1761,7 +1761,7 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-smith/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
   <Points>
     <Name>GG_BotPop_trinsic_shop_trinsic-shop-smith-2</Name>
@@ -1803,6 +1803,6 @@
     <IsGroup>False</IsGroup>
     <IsRunning>True</IsRunning>
     <IsHomeRangeRelative>False</IsHomeRangeRelative>
-    <Objects2>PlayerBot/Role/Lifecycle/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
+    <Objects2>PlayerBot/Role/Lifecycle/SeedStation/trinsic-shop-smith-2/Seed/Shopper:MX=1:SB=0:RT=0:TO=0:KL=0:RK=0:CA=1:DN=-1:DX=-1:SP=1:PR=-1</Objects2>
   </Points>
 </Spawns>

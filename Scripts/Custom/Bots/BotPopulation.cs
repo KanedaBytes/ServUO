@@ -378,6 +378,16 @@ namespace Server.Custom
                         continue;
                     }
 
+                    // THE STATION IS THE SHOP, and it was null here for the same reason the bank
+                    // slot's was: nothing forwarded it, so nothing emitted it. A Shopper browses
+                    // BETWEEN a shop's arrival points and needs the shop's id to know which points
+                    // those are; without it the bot stood on the arrival SpawnPoint chose (Spread
+                    // is 0, so that is arrival #0 exactly) for its whole visit.
+                    //
+                    // Home stays null, unlike the bank slot's. A shop slot is Lifecycle, and
+                    // "A fixture's home town is its station's town" is a rule about FIXED roles
+                    // only - a lifecycle seed keeps its birth roll, because a traveller genuinely
+                    // should be from somewhere else and that is what makes the roads busy.
                     recipe.Slots.Add(Slot(
                         town,
                         BotPopulationConfig.RoleShop,
@@ -386,7 +396,7 @@ namespace Server.Custom
                         config.RoleFor(BotPopulationConfig.RoleShop),
                         null,
                         null,
-                        null,
+                        shop.Id,
                         1,
                         0));
 

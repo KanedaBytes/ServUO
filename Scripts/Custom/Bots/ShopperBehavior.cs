@@ -238,13 +238,30 @@ namespace Server.Custom
 
             IList<NavArrival> arrivals = destination.ArrivalList;
 
-            if (arrivals == null || arrivals.Count < 2)
+            if (arrivals == null || arrivals.Count < 1)
             {
-                // One spot, or none. There is nowhere else to stand, which is a fact about the
-                // data rather than a fault: browse in place.
+                // No spot at all. There is nowhere to stand, which is a fact about the data
+                // rather than a fault: browse in place.
                 Pause();
                 return;
             }
+
+            // ONE SPOT IS STILL A BROWSE, and this gate used to be `< 2`, which pinned half the
+            // shops on the facet. Sixteen of the thirty-two shop destinations have exactly one
+            // arrival, so once the seed started setting DestinationId at all those bots would have
+            // gone straight back to standing still - the same symptom, arrived at one step later.
+            //
+            // Nav.TryPickArrival scatters: NavArrivals.Scatter offsets by Custom.NavArrivalScatter
+            // (2) around the chosen arrival and validates the candidate for standing, so a
+            // single-arrival shop browses a 5x5 box rather than a pair of tiles. None of the
+            // sixteen is `exact` or `exclusive`, which are the two flags that suppress the scatter,
+            // and NavArrivals.Eligible only drops an arrival when it is BOTH exclusive and
+            // occupied - so the pick can never fall through to the destination CENTRE, which for a
+            // shop is as likely to be a counter as a floor.
+            //
+            // Roughly a third of picks land within one tile and are dropped by the already-there
+            // guard below; those simply pause again, which is a shopper pausing rather than a
+            // shopper stuck.
 
             Point3D spot;
             int range;

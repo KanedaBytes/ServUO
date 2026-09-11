@@ -854,6 +854,20 @@ namespace Server.Custom
                 {
                     sitter.DestinationId = _seedStation;
                 }
+
+                // AND A SHOPPER, which was the fourth and the last. The bank fix above named the
+                // rule and this is the other half of the same defect: a seeded Shopper reached
+                // ShopperBehavior.MoveToAnotherSpot with a null DestinationId, which is the first
+                // thing that method tests, so it paused and re-paused for its whole visit and the
+                // bot never left the tile BotPopulation.SpawnPoint put it on - arrival #0 of its
+                // shop, because the shop slot's Spread is 0. Measured as two of the walk audit's
+                // short-of-goal arrivals: a fixture standing on the tile another walk was aiming at.
+                var shopper = brain as ShopperBehavior;
+
+                if (shopper != null)
+                {
+                    shopper.DestinationId = _seedStation;
+                }
             }
 
             SetBehavior(brain, "spawner seed");
