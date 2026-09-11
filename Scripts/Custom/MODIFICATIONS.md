@@ -226,7 +226,8 @@ If upstream ever changes `Persistence.Serialize` to truncate, this deviation can
 | `Config/Server.cfg` | Shard name, and port `2594` (committed upstream of this work) |
 | `Config/DataPath.cfg` | Client data path (committed upstream of this work) |
 | `Config/Custom.cfg` | New config file, scope `Custom`. Auto-discovered at boot; no registration needed |
-| `LICENSE-BOTS` | New file. `Scripts/Custom/Bots/` is a derived work of `Klein187/uo-offline` (GPL-3.0), so it carries its own licence notice. The repository's own `LICENSE` (GPL-2.0-or-later) is untouched |
+| `LICENSE-BOTS` | New file. `Scripts/Custom/Bots/` is a derived work of `Klein187/uo-offline` (GPL-3.0), so it carries its own licence notice. The repository's own `LICENSE` (GPLv2 text) is untouched |
+| `LICENSE-GPL3` | New file. The FSF's published `gpl-3.0.txt`, reproduced byte for byte (35,149 bytes, LF, SHA-256 `3972dc97…`) because GPL-3.0 s.4 requires a recipient to get the licence with the work, and `LICENSE-BOTS` said the text was reproduced while only linking to it. Pinned `text eol=lf` in `.gitattributes` so a checkout cannot change the bytes its own notice attests to |
 | `Scripts/Custom/Core/IsExternalInit.cs` | New file, not a modification. The net48 polyfill that lets `init` accessors compile; paired with entry 4 above |
 | `Spawns/Custom/trammel/GG_OldMarta.xml` | New custom spawn definition. Imported with `[GG_Reimport`; the `GG_` name prefix is the set handle |
 

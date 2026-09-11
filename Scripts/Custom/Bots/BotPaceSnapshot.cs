@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Derived from the PlayerBots system in Klein187/uo-offline (GPL-3.0).
+// This file is licensed under the GNU General Public License, version 3.
+// See LICENSE-BOTS at the repository root.
+// -----------------------------------------------------------------------------
+//
 // BotPaceSnapshot.cs - [BotPace's answer, on disk, for a caller that has no Mobile.
 //
 // WHY THIS EXISTS

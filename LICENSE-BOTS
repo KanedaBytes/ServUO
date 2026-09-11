@@ -1,4 +1,4 @@
-Scripts/Custom/Bots/ — licensing notice
+Scripts/Custom/Bots/ - licensing notice
 =======================================
 
 The code under `Scripts/Custom/Bots/` is a derived work.
@@ -13,32 +13,79 @@ The code under `Scripts/Custom/Bots/` is a derived work.
                structure, tables and comments where they survived the move.
 
 Because the original is licensed under GPL-3.0, this derived work is also
-distributed under the **GNU General Public License, version 3**, and the full
-text of that license is reproduced below.
+distributed under the **GNU General Public License, version 3**.
 
-The rest of this repository descends from RunUO/ServUO and is licensed under the
-GNU General Public License, **version 2 or (at your option) any later version**
-(see ./LICENSE). GPL-2.0-or-later is upgrade-compatible with GPL-3.0, so the two
-combine lawfully; the combined work is distributed under GPL-3.0.
+WHERE THE LICENCE TEXT IS
+-------------------------
 
-This notice is a statement of provenance and license, not legal advice.
-
---------------------------------------------------------------------------------
-
-                    GNU GENERAL PUBLIC LICENSE
-                       Version 3, 29 June 2007
-
- Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
- Everyone is permitted to copy and distribute verbatim copies
- of this license document, but changing it is not allowed.
-
-The full text of the GNU General Public License version 3 is available at:
+The complete, unmodified text of the GNU General Public License version 3 is in
+the file `LICENSE-GPL3` beside this one. It is the canonical text as published
+by the Free Software Foundation at
 
     https://www.gnu.org/licenses/gpl-3.0.txt
 
-and is reproduced in full in the upstream project this code derives from:
+reproduced byte for byte: 35,149 bytes, LF line endings,
+SHA-256 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+(retrieved 11 September 2026). GPL-3.0 section 4 requires that anyone who
+receives a copy of this work receives a copy of the licence with it, so the
+text is carried here rather than linked.
 
-    https://github.com/Klein187/uo-offline/blob/main/LICENSE
+This paragraph replaces an earlier one that said the full text was "reproduced
+below" and then printed a link and the standard notice instead. The obligation
+is to ship the text; a link is not the text.
+
+WHAT THE UPSTREAM PROJECT'S OWN FILES SAY
+-----------------------------------------
+
+Stated precisely, because the two halves are easy to conflate:
+
+  * uo-offline's **root `LICENSE` is the MIT License** (Copyright (c) 2026
+    Mike), and it covers **the installer** - the repository's own tooling. It
+    goes on to list the third-party software that installer downloads, each
+    retaining its own licence.
+
+  * uo-offline's **README places the PlayerBots system under GPL-3.0**: "The
+    PlayerBots system was built for this project. GPL-3.0."
+
+That MIT notice is not permission to relicense the bot system. The PlayerBots
+source is the part this directory derives from, and GPL-3.0 is what governs it.
+(An earlier version of this file said the reference repository's root LICENSE
+reproduced the GPLv3 text. It does not; it is MIT.)
+
+HOW THIS COMBINES WITH THE REST OF THE REPOSITORY
+-------------------------------------------------
+
+The rest of this repository descends from RunUO/ServUO. Its root `LICENSE` is
+the text of the GNU General Public License, **version 2**. Where the applicable
+grant for that inherited code is "version 2 or (at your option) any later
+version", it is upgrade-compatible with GPL-3.0 and the two combine lawfully,
+with the combined work distributed under GPL-3.0 - which is the FSF's own
+guidance (https://www.gnu.org/licenses/gpl-faq.en.html#AllCompatibility).
+
+Note what that turns on: an actual "or later" grant for the code in question,
+from its own headers or distribution terms - not the sample notice printed near
+the end of a generic licence text, which is an example for authors rather than a
+grant by anyone. This file does not certify the licensing of every inherited
+file or third-party dependency in this tree. Before distributing a combined
+build, retain the applicable grants, the full licence texts, pinned provenance
+for each component, and the corresponding-source and build information those
+licences require.
+
+THE FILES THEMSELVES
+--------------------
+
+Every `.cs` file under `Scripts/Custom/Bots/` carries a five-line header naming
+this notice. Translated work outside that directory names its provenance in the
+file it lives in - `Scripts/Custom/Core/Navigation/NavEdgeHealth.cs` and the
+seed-Z logic in `NavWalker.cs` are the two to know about - because a
+directory-level notice is an incomplete inventory when a translation crosses a
+directory boundary.
+
+This notice is a statement of provenance and license, not legal advice.
+
+                            -----
+
+The standard notice for a program licensed under GPL-3.0, as it applies here:
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by

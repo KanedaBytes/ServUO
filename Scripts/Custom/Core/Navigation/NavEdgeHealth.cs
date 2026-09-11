@@ -1,3 +1,11 @@
+// -----------------------------------------------------------------------------
+// A NAMED PORT of the PlayerBots system in Klein187/uo-offline (GPL-3.0): the file below says
+// which file and which lines. It is therefore licensed under the GNU General Public License,
+// version 3. See LICENSE-BOTS at the repository root - a directory-level notice is an
+// incomplete inventory when a translation crosses a directory boundary, so this one says so
+// where it lives rather than where its siblings live.
+// -----------------------------------------------------------------------------
+//
 // NavEdgeHealth.cs — decaying per-edge failure memory, so the fleet routes around a bad edge.
 //
 // A NAMED PORT of uo-offline's NavEdgeHealth (BotStuckTelemetry.cs:320-459), and its own summary

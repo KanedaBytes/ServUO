@@ -82,3 +82,11 @@ tools/**                             text eol=lf
 tools/**/*.png                       -text
 tools/**/*.jpg                       -text
 tools/**/*.ico                       -text
+
+# --- the licence text, byte for byte ---------------------------------------------------------
+#
+# LICENSE-GPL3 is the FSF's published gpl-3.0.txt, reproduced unmodified so that anyone who
+# receives this work receives the licence with it. LICENSE-BOTS pins its length and SHA-256, and
+# a checkout that rewrote its line endings would change both - so the file is what it is, LF.
+
+LICENSE-GPL3                         text eol=lf

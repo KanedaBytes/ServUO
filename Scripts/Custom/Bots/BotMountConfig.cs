@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Derived from the PlayerBots system in Klein187/uo-offline (GPL-3.0).
+// This file is licensed under the GNU General Public License, version 3.
+// See LICENSE-BOTS at the repository root.
+// -----------------------------------------------------------------------------
+//
 // BotMountConfig.cs - who owns a horse, and who stays on it.
 //
 // WHAT IS UPSTREAM'S AND WHAT IS OURS, because the two halves of this file have different

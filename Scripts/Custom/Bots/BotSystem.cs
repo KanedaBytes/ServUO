@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Derived from the PlayerBots system in Klein187/uo-offline (GPL-3.0).
+// This file is licensed under the GNU General Public License, version 3.
+// See LICENSE-BOTS at the repository root.
+// -----------------------------------------------------------------------------
+
 using System;
 using System.Collections.Generic;
 using System.Text;

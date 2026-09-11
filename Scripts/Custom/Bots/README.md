@@ -2,10 +2,14 @@
 
 > **Licence.** The code in this folder is a derived work of the PlayerBots system in
 > [`Klein187/uo-offline`](https://github.com/Klein187/uo-offline), **Copyright (C) Klein187**,
-> licensed under the **GNU General Public License, version 3**. It is therefore distributed under
-> GPL-3.0, and every file here carries that notice. See [`LICENSE-BOTS`](../../../LICENSE-BOTS) at
-> the repository root. The rest of this repository is GPL-2.0-or-later (RunUO/ServUO lineage),
-> which combines lawfully with GPL-3.0; the combined work is GPL-3.0. Provenance, not legal advice.
+> licensed under the **GNU General Public License, version 3** — the upstream README's own words,
+> not its root `LICENSE`, which is MIT and covers that repository's installer. It is therefore
+> distributed under GPL-3.0, and every `.cs` file here carries that notice: all 62 of them, which
+> was 44 of 62 until the licensing pass in 7e. See [`LICENSE-BOTS`](../../../LICENSE-BOTS) at the
+> repository root, with the full licence text beside it in
+> [`LICENSE-GPL3`](../../../LICENSE-GPL3). The rest of this repository descends from RunUO/ServUO
+> under GPLv2, and where the applicable grant is "or any later version" that combines lawfully
+> with GPL-3.0; the combined work is GPL-3.0. Provenance, not legal advice.
 
 Fake players: a `PlayerBot` with a class, a skill tier, a personality, a name, a speech colour and
 an outfit. Config is `Data/Custom/bots.json`; namespace `Server.Custom`.

@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Derived from the PlayerBots system in Klein187/uo-offline (GPL-3.0).
+// This file is licensed under the GNU General Public License, version 3.
+// See LICENSE-BOTS at the repository root.
+// -----------------------------------------------------------------------------
+//
 // BotStepCensus.cs - how much an idle bot actually moves, and what moved it.
 //
 // WHY THIS EXISTS
