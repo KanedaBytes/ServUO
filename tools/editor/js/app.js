@@ -1394,6 +1394,35 @@ function fillBotDetail(host, bot) {
     kind.className = 'kind';
     kind.textContent = [bot.class, bot.tier, bot.behavior].filter(Boolean).join(' / ');
 
+    // FURNITURE OR A SESSION, and only the furniture is badged.
+    //
+    // Lifecycle is the default and about two bots in three are one, so badging both would say
+    // nothing; the fixture is the exception worth marking. It is also the answer to the question
+    // the panel most often provokes - a bank sitter that has stood in one place for three hours
+    // reads as a stuck bot until you know it is the garrison. `[BotInfo` says the same thing in
+    // words a click away.
+    if (bot.role === 'Fixed') {
+        const badge = document.createElement('span');
+
+        badge.className = 'role-badge';
+        badge.textContent = 'fixed';
+        badge.title = 'A fixture: never rolls a new behaviour, never logs out, and is not counted '
+            + 'toward the population curve. It holds this behaviour until its spawner replaces it.';
+        kind.append(' ', badge);
+    }
+
+    // And how long this visit has left, when it is a visit at all. Absent means there is no
+    // window - a Traveler, an Idle, or any fixture - which is a different fact from nought left.
+    if (typeof bot.visitLeft === 'number') {
+        const visit = document.createElement('span');
+
+        visit.className = 'muted';
+        visit.textContent = ` ${Math.max(0, bot.visitLeft)}s left`;
+        visit.title = 'Seconds remaining on this visit before the bot hands its brain back to a '
+            + 'Traveler.';
+        kind.append(visit);
+    }
+
     const status = document.createElement('div');
 
     status.className = 'muted';

@@ -384,6 +384,15 @@ namespace Server.Custom
             builder.Append(",\"class\":").Append(Json.Quote(BotClassHelper.DisplayName(bot.TradeClass)));
             builder.Append(",\"tier\":").Append(Json.Quote(bot.SkillTier.ToString()));
 
+            // FURNITURE OR A SESSION, which nothing outside the process could tell.
+            //
+            // A bank crowd is three FIXED sitters that never roll, never log out and never count
+            // toward the curve, standing beside lifecycle bots doing the visibly same thing - and
+            // the snapshot said "BankSitter" about both. The editor cannot badge what it cannot
+            // see, and a sample of entities.json cannot tell a fixture legitimately sitting for
+            // ever from a lifecycle bot whose visit stopped expiring.
+            builder.Append(",\"role\":").Append(Json.Quote(bot.Role.ToString()));
+
             // How fast it is actually moving, and on what. Both are otherwise unobservable from
             // outside the process: "is that bot running?" could only be answered by timing it
             // across two snapshots, which a town jam or a bend in the road makes a lie.
@@ -407,6 +416,25 @@ namespace Server.Custom
                 if (!String.IsNullOrEmpty(behaviour.CurrentDestinationId))
                 {
                     builder.Append(",\"dest\":").Append(Json.Quote(behaviour.CurrentDestinationId));
+                }
+
+                // SECONDS LEFT ON THE VISIT, and ABSENT when there is no visit to run out.
+                //
+                // A BankSitter or a Shopper reached by arriving somewhere carries a 2-6 minute
+                // window; a Traveler, an Idle and every FIXTURE carry none, and those are different
+                // facts from "nought seconds left". Absent rather than null for the reason the two
+                // instruments beside it are absent - `dest` and `stuck` are omitted rather than
+                // emitted empty, and a reader that has to tell "no window" from "expired" wants the
+                // key missing rather than a zero it has to interpret.
+                //
+                // Negative is a real and interesting answer: it means a window lapsed and the
+                // behaviour did not hand the brain back, which is the one thing a sample of this
+                // file can catch that no probe currently asks about.
+                if (behaviour.VisitExpiresAt != null)
+                {
+                    builder.Append(",\"visitLeft\":").Append(
+                        (int)Math.Round(
+                            (behaviour.VisitExpiresAt.Value - CustomTime.Now).TotalSeconds));
                 }
 
                 NavWalker walker = behaviour.Walker;

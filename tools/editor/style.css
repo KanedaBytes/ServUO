@@ -744,3 +744,18 @@ body:has(#bot-card.dragging) { user-select: none; }
 /* The cursor says which mode the click is in, because the checkbox is in a panel that may be
    scrolled out of sight by the time somebody clicks the map. */
 #map.inspecting { cursor: help; }
+
+/* A fixture, in the bot list and on the card. The exception is what gets a badge: Lifecycle is
+   the default and about two bots in three are one, so marking both would say nothing. */
+.role-badge {
+    display: inline-block;
+    padding: 0 4px;
+    border: 1px solid #4a5568;
+    border-radius: 3px;
+    font-size: 9px;
+    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #9fb3c8;
+    vertical-align: middle;
+}

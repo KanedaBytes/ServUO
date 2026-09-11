@@ -209,3 +209,23 @@ test('every bot behaviour the shard registers has a colour', () => {
         );
     }
 });
+
+test('every bot role the shard defines is one the panel knows how to draw', () => {
+    // The BEHAVIOR_COLORS rule, applied to the other enum the Bots panel renders. A role added on
+    // the shard and forgotten here would draw as no badge at all - which is exactly what a
+    // Lifecycle bot draws, so a third role would be silently indistinguishable from the default.
+    const app = fs.readFileSync(path.join(JS_DIR, 'app.js'), 'utf8');
+    const roles = fs.readFileSync(
+        path.join(EDITOR_ROOT, '..', '..', 'Scripts', 'Custom', 'Bots', 'BotRole.cs'), 'utf8');
+
+    // `Lifecycle = 0,` / `Fixed = 1` - the enum members, not the words in the prose above them.
+    const names = [...roles.matchAll(/^\s{8}([A-Z][A-Za-z]*)\s*=\s*\d/gm)].map((m) => m[1]);
+
+    assert.deepStrictEqual(names, ['Lifecycle', 'Fixed'],
+        'BotRole changed; the panel and this test both need to know which role is the exception');
+
+    // Only the exception is badged, so the assertion is that the badged one is named in app.js
+    // and that nothing else has quietly become a role the panel ignores.
+    assert.match(app, /bot\.role === 'Fixed'/,
+        'the Bots panel no longer badges the Fixed role');
+});

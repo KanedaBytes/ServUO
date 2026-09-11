@@ -487,6 +487,17 @@ namespace Server.Custom
                 BotSkillTierHelper.DisplayName(bot.SkillTier),
                 bot.HomeTown ?? "-"));
 
+            // WHICH OF THE TWO KINDS OF BOT THIS IS, which the report never said.
+            //
+            // It is the difference the whole population layer turns on and it explains most of what
+            // the rest of this report shows: a fixture never rolls, never logs out, never counts
+            // toward the curve, and holds its behaviour until its spawner replaces it. Without the
+            // line, a bank sitter that has stood in the same place for three hours reads as a bot
+            // that is stuck.
+            lines.Add(bot.LifecycleExempt
+                ? "Role: Fixed - furniture. Never rolled, never logged out, never counted."
+                : "Role: Lifecycle - has a session, rolls behaviours, logs out.");
+
             if (bot.Class == BotClass.Crafter)
             {
                 // The legacy one-class-many-subtypes shape. Without this the report says only
@@ -608,7 +619,14 @@ namespace Server.Custom
             }
 
             // --- personality and the phase clock ---------------------------------------------
-            lines.Add(bot.Personality.ToString());
+            // A FIXTURE HAS A ROLLED PERSONALITY AND NOTHING EVER READS IT, so printing the numbers
+            // invites somebody to expect them to do something. BotLifecycle.Pass exits on
+            // LifecycleExempt before it looks at a single tendency, and the phase duration below is
+            // the threshold it would have compared against.
+            lines.Add(bot.LifecycleExempt
+                ? "Personality: rolled but never read - a fixture does not roll behaviours. "
+                    + bot.Personality
+                : bot.Personality.ToString());
 
             if (behaviour != null && bot.Personality.IsAssigned)
             {
@@ -624,7 +642,29 @@ namespace Server.Custom
                 // as a display glitch and is in fact the symptom of a bot the lifecycle will
                 // overwrite on its next pass. Naming it is the difference between shrugging at a
                 // silly number and finding the bug.
-                if (bot.PhaseClockUnset)
+                // A FIXTURE FIRST, BECAUSE ITS CLOCK IS STALE ON PURPOSE AND THE OTHER BRANCHES
+                // BOTH DESCRIBE IT WRONGLY.
+                //
+                // A fixture gets no visit window - ApplySeed skips it on Role, deliberately, since
+                // a window that lapses hands the brain back to a Traveler and would walk the bank
+                // crowd out of the bank - so it fell to the phase branch below, which reports a
+                // clock BotLifecycle stopped reading the moment it saw LifecycleExempt. Its
+                // PhaseStartedAt is stamped once at the seed and never advanced again, so every
+                // fixture eventually reads "Xs of Xs elapsed, 0s left" for ever, where X is
+                // whatever AveragePhaseDuration happened to roll at construction. That is a
+                // countdown to nothing, on a bot that is behaving exactly as designed.
+                //
+                // It must also come before PhaseClockUnset, which would call it "permanently
+                // overdue and the lifecycle will roll it on its next pass" - true of the arithmetic
+                // and false of the bot, which is the one thing the lifecycle will never do to it.
+                if (bot.LifecycleExempt)
+                {
+                    lines.Add(String.Format(
+                        "Phase {0}: permanent - a fixture holds its behaviour until its spawner "
+                        + "replaces it. No visit window, and the phase clock is not read.",
+                        behaviour.SerializableName));
+                }
+                else if (bot.PhaseClockUnset)
                 {
                     lines.Add(String.Format(
                         "Phase {0}: CLOCK UNSET - this bot is permanently overdue and the "

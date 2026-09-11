@@ -767,6 +767,81 @@ The result line names the window and the route that set it, so an adopt that len
 shows up in `[CoreSmoke` rather than as a slower chain nobody can explain. The work probe puts its
 smith at the forge nearest the mine by road and asserts that the ore reached **that** smith.
 
+### A fixture reads as a fixture, and the clock it was shown is one nothing reads
+
+`[BotInfo` on a bank sitter read **"Phase BankSitter: 30s of 30s elapsed, 0s left"**, and the bot
+never did anything but talk. Both halves are the report's fault rather than the bot's.
+
+**A fixture is behaving exactly as designed.** A `BankSitterBehavior` fixture is pinned with
+`RangeHome 0`; its tick is check the visit, resettle if shoved, speak, or make an idle gesture. It is
+the garrison - three sitters at each of four banks, there at 05:00 as at 19:00.
+
+**But it fell into a branch that describes a different kind of bot.** `ApplySeed` deliberately gives
+a fixture no visit window (`PlayerBot.cs:829`), because a window that lapses hands the brain back to
+a Traveler and would walk the bank crowd out of the bank. With `VisitExpiresAt` null, `Describe` fell
+through to the **phase** branch - and `BotLifecycle.Pass` stops at `LifecycleExempt`
+(`BotLifecycle.cs:218`) *before* it ever reads or resets `PhaseStartedAt`. That clock is stamped once
+at the seed and never advanced again, so `elapsed` grows without bound, gets clamped to `phase`, and
+**every fixture eventually reads "Xs of Xs elapsed, 0s left" for ever** - where X is whatever
+`AveragePhaseDuration` rolled at construction, 30 to 180 minutes. A countdown to nothing.
+
+So the report says what is true instead:
+
+```
+Role: Fixed - furniture. Never rolled, never logged out, never counted.
+Personality: rolled but never read - a fixture does not roll behaviours. B=0.68 ... dur=86m
+Phase BankSitter: permanent - a fixture holds its behaviour until its spawner replaces it.
+                  No visit window, and the phase clock is not read.
+```
+
+against a lifecycle bot in the same place:
+
+```
+Role: Lifecycle - has a session, rolls behaviours, logs out.
+Phase Shopper: a timed visit, 153 second(s) left.
+```
+
+Three details. The fixture branch comes **first**, before `PhaseClockUnset`, which would otherwise
+call it *"permanently overdue and the lifecycle will roll it on its next pass"* - true of the
+arithmetic and false of the bot, since that is the one thing the lifecycle will never do to it. The
+**personality** line is qualified rather than removed, because a fixture does roll one and nothing
+ever reads it, and printing bare numbers invites somebody to expect them to do something. And
+**`Role:` is its own line** near the top, where the report otherwise says what a bot fundamentally
+is; without it, a sitter that has stood in one place for three hours reads as a bot that is stuck.
+
+#### The snapshot carries it too, because neither the editor nor a sample could tell
+
+`entities.json` said `"behavior": "BankSitter"` about a fixture and a lifecycle bot alike. It now
+carries **`role`**, and **`visitLeft`** - seconds remaining, and **absent** when there is no window
+at all, which is a different fact from nought left and is why the key is omitted rather than nulled,
+exactly as `dest` and `stuck` already are. A negative value is a real and interesting answer: it
+means a window lapsed and the behaviour did not hand the brain back.
+
+The Bots panel badges **`fixed`** and shows `Ns left` on a visit. Only the exception is badged:
+Lifecycle is the default and about two bots in three are one, so marking both would say nothing.
+`modules.test.js` pins the role vocabulary to `BotRole.cs`, the way it already pins
+`BEHAVIOR_COLORS` to `BotBehaviors.cs` - a third role added on the shard and forgotten here would
+draw no badge, which is precisely what `Lifecycle` draws.
+
+#### And then the question worth asking: does a LIFECYCLE visit still end?
+
+A lifecycle `BankSitter` or `Shopper` gets **2 to 6 minutes** (`BotBehaviors.cs:84-87`). Sampled from
+`entities.json` every two seconds for ten minutes, 299 samples, 57 bots, 21 of them fixtures:
+
+| role | behaviour | longest unbroken run | |
+| --- | --- | --- | --- |
+| Lifecycle | Shopper | **358 s** | inside the 360 s ceiling, and hard against it |
+| Lifecycle | BankSitter | **117 s** | |
+| Fixed | BankSitter | **600 s** | the whole sample - the control |
+
+- Samples where a lifecycle visit carried **no** `visitLeft`: **0**.
+- Serials whose `visitLeft` fell below -6 s: **none**.
+
+**No lifecycle bot sat past its window, and the fixture row is what makes that worth anything.** A
+sampler that could not see a sitter which never leaves would report "all clear" whether or not one
+existed; the fixture held its behaviour for all 600 seconds while the lifecycle bots turned over
+around it, so the measurement demonstrably can see the failure it did not find.
+
 ### A fixture's home town is its station's town
 
 Upstream rolls `HomeCity` in the constructor and never touches it again — its `ReinitializeAsClass`
