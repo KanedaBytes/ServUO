@@ -290,6 +290,17 @@ namespace Server.Custom
                 int pinned = 0;
 
                 // ---- 1. The bank crowd. Fixed, so it is there at 05:00 as at 19:00.
+                //
+                // AND IT NAMES ITS BANK, which it did not until the floor was measured. The station
+                // argument was null here and `SeedStation` only appears in the spawn string when it
+                // is set, so a fixed BankSitter reached BotCrowds.CountFor with no DestinationId and
+                // counted toward NO destination's floor. Twelve permanent sitters - four banks,
+                // three each - were invisible to the very census they exist to satisfy, so every
+                // bank on the facet read under its floor of 3 for ever and pulled at up to 4x
+                // against shops, taverns and inns that were not. The garrison itself was never
+                // missing: measured at exactly 3.00 standing at all four banks in 449 of 449
+                // samples. A station is the right field for it - a bank is where this bot is
+                // posted, exactly as a forge is where a Smith is posted.
                 foreach (NavDestination bank in InTown(Nav.Destinations(map, "bank", null), town))
                 {
                     recipe.Slots.Add(Slot(
@@ -300,7 +311,7 @@ namespace Server.Custom
                         config.RoleFor(BotPopulationConfig.RoleBank),
                         null,
                         town,
-                        null,
+                        bank.Id,
                         bankCrowd,
                         // A crowd wants room. Upstream's pinned bounds are 3 (GenerateBotsCommand
                         // .cs:306) and BankSitter re-homes itself with PickScatteredHome anyway,

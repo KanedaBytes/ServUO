@@ -841,6 +841,19 @@ namespace Server.Custom
                 {
                     gatherer.DestinationId = _seedStation;
                 }
+
+                // AND A BANK SITTER, which was the third and was missing. A seeded fixture reached
+                // BotCrowds.CountFor with a null DestinationId - the census matches on exactly that
+                // field, and BankSitterBehavior.DestinationId's own doc comment says "read by the
+                // crowd census" - so the twelve permanent sitters counted toward no floor at all and
+                // every bank read under its floor for ever. The garrison was there the whole time,
+                // measured at exactly 3.00 per bank across 449 samples; only the count was blind.
+                var sitter = brain as BankSitterBehavior;
+
+                if (sitter != null)
+                {
+                    sitter.DestinationId = _seedStation;
+                }
             }
 
             SetBehavior(brain, "spawner seed");
