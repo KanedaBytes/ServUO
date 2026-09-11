@@ -2,7 +2,9 @@
 
 A browser map editor for this shard's data, ported from the ModernUO shard's `ShardEditor`.
 
-Step 5a made every layer visible and overlaid live entities; 5b makes it editable. Spawners are 5c.
+Steps 5a to 5f: 5a made every layer visible and overlaid live entities, 5b made it editable, 5c
+added spawners, 5d the isometric art view and editing on it, 5e the left column and the create
+forms, and 5f the Admin section. All six are done.
 
 You can add, move and delete waypoints, destinations, arrivals and zones; link and unlink edges;
 author routes by clicking waypoints in order; and edit the daily-life config as a form. A save
@@ -16,6 +18,35 @@ node tools\editor\bridge.js        # then browse http://127.0.0.1:8081/
 The base map is radar by default. **Base map → Art** draws the real client art isometrically, with
 a floor slider; those tiles are rendered on demand rather than exported, because a facet-wide
 isometric render is 61 gigapixels per floor. See **The art view**.
+
+## Current contract
+
+What the editor and its bridge guarantee today, each with the condition that controls it. Much of
+the rest of this file is dated narrative. **Where the two disagree, this section is the one that has
+been re-checked**; see [History](#history) for the rule about which is which.
+
+- **Three security layers, each for a different attack**, and none of them is CORS: the bind
+  (`127.0.0.1` only), the `Host` check on **every** request including reads (the bind cannot see DNS
+  rebinding), and the write gate. See [Security](#security) for each.
+- **A mutating or invoking request must be same-origin by fetch metadata, or carry this run's
+  secret.** `same-site` and `none` are refused - two ports on one host are the same *site* and
+  different *origins* - and absent metadata is refused, which is what `curl` used to get away with.
+  Metadata beats the secret: a request claiming another origin is refused whatever else it carries.
+- **A read needs neither, and is free of DATA side effects rather than of work.** `/api/vocabulary`
+  can ask the shard for a fresh type list and the tile endpoints drive the renderer.
+- **The secret defends against a PAGE, not against a person at this keyboard.** 16 random bytes per
+  run, printed on the startup `Auth:` line, which anything with a terminal here can read.
+  `accept-adopt.js` and `repoint-arrivals.js` read `GG_BRIDGE_SECRET`.
+- **A save carries a hash of the bytes it started from**, so a stale tab cannot flatten what
+  `[NavRecord` just wrote. Restore does not yet require one (REVIEW.md, section 2).
+- **The writable set is a fixed table keyed by name, never a path from the caller.**
+- **One token per operation may be pending.** A publish while one is still on disk answers 409 -
+  the interim guard for F3, which is a request-identity problem and not a transport one.
+- **The Admin section exists** - eleven buttons, the console feed, and `RESTART` as the one thing
+  here that can leave the shard down. Every button runs without a client.
+- **Never validate a file under `js/` with `node --check`.** It passes ES modules containing syntax
+  errors. Run `node --test tools/editor/*.test.js`; this shipped a blank editor past 161 green tests
+  once already.
 
 ## Why a file bridge and not an API in the shard
 
@@ -339,8 +370,16 @@ both name the cap the hop broke.
 put a duplicate waypoint on top of `brit-gate-w` instead of linking to it, and forty-three
 waypoints and a mine hung off the graph as an island: every edge pathed, the audit was clean, and
 nothing could walk there. Reusing an existing waypoint at the ends is what prevents it, and
-`Nav.Data` now warns at load when any component other than the largest holds a destination or an
-arrival, naming its waypoints. `[NavAudit` repeats the finding.
+`Nav.Data` now warns at load when any component other than **the mainland** holds a destination or
+an arrival, naming its waypoints. `[NavAudit` repeats the finding.
+
+**The mainland is the ANCHOR's component, not the largest one** - `Custom.NavHomeWaypoint`, which is
+Britain's bank plaza because that is the one place this shard is certainly built around
+(`NavigationSystem.cs:684-690`). Largest is the fallback, for a graph that has named no anchor, and
+it was the original rule until an adopt disproved it by bringing in 481 waypoints against a town of
+fewer: the imported road network was bigger than the shard, so "largest" quietly renamed the
+mainland and every hand-authored destination in Britain became the island. Size is a property of the
+data; the anchor is a decision.
 
 **The waypoints are named after the road**, not after the zone they landed in: `<name>-WP-0001`
 upward in walk order, zero-padded to four so they sort as text the way they sort on the ground —
@@ -943,6 +982,8 @@ screenshot and no client, and it is the one that would have caught this.
 
 ### The pick map, and why the inverse stopped mattering
 
+*Landed 8 September 2026 (`0a119f47`). This is what made the art view editable.*
+
 **The isometric inverse is not a function.** A screen pixel names a world tile only once you assume
 a Z, so `isoToWorld` answers for the ground plane and is off by `z*4/44` tiles — about **2.7 tiles**
 where Britain stands, near z 30. That is why placing and dragging were refused here for two
@@ -1212,6 +1253,8 @@ deliberately over-long hop produced four warnings where this file produced three
 route also walks the closing leg from its last waypoint back to its first. That is now a test.
 
 ## What came from the ModernUO editor, and what did not
+
+*Written 5 September 2026 (`fdc19ef5`); a port inventory, not a capability list.*
 
 `view.js` came over unchanged. `shapes.js` and `tools.js` came over and were changed. `api.js` and
 `app.js` were rewritten, and `overlays.js` is still dead code waiting on a bridge route.
@@ -1616,6 +1659,8 @@ in `RequestPoller.cs`, so the browser half cannot ship without the shard half.
 
 ## Two panels that redraw on a timer, and what that cost the reader
 
+*Found and fixed 11 September 2026 (`811b4511`); the redraw rules it settled are in force.*
+
 The Bots card and the Admin console feed had the same fault from opposite ends: **a timer redraw
 destroying what the reader was in the middle of doing.**
 
@@ -1799,6 +1844,8 @@ would vanish is refused before it is written, naming the token that would have d
 
 ## Labels, measured
 
+*Measured 5 September 2026 (`3a7bf3a5`).*
+
 The thresholds are not guesses. At the default Britain view the old ones made **206 labels eligible
 and 39 fit** — collision then culled 81% in a priority order no viewer can perceive, which is what
 "the map is anonymous" actually described. Lowering thresholds makes that worse by adding
@@ -1931,6 +1978,33 @@ The nonce set has grown with the Admin section: `core-smoke`, `bot-smoke`, `bots
 reason from `livemap-on`'s — its body is the message every player is about to read, and appending
 `#a1b2c3d4` to that is not a thing to do. (`tile-probe` is safe to nonce because its parser skips
 any word that is not an `x,y` pair.)
+
+## History
+
+Dated findings, kept for their reasoning and marked where they stand, so that nothing in this file
+reads as a statement of current capability when it is the record of one that has changed.
+
+**What moves here, and what does not** - the same rule as `Scripts/Custom/Bots/README.md` and
+`Scripts/Custom/Core/Navigation/README.md`. A section moves when it narrates a defect that no longer
+exists *and* sits where a reader goes looking for current behaviour. A section that explains the
+shape of something still in force stays where it is with a date line, because moving it would
+separate it from the thing it explains. Nothing is shortened. Dates are the commit that landed the
+investigation, from `git log`.
+
+Dated in place:
+
+| Section | Dated | Commit |
+| --- | --- | --- |
+| [Two panels that redraw on a timer, and what that cost the reader](#two-panels-that-redraw-on-a-timer-and-what-that-cost-the-reader) | 11 Sep 2026 | `811b4511` |
+| [The pick map, and why the inverse stopped mattering](#the-pick-map-and-why-the-inverse-stopped-mattering) | 8 Sep 2026 | `0a119f47` |
+| [Labels, measured](#labels-measured) | 5 Sep 2026 | `3a7bf3a5` |
+| [What came from the ModernUO editor, and what did not](#what-came-from-the-modernuo-editor-and-what-did-not) | 5 Sep 2026 | `fdc19ef5` |
+
+**The art view was read-only for one session and is not any more.** `SHARD.md` carried that sentence
+until this pass; the pick map (above) is what retired it, because the isometric projection has no
+inverse and a screen pixel names a world tile only once you assume a Z - 2.7 tiles of error where
+Britain stands. The renderer answers per pixel instead, so selecting, placing and dragging all work
+on the art.
 
 ## The Admin section
 
