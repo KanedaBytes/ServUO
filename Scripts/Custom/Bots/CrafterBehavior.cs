@@ -174,7 +174,12 @@ namespace Server.Custom
             base.OnAttached(bot);
 
             // Working a forge or a loom, on foot.
-            BotMovement.Settle(bot);
+            // UPSTREAM NEVER DISMOUNTS A CRAFTER - its four dismount sites are death, deletion,
+            // a gatherer clocking in, and the Tamer's stables ritual - so a forge full of bots on
+            // foot was ours, not theirs. Crafting has no mounted check anywhere in stock; only
+            // mining does, and that is the Gatherer's clock-in, not this. So the disposition decides
+            // here too, and a Wealthy Master smith works the anvil from the saddle.
+            BotMovement.Settle(bot, mustDismount: false);
 
             _profile = CrafterProfiles.For(bot);
             _anchor = bot.Location;

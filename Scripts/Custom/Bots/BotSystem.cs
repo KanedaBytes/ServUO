@@ -69,6 +69,11 @@ namespace Server.Custom
 
         public static void Initialize()
         {
+            // A parked mount reaches the save file where a deleted one never could, so the boot has
+            // to clear the ones whose rider is already gone. See BotMovement.SweepStrayMounts for
+            // why this is a condition rather than a type test.
+            BotMovement.SweepStrayMounts();
+
             // Bind the crafting profiles to ServUO's CraftSystem singletons. It has to happen
             // here and not in a static constructor: CraftContext.Configure is what builds those
             // eleven singletons, and reaching for one earlier would construct a second, parallel

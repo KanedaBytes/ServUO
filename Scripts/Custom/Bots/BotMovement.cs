@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 using Server.Mobiles;
 
@@ -121,8 +122,15 @@ namespace Server.Custom
 
         /// <summary>
         /// The share of eligible bots that own a mount. uo-offline `PlayerBot.cs:751`.
+        ///
+        /// In `bots.json` `mounts.ownChance` since the disposition landed, because a mount roll and
+        /// a mount disposition are two dials on one thing and splitting them across a const and a
+        /// config file is how they drift. Still upstream's 70% by default.
         /// </summary>
-        public const double MountChance = 0.70;
+        public static double MountChance
+        {
+            get { return BotSystem.Store.Mounts.OwnChance; }
+        }
 
         /// <summary>
         /// Whether this class rides at all. uo-offline `PlayerBot.cs:749-750`.
@@ -252,26 +260,151 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Settle a bot where it has arrived: off the horse, down to a walk.
+        /// Settle a bot where it has arrived: down to a walk, and off the horse if it is the sort
+        /// that gets off.
         ///
-        /// OUR ADDITION, not upstream's. There a mount is only given up at the stables, on death,
-        /// or by a gatherer about to swing a pick; a BankSitter stands at the counter in the
-        /// saddle. On this shard that reads wrong for the same reason the arrival points do:
-        /// a mounted bot is a larger obstacle in a crowd that already jams, and a bank full of
-        /// horses is not what a bank looks like. Stabling is a delete rather than a stable record,
-        /// which is the same thing upstream's DismountAndDelete does.
+        /// WAS AN UNCONDITIONAL DISMOUNT, AND BOTH ANSWERS WERE WRONG. Upstream never dismounts on
+        /// arrival at all - its four dismount sites are death, deletion, a gatherer clocking in and
+        /// the Tamer's stables ritual - so its bank sitters sit in the saddle, which is what this
+        /// method was written to avoid: "a bank full of horses is not what a bank looks like". But
+        /// ours dismounted everybody AND DELETED THE HORSE, with nothing anywhere that re-mounts, so
+        /// the first bank visit put a bot on foot for its whole session. Measured over fifteen
+        /// minutes: 70% own a horse at birth, 7.1% of travelling bots still had one, and 0.0% were
+        /// mounted at arrival at every tier.
+        ///
+        /// So it is a disposition drawn at birth from tier and the Wealthy trait
+        /// (`BotMountConfig`), with a small per-arrival chance for the riders - and the dismount is
+        /// no longer destructive, so neither answer is permanent. A bank comes out mixed, which is
+        /// what a bank looked like.
+        ///
+        /// `mustDismount` is for the one case that is not a matter of taste: mining refuses a
+        /// mounted digger outright (`Mining.cs:500-502`).
         /// </summary>
-        public static void Settle(PlayerBot bot)
+        public static void Settle(PlayerBot bot, bool mustDismount)
         {
-            Dismount(bot);
+            if (bot == null || bot.Deleted)
+            {
+                return;
+            }
+
+            if (mustDismount || ShouldDismountOnArrival(bot))
+            {
+                Dismount(bot);
+            }
+
             SetPace(bot, BotPace.Walk);
         }
 
         /// <summary>
-        /// Takes a bot off its mount and removes the animal.
+        /// Does this bot get off here?
         ///
-        /// Deleted rather than released, which is what "stabled" means here: there is no stable
-        /// record to keep and a loose horse outside every bank is worse than no horse at all.
+        /// The disposition decides, and a rider rolls the small chance on top - which is affordable
+        /// only because the horse waits: with the old destructive dismount the same number was an
+        /// attrition rate and converged the whole fleet onto its feet.
+        ///
+        /// EXCEPT FOR A FIXTURE, WHICH GETS NO SUCH ROLL, and that is a correction rather than a
+        /// special case. `Remount` fires on departure, and a fixed-role bot never departs: it is
+        /// furniture, it holds one bench or one counter for the life of the shard. So for a fixture
+        /// the "small per-arrival chance" is not small and not per-arrival - it is a single coin
+        /// flip whose result is permanent, and measured over 351 bot-samples it had put all nine of
+        /// Britain's and Trinsic's staffed crafters on foot at once. The roll belongs to a VISIT,
+        /// and a fixture does not have visits; its disposition alone decides, which is the whole
+        /// point of the disposition being drawn at birth and persisted.
+        /// </summary>
+        private static bool ShouldDismountOnArrival(PlayerBot bot)
+        {
+            if (!bot.Mounted)
+            {
+                return false;
+            }
+
+            if (bot.MountDisposition == MountDisposition.Dismounts)
+            {
+                return true;
+            }
+
+            if (bot.LifecycleExempt)
+            {
+                return false;
+            }
+
+            return Utility.RandomDouble() < BotSystem.Store.Mounts.DismountOnArrivalChance;
+        }
+
+        /// <summary>
+        /// Back in the saddle before setting off, if this bot has a horse waiting.
+        ///
+        /// NOTHING IN THIS TREE EVER RE-MOUNTED, and nothing in upstream's does either - their
+        /// TryMountRandom is reachable only from the spawn roll and the Tamer's stables scene. That
+        /// was survivable for them because they never dismount on arrival; here it was the whole
+        /// defect. Called on departure, which is the moment a horse standing about becomes a horse
+        /// somebody wants.
+        /// </summary>
+        public static bool Remount(PlayerBot bot)
+        {
+            if (bot == null || bot.Deleted || bot.Mounted || bot.Map == null || bot.Map == Map.Internal)
+            {
+                return false;
+            }
+
+            BaseMount held = bot.HeldMount;
+
+            if (held == null || held.Deleted || held.Map != bot.Map)
+            {
+                bot.HeldMount = null;
+                return false;
+            }
+
+            try
+            {
+                held.ControlTarget = null;
+                held.Rider = bot;
+                bot.HeldMount = null;
+
+                // The same "run" is 200ms on foot and 100ms in the saddle; forgetting this leaves a
+                // mounted bot running at a walk. TryMount has the same line for the same reason.
+                SetPace(bot, CurrentPace(bot));
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "{0} could not be re-mounted.", bot.Name);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Takes a bot off its mount. THE ANIMAL IS NOT DESTROYED - it waits beside the bot.
+        ///
+        /// WAS A DELETE, and that was the defect: "there is no stable record to keep" is true, but
+        /// the conclusion does not follow, because a real player's horse simply stands where they
+        /// got off it. Upstream deletes too (`BotMountHelper.cs:105-132`) and can afford to, because
+        /// it never dismounts on arrival - the only things it destroys a horse for are a death, a
+        /// deletion, and a gatherer about to swing a pick.
+        ///
+        /// So the beast is parked instead, and three things make that safe rather than a litter of
+        /// loose horses:
+        ///
+        ///   IT IS MOVED OFF THE BOT'S OWN TILE. `BaseMount.Rider = null` puts the animal at the
+        ///   RIDER'S location (`BaseMount.cs:111-124`), and a creature sharing a bot's tile is a
+        ///   creature standing on an arrival point - the exact jam `PickScatteredHome` exists to
+        ///   avoid. It goes one tile off, the way `BotPackAnimals.SpawnFor` already places a beast.
+        ///
+        ///   IT IS CONTROLLED AND TOLD TO STAY. A riderless `BaseMount` is an uncontrolled tamable
+        ///   creature with its own AI: it would wander off from the bank it was left at, and
+        ///   `BaseCreature.OnMoveOver` refuses every uncontrolled creature's tile to a bot, so a
+        ///   loose horse is also a roadblock. Controlled, it holds its tile and pays the ordinary
+        ///   player rule instead.
+        ///
+        ///   IT IS HELD ON THE BOT, so `Remount` can find it and `OnDelete` can reap it. Transient,
+        ///   like `PackAnimal`, because both bot and beast are ephemeral across a restart - and
+        ///   `SweepStrayMounts` is what catches the pair a save froze mid-visit.
+        ///
+        /// An ethereal goes to the pack rather than standing anywhere, because that is what an
+        /// ethereal is. Nothing in this tree or upstream's gives a bot one today - upstream's own
+        /// ethereal branch is dead code - so this is that branch made real rather than left as a
+        /// comment, and it costs four lines.
         /// </summary>
         public static void Dismount(PlayerBot bot)
         {
@@ -279,6 +412,130 @@ namespace Server.Custom
             {
                 return;
             }
+
+            try
+            {
+                IMount mount = bot.Mount;
+
+                if (mount != null)
+                {
+                    var beast = mount as BaseMount;
+
+                    mount.Rider = null;
+
+                    if (beast == null)
+                    {
+                        // An ethereal IMount is an Item, not a creature. It goes in the pack.
+                        var item = mount as Item;
+
+                        if (item != null && !item.Deleted)
+                        {
+                            bot.AddToBackpack(item);
+                        }
+                    }
+                    else if (!beast.Deleted)
+                    {
+                        Park(bot, beast);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "{0} could not be dismounted.", bot.Name);
+            }
+
+            SetPace(bot, BotPace.Walk);
+        }
+
+        /// <summary>Stand the horse beside its rider and keep it there. See Dismount for why.</summary>
+        private static void Park(PlayerBot bot, BaseMount beast)
+        {
+            Map map = bot.Map;
+
+            if (map != null && map != Map.Internal)
+            {
+                Point3D beside = Beside(bot);
+
+                if (beside != bot.Location)
+                {
+                    beast.MoveToWorld(beside, map);
+                }
+            }
+
+            // Follower slots are the only way this fails and a bot has five (see BotPackAnimal). An
+            // unowned horse is worse than a bot that kept its saddle, so put the rider back if so.
+            if (!beast.SetControlMaster(bot))
+            {
+                try
+                {
+                    beast.Rider = bot;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "{0}'s mount could not be owned or re-ridden.", bot.Name);
+                    beast.Delete();
+                }
+
+                return;
+            }
+
+            beast.ControlTarget = null;
+            beast.ControlOrder = OrderType.Stay;
+
+            bot.HeldMount = beast;
+        }
+
+        /// <summary>
+        /// A free tile next to the bot, or the bot's own tile when the crowd leaves nothing.
+        ///
+        /// Eight neighbours rather than BotPackAnimals' fixed +1,+1: a bank counter is exactly where
+        /// one corner is a wall, and a horse dropped into a wall is a horse the engine puts somewhere
+        /// less sensible than the tile beside its owner.
+        /// </summary>
+        private static Point3D Beside(PlayerBot bot)
+        {
+            Map map = bot.Map;
+
+            if (map == null || map == Map.Internal)
+            {
+                return bot.Location;
+            }
+
+            int[] dx = { 1, 0, -1, 0, 1, 1, -1, -1 };
+            int[] dy = { 0, 1, 0, -1, 1, -1, 1, -1 };
+
+            for (int i = 0; i < dx.Length; i++)
+            {
+                int x = bot.X + dx[i];
+                int y = bot.Y + dy[i];
+                int z = NavWalker.ResolveZ(map, new Point3D(x, y, bot.Z));
+
+                if (map.CanFit(x, y, z, 16, false, false, true))
+                {
+                    return new Point3D(x, y, z);
+                }
+            }
+
+            return bot.Location;
+        }
+
+        /// <summary>
+        /// The horse goes with its rider. For death and deletion, where nothing is coming back.
+        ///
+        /// The destructive half, kept separate now that Dismount is not: a bot that has died or been
+        /// deleted leaves an orphan nothing owns and nothing reaps, whether it was in the saddle or
+        /// standing beside it.
+        /// </summary>
+        public static void ReleaseMount(PlayerBot bot)
+        {
+            if (bot == null)
+            {
+                return;
+            }
+
+            BaseMount held = bot.HeldMount;
+
+            bot.HeldMount = null;
 
             try
             {
@@ -298,10 +555,59 @@ namespace Server.Custom
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "{0} could not be dismounted.", bot.Name);
+                Log.Error(ex, "{0}'s mount could not be released.", bot.Name);
             }
 
-            SetPace(bot, BotPace.Walk);
+            if (held != null && !held.Deleted)
+            {
+                held.Delete();
+            }
+        }
+
+        /// <summary>
+        /// Delete every bot mount left over from a previous run, at Initialize.
+        ///
+        /// A parked mount is now A MOBILE IN THE SAVE - controlled, told to stay, and outliving the
+        /// boot - where before it was deleted the instant its rider got off. `BotPackAnimal` solved
+        /// the same problem by subclassing so `SweepStrays` had a type to look for; a mount is a
+        /// stock Horse, Llama or Ostard out of upstream's own pool, and subclassing five of them to
+        /// win a type test would be a great deal of boilerplate for one sweep. The condition is just
+        /// as specific: a BaseMount whose rider or master is a PlayerBot can only have come from
+        /// here, because nothing else on this shard mounts one.
+        ///
+        /// Justified World.Mobiles walk (CLAUDE.md section 15): once, at Initialize, and there is no
+        /// registry of mounts to consult - which is precisely what makes one a stray.
+        /// </summary>
+        public static void SweepStrayMounts()
+        {
+            var strays = new List<Mobile>();
+
+            foreach (Mobile mobile in World.Mobiles.Values)
+            {
+                var beast = mobile as BaseMount;
+
+                if (beast == null || beast.Deleted)
+                {
+                    continue;
+                }
+
+                if (beast.Rider is PlayerBot || beast.ControlMaster is PlayerBot)
+                {
+                    strays.Add(beast);
+                }
+            }
+
+            if (strays.Count == 0)
+            {
+                return;
+            }
+
+            foreach (Mobile stray in strays)
+            {
+                stray.Delete();
+            }
+
+            Log.Info("Swept {0} stray bot mount(s) left over from a previous run.", strays.Count);
         }
     }
 }

@@ -28,6 +28,10 @@ namespace Server.Custom
         [JsonProperty("population")]
         public BotPopulationConfig Population { get; set; }
 
+        /// <summary>Who owns a horse and who stays on it. See BotMountConfig.</summary>
+        [JsonProperty("mounts")]
+        public BotMountConfig Mounts { get; set; }
+
         [JsonConstructor]
         public BotStore()
         {
@@ -36,6 +40,7 @@ namespace Server.Custom
             Destinations = new BotDestinationConfig();
             Life = new BotLifeConfig();
             Population = new BotPopulationConfig();
+            Mounts = new BotMountConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -77,6 +82,13 @@ namespace Server.Custom
             }
 
             Population.Validate(errors);
+
+            if (Mounts == null)
+            {
+                Mounts = new BotMountConfig();
+            }
+
+            Mounts.Validate(errors);
         }
     }
 

@@ -450,12 +450,18 @@ namespace Server.Custom
             _nextSwing = Core.TickCount;
 
             // Mining refuses a mounted digger outright (Mining.cs:501), and a mounted bot plays no
-            // swing animation either. Something does mount a bot now, so this is load-bearing
-            // rather than a guard - and it removes the animal rather than only clearing the
-            // rider, which the old form left standing in the mine for ever.
+            // swing animation either. So this is the ONE arrival that dismounts whatever the bot's
+            // disposition says, and it passes mustDismount to say so out loud.
+            //
+            // The animal is no longer deleted, which reverses this comment's old reasoning - it used
+            // to say the delete was there because "the old form left standing in the mine for ever".
+            // What replaces that argument is ownership: the horse is control-mastered and told to
+            // stay, PlayerBot.OnDelete reaps it with the bot, and BotMovement.SweepStrayMounts
+            // catches any that outlive a restart. A miner's horse waiting at the rock face is what a
+            // player's horse does.
             //
             // Working is walking pace: shuffling along a rock face is not a journey.
-            BotMovement.Settle(bot);
+            BotMovement.Settle(bot, mustDismount: true);
 
             BotPackAnimals.SpawnFor(bot);
         }

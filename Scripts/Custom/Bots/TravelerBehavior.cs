@@ -373,10 +373,22 @@ namespace Server.Custom
 
             _state = TravelState.Walking;
 
+            // BACK ON THE HORSE BEFORE SETTING OFF, if one is waiting beside this bot.
+            //
+            // This comment used to say "no mount is granted here: getting one is a trip to the
+            // stables, not something that happens because it decided to go somewhere" - which is
+            // still true of GETTING a horse and was never true of getting back ON one. Nothing
+            // anywhere re-mounted: upstream can afford that because it never dismounts on arrival,
+            // while ours dismounted at every arrival and deleted the animal, so a bot was on foot
+            // from its first bank visit to the end of its session. Measured before this: 70% own a
+            // horse at birth, 7.1% of travelling bots still had one, 0.0% mounted at arrival.
+            //
+            // Before SetPace, because the pace depends on it: the same "run" is 200ms on foot and
+            // 100ms mounted, and re-mounting afterwards leaves a mounted bot running at a walk.
+            BotMovement.Remount(bot);
+
             // Run the long ones, walk the short ones - upstream's rule at
-            // TravelerBehavior.cs:1927, against its RunThresholdTiles of 25. No mount is granted
-            // here: a bot owns its horse from the moment it spawns, and getting one is a trip to
-            // the stables, not something that happens because it decided to go somewhere.
+            // TravelerBehavior.cs:1927, against its RunThresholdTiles of 25.
             BotMovement.SetPace(
                 bot,
                 BotMovement.PaceForRoute(route) );

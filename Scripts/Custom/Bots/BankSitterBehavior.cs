@@ -304,8 +304,11 @@ namespace Server.Custom
                 return;
             }
 
-            // Standing at a counter, not riding at one.
-            BotMovement.Settle(bot);
+            // Standing at a counter, or sitting one out in the saddle - the bot's own
+            // disposition decides, drawn at birth from its tier and the Wealthy trait. This used to
+            // be an unconditional dismount that also DELETED the horse, which is why a bank was
+            // uniformly on foot and why nobody was ever mounted again after their first visit.
+            BotMovement.Settle(bot, mustDismount: false);
 
             // Stand NEAR where it arrived, not exactly on it.
             //

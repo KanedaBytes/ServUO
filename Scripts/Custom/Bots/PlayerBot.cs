@@ -62,6 +62,18 @@ namespace Server.Custom
         [CommandProperty(AccessLevel.GameMaster)]
         public CrafterType CrafterSpec { get; set; }
 
+        /// <summary>
+        /// Whether this bot stays in the saddle where it stops.
+        ///
+        /// Rolled once at birth from its tier and its Wealthy trait and then never re-rolled, which
+        /// is the point: a bot that rides is a bot that rides every time you see it, where a
+        /// per-arrival coin flip would just be noise. The curve is in `bots.json` `mounts`, and
+        /// `BotMountConfig` records what is upstream's here and what is ours - ownership is theirs
+        /// verbatim, the disposition is ours, and they have no tier or wealth component at all.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public MountDisposition MountDisposition { get; set; }
+
         /// <summary>Inclination toward each behaviour. Read by BotLifecycle when a phase expires.</summary>
         public BotPersonality Personality { get; set; }
 
@@ -272,6 +284,16 @@ namespace Server.Custom
         public BaseCreature PackAnimal { get; set; }
 
         /// <summary>
+        /// The horse standing beside this bot while it is off it, or null. Transient.
+        ///
+        /// Not serialized, for `PackAnimal`'s reason: both bot and beast are ephemeral and the bot
+        /// deletes itself on load, so a persisted reference could only ever point at something
+        /// already gone. `BotMovement.SweepStrayMounts` is what handles the mount a save froze
+        /// mid-visit, since a parked mount - unlike the old deleted one - does reach the save file.
+        /// </summary>
+        public BaseMount HeldMount { get; set; }
+
+        /// <summary>
         /// True between noticing a party invitation and answering it. Transient, and deliberately
         /// a flag on the bot rather than a static table in BotParty: a deleted bot takes it with
         /// it, so there is nothing to leak or sweep.
@@ -380,6 +402,11 @@ namespace Server.Custom
             SkillTier = tier;
             CrafterSpec = CrafterTypeHelper.RollRandom();
             Personality = BotPersonality.RollRandom();
+
+            // AFTER Personality, and that order is load-bearing: the disposition reads the Wealthy
+            // trait, and rolling it first would have read a default-constructed personality with no
+            // traits at all - which fails silently, as a bot that simply never rides.
+            MountDisposition = BotSystem.Store.Mounts.Roll(SkillTier, Personality);
 
             // THE PHASE CLOCK STARTS NOW, and forgetting this was a real bug rather than a tidy-up.
             //
@@ -673,7 +700,10 @@ namespace Server.Custom
             // The mount does not survive its rider. Upstream dismounts in OnBeforeDeath
             // (PlayerBot.cs:779); ServUO has no such hook, so it happens here - after the corpse
             // is built, which is the only ordering difference.
-            BotMovement.Dismount(this);
+            //
+            // ReleaseMount, not Dismount: Dismount now PARKS the animal, and a horse standing
+            // patiently beside its rider's corpse waiting for an order is not the picture.
+            BotMovement.ReleaseMount(this);
 
             // Player=true mobiles ghost rather than vanish (Mobile.cs:4229), and there is no
             // death layer yet to haunt, walk to a healer and run back for the corpse. Delete on a
@@ -963,7 +993,10 @@ namespace Server.Custom
 
             // And so does the horse, for the same reason: a mount whose rider was deleted is an
             // orphan nothing owns and nothing reaps. Upstream does this at PlayerBot.cs:856.
-            BotMovement.Dismount(this);
+            //
+            // ReleaseMount, not Dismount: Dismount now PARKS the animal beside the bot, which is
+            // exactly the orphan this line exists to prevent. It covers the parked one too.
+            BotMovement.ReleaseMount(this);
 
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);
@@ -987,11 +1020,14 @@ namespace Server.Custom
         {
             base.Serialize(writer);
 
-            writer.Write(0); // version
+            writer.Write(1); // version
 
             writer.Write((byte)Class);
             writer.Write((byte)SkillTier);
             writer.Write((byte)CrafterSpec);
+
+            // v1. An enum as a byte, like the three above.
+            writer.Write((byte)MountDisposition);
 
             Personality.Write(writer);
 
@@ -1007,6 +1043,11 @@ namespace Server.Custom
             Class = (BotClass)reader.ReadByte();
             SkillTier = (BotSkillTier)reader.ReadByte();
             CrafterSpec = (CrafterType)reader.ReadByte();
+
+            if (version >= 1)
+            {
+                MountDisposition = (MountDisposition)reader.ReadByte();
+            }
 
             Personality = BotPersonality.Read(reader);
 

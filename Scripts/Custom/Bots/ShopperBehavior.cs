@@ -111,9 +111,9 @@ namespace Server.Custom
 
         public override void OnAttached(PlayerBot bot)
         {
-            // Upstream walks into shops rather than running (TravelerBehavior.cs:2038); a bot
-            // that rode in would be doing worse than running.
-            BotMovement.Settle(bot);
+            // Upstream walks into shops rather than running (TravelerBehavior.cs:2038), so the
+            // pace drops either way; whether the bot gets off to browse is its disposition.
+            BotMovement.Settle(bot, mustDismount: false);
 
             Pause();
         }

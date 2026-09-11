@@ -376,8 +376,13 @@ namespace Server.Custom
                 lines.Add(String.Format("  {0}", bot.Title));
             }
 
-            lines.Add(String.Format(
-                "Class: {0}   Tier: {1}   Home: {2}",
+            lines.Add(String.Format("Mount: {0}{1}",
+                bot.MountDisposition == MountDisposition.Rides ? "rides" : "dismounts on arrival",
+                bot.Mounted
+                    ? ", mounted"
+                    : (bot.HeldMount != null && !bot.HeldMount.Deleted ? ", horse waiting beside it" : ", on foot")));
+
+            lines.Add(String.Format("Class: {0}   Tier: {1}   Home: {2}",
                 BotClassHelper.DisplayName(bot.Class),
                 BotSkillTierHelper.DisplayName(bot.SkillTier),
                 bot.HomeTown ?? "-"));

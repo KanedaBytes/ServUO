@@ -300,27 +300,39 @@ further than `HomeRadius = 1` from its spot and otherwise not at all
 *"does NOT path anywhere... No movement = no wall-grinding"* (`ShopperBehavior.cs:1-14`). We had
 ported their texture faithfully and left the engine running underneath it.
 
-Measured with `[BotSteps`, idle steps per bot-minute, 61 bots - and the "before" column is also the
-argument for the fix, because one phase already had it. Before is a full 15-minute window;
-after is the first reading of the next one, and the full window is in the table further down:
+Measured with `[BotSteps`, idle steps per bot-minute, two full 15-minute windows of ~61 bots, same
+settings, `MeasurementProfile` off - and the "before" column is also the argument for the fix,
+because one phase already had it:
 
 | phase | before | after | |
 | --- | --- | --- | --- |
 | Crafter | **0.00** | **0.00** | already pinned with `RangeHome 0` - the shape the others now copy, and unchanged by any of this |
 | Shopper | 20.35 | **0.00** | no `Home` at all, so the untethered `WalkRandom` branch (`BaseAI.cs:2516, :2542`) |
-| BankSitter | 25.97 | **2.97** | `RangeHome 2`, which is a licence to wander inside 2, not a tolerance |
-| Traveler (lingering) | 24.16 | **0.00** | also untethered, and the worst of the three in the first minute of the window |
+| BankSitter | 25.97 | **0.41** | `RangeHome 2`, which is a licence to wander inside 2, not a tolerance |
+| Traveler (lingering) | 24.16 | **0.00** | also untethered, and the worst of the three |
 
-Whole window: **101,546 steps**, of which 89,096 were a Traveler walking a route and **11,925 were
-idle** - 3,167 BankSitter wander, 2,711 BankSitter drift-back, 4,838 Shopper and 1,209 lingering
-Traveler.
+**11,925 idle steps become 108** - a 99.1% cut. Before: 101,546 steps total, of which 89,096 were a
+Traveler walking a route and the rest were 3,167 BankSitter wander, 2,711 BankSitter drift-back,
+4,838 Shopper and 1,209 lingering Traveler. After: 62 and 46.
 
 **The BankSitter does not go to zero, and should not.** Its residual is the settle itself:
-`PickScatteredHome` puts `Home` up to four tiles off the arrival, the engine walks the bot there
-once per visit, and `DoMoveImpl`'s `SuccessAutoTurn` (`BaseAI.cs:2483-2496`) steps round an obstacle
-in a direction that is not toward `Home` - which the census correctly calls `wander` because it
-cannot know better. Twelve such steps against five clean drift-backs in the first reading. That is
-traffic on the way to a chosen spot, not fidgeting at one.
+`PickScatteredHome` puts `Home` up to four tiles off the arrival, the engine walks the bot there once
+per visit, and `DoMoveImpl`'s `SuccessAutoTurn` (`BaseAI.cs:2483-2496`) steps round an obstacle in a
+direction that is not toward `Home` - which the census correctly calls `wander` because it cannot know
+better. That is traffic on the way to a chosen spot, not fidgeting at one. (A two-minute reading of
+the same window said 2.97, because every bot in it had just arrived and the settle walks had nothing
+to average against. Short windows over-report this number.)
+
+**Two side effects, both measured, neither expected.** The wander was not only ugly, it was in the
+way:
+
+- **Walk failures fell and walks rose.** 1.11 per 100 walks over 452 walks became **0.18 over 562** -
+  more walking done, less of it failing, with no change to the graph or the walker. A bot shuffling
+  off its arrival tile is a bot standing where the next arrival is aiming.
+- **The bank crowds filled up.** `brit-bank` went from 0.91 bots standing to **1.94**, `brit-bank-east`
+  from 0.45 to **1.63**, and the share of samples under the floor of 3 from 98% to 39%. Which means
+  the standing-crowd shortfall was partly a SYMPTOM of the fidget rather than a weighting problem -
+  worth knowing before anybody raises `life.crowds.bank`.
 
 The lever is **`PlayerBot.CheckIdle`**, not `DoActionWander`: `CheckIdle` is the one thing
 `DoActionWander` asks before it wanders and nothing else consults it, so overriding it leaves
@@ -925,7 +937,10 @@ Selected upstream at `CustomBots/Behaviors/TravelerBehavior.cs:3228-3238`, and h
   25 (`TravelerBehavior.cs:1803,1918-1927`).
 - **Most bots own a horse.** A 70% roll at spawn, excluding Fishermen and gatherers
   (`PlayerBot.cs:743-753`). Class only - there is **no tier component upstream**, and none was
-  invented here.
+  invented for OWNERSHIP here either; the number moved to `bots.json` `mounts.ownChance` and is
+  still 70%. A tier and trait component was invented for the **disposition** - whether a bot that
+  owns one stays on it where it stops - which is a different question upstream does not ask,
+  because it never dismounts on arrival at all. See the disposition bullet below.
 - **The mount pool and its weighting.** Horse four times, then the three ostards and a llama
   (`BotMountHelper.cs:28-43`); 75% keep their coat, 25% take a muted hue (`:50-54`); five attempts
   (`:66-100`). Pack beasts are absent - nobody rides one.
@@ -954,11 +969,55 @@ Selected upstream at `CustomBots/Behaviors/TravelerBehavior.cs:3228-3238`, and h
   is now `Mobile.RunMount`, the fastest step the engine defines, and the per-walker `MoveTo` is
   gated on `BaseAI.NextMove` so ticking two and a half times as often does not run a
   `MovementPath` two and a half times as often.
-- **Bots settle at a bank, a station and a shop.** `BotMovement.Settle` dismounts and drops to a
-  walk. Upstream gives a mount up only at the stables, on death, or before swinging a pick, so its
-  BankSitters stand at the counter mounted. Here that reads wrong for the reason the arrival points
-  already do: a mounted bot is a bigger obstacle in a crowd that jams, and a bank full of horses is
-  not what a bank looks like.
+- **Who gets off is a disposition, drawn at birth.** This bullet used to say that
+  `BotMovement.Settle` dismounts and drops to a walk, full stop, with upstream's "only at the
+  stables, on death, or before swinging a pick" as the thing we deviated from and "a bank full of
+  horses is not what a bank looks like" as the reason. Both halves were right and the conclusion was
+  not, because **`Dismount` also deleted the horse and nothing anywhere re-mounted**: `TryMount` was
+  reachable only from the birth roll, so a bot's first arrival put it on foot for the rest of its
+  session. Measured over a fifteen-minute window of 61 bots: **70% own a horse at birth, 7.1% of
+  travelling bots still had one, and 0.0% were mounted at arrival at every single tier.** A bank full
+  of horses is not what a bank looks like; neither is a town where nobody owns one.
+
+  So three things changed together:
+
+  **Nothing is destroyed.** A dismounted mount is moved one tile off the bot's own tile,
+  control-mastered to it and told to `Stay`, held on `PlayerBot.HeldMount`, and re-mounted on
+  departure. `Rider = null` drops the animal on the *rider's* tile (`BaseMount.cs:111-124`), which
+  would put a creature on an arrival point - the jam `PickScatteredHome` exists to avoid - and a
+  riderless `BaseMount` left uncontrolled is a tamable creature with its own AI that wanders off and
+  blocks bots on the way (`BaseCreature.OnMoveOver` refuses every uncontrolled creature's tile). An
+  ethereal goes to the pack instead; nothing gives a bot one today, but upstream's dead branch is
+  live here. `BotMovement.ReleaseMount` is the destructive half, for death and deletion.
+
+  **The disposition is `MountDisposition`, rolled once at birth** from `tierFloor + tierSpan *
+  BotSkillTierHelper.Fraction(tier)` plus `wealthyBonus` - so a Novice rides 10% of the time and a
+  Grandmaster 85%, twenty points more if `Wealthy`. Riders still roll a small
+  `dismountOnArrivalChance` each arrival, which is affordable *only* because nothing is destroyed:
+  with the old delete the same number was an attrition rate, and 7.1% is what it converged on.
+  Persisted as a byte at `PlayerBot` version 1, beside `Class`, `SkillTier` and `CrafterSpec`.
+
+  **Ownership is still upstream's, verbatim** - a flat 70% at spawn, gated by class alone. **They
+  have no tier or wealth component and none in their data**: `BotMountHelper` never reads
+  `SkillTier` or `Gold`, and `playerbots/data/` carries no mount field at all. Their stables is not
+  an economy to translate either - the "stabled" horse is `Delete()`d and the "claimed" one created
+  fresh and free (`TravelerBehavior.cs:2411-2425`) - so there is no purchase to defer to 7f; a real
+  one belongs with seams 11 and 12, where the gold is. The numbers live in `bots.json` `mounts`.
+
+  **Where it applies, and the one place it does not.** BankSitter, Shopper and Crafter follow the
+  disposition; the Crafter does so *because* upstream never dismounts a crafter - crafting has no
+  mounted check anywhere in stock, so a forge full of bots on foot was ours and not theirs. The
+  **Gatherer always dismounts**, and passes `mustDismount: true` to say so: `Mining.cs:500-502`
+  refuses a mounted digger outright, which is not a matter of taste.
+
+  Two consequences worth knowing. A parked mount **reaches the save file**, where a deleted one never
+  could, so `BotMovement.SweepStrayMounts` clears them at `Initialize` - by condition (a `BaseMount`
+  whose rider or master is a `PlayerBot`) rather than by type, because a mount is a stock `Horse`,
+  `Llama` or `Ostard` out of upstream's own pool and subclassing five of them to win a type test is a
+  great deal of boilerplate for one sweep. And **a mounted body renders no human emote animation**,
+  so a mounted sitter's bank-box bend and the hawker's wave will not show: a mounted sitter's idle
+  texture is turns and speech. That is an argument for the disposition existing rather than for
+  everybody riding.
 
 **Verifying it.** The live snapshot carries `stepMs` and `mounted` per bot, and the editor's Bots
 panel reads them back as "running, mounted (100ms/step)". Both are otherwise unobservable from

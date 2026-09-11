@@ -246,7 +246,7 @@ checkpoint has shipped it as `True` once already.
 | `[GG_RestoreVendors` | Administrator | Undo the migration |
 | `[SpawnBot [class] [tier] [home:<town>]` | GameMaster | Spawn a bot at your feet; class, tier and home town roll when omitted (alias `[SpawnTestBot`) |
 | `[BotInfo` | GameMaster | Target a bot; dump its class, tier, stats and skills against the caps in force |
-| `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`) |
+| `[BotsReload` | GameMaster | Re-read `bots.json` and the player caps it defaults from (alias `[ReloadBots`). Also re-reads `life.idle` and `mounts`, which is the point of those two sections being data |
 | `[BotBehavior [name]` | GameMaster | Target a bot; report its brain, or switch it (`Idle`, `Traveler`) |
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
