@@ -7,12 +7,29 @@ namespace Server.Custom
     /*
      * The Britain shopkeepers daily life manages.
      *
-     * Each is a one-line subclass of its stock type, so all shop inventory, skills, speech and
-     * context menus are inherited untouched. They exist for exactly one reason: a stock
-     * BaseVendor cannot walk. VendorAI.TransformMoveDelay (VendorAI.cs:148) returns
-     * BaseVendor.GetMoveDelay verbatim - Utility.RandomMinMax(30, 120) SECONDS per step
-     * (BaseVendor.cs:74) - and there is no way to override that on an upstream instance.
-     * ForcedAI (BaseCreature.cs:3342) is the seam, and DailyLifeAI is what goes through it.
+     * Each subclasses its stock type, so all shop inventory, skills, speech and context menus are
+     * inherited untouched. They EXIST for exactly one reason: a stock BaseVendor cannot walk.
+     * VendorAI.TransformMoveDelay (VendorAI.cs:148) returns BaseVendor.GetMoveDelay verbatim -
+     * Utility.RandomMinMax(30, 120) SECONDS per step (BaseVendor.cs:74) - and there is no way to
+     * override that on an upstream instance. ForcedAI (BaseCreature.cs:3342) is the seam, and
+     * DailyLifeAI is what goes through it.
+     *
+     * THEY ARE NO LONGER ONE-LINE SUBCLASSES, which is what this comment called them for four
+     * sessions after it stopped being true (REVIEW.md section 11). Each now carries six overrides,
+     * and a reader who trusts the old description will not look for any of them:
+     *
+     *   ForcedAI            the original reason above
+     *   OnMoveOver          forwards to BotShove, so a bot walks through a shopkeeper as a player
+     *                       would - without this a shopkeeper walking home at dusk stopped dead at
+     *                       a bot standing in its doorway
+     *   CheckVendorAccess   greys buy and sell while the shops are shut (cosmetic; see CheckAccess)
+     *   OnAfterSpawn        registers on the live map and asks the schedule to reconcile
+     *   OnDelete            unregisters
+     *   Deserialize         re-registers, because OnAfterSpawn does not fire on load and these
+     *                       persist - without it the live map loses every shopkeeper on a restart
+     *
+     * The shared halves live in DailyLifeVendor below, because the six cannot share a base class:
+     * each derives from a different stock vendor.
      *
      * Only the types daily life actually touches are subclassed. Every other Britain vendor
      * stays stock.
