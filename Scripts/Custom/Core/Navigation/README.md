@@ -1,8 +1,10 @@
 # Custom/Core/Navigation
 
 The single source of truth for **where things are and how to get there**. Britain daily life
-(step 4b) uses it now; the PlayerBots system will use the same data later, which is why the
-schema is designed for bots rather than for daily life.
+(step 4b) and the PlayerBots layer (steps 6-11) both consume it: every bot journey is a
+`NavWalker` over this graph, `TravelerBehavior` picks its destinations out of it, the work sites
+are records in it, and the population recipe is read off it. The schema was designed for bots
+before they existed, which is why it fits them rather than daily life.
 
 Config lives in `Data/Custom/navigation.json`. Namespace is `Server.Custom` — flat, like
 everything else under `Custom/Core/` (a namespace segment called `Core` would shadow
@@ -38,6 +40,42 @@ Two more ServUO facts that shape the code:
   walker driven from its own `OnThink` freezes the moment nobody is watching. One shared timer
   drives every `NavWalker` instead.
 
+## Current contract
+
+What the navigation layer guarantees today, each claim with the condition that controls it. The
+rest of this file is largely dated measurement - how a rule was arrived at, and what the instruments
+read when it was. **Where the two disagree, this section is the one that has been re-checked**; see
+[History](#history) for the rule about which is which.
+
+- **Two consumers, not one future one**: Britain daily life and the bot layer, both through
+  `NavWalker`. No actor owns its own pathing.
+- **An authored hop may be at most `Custom.NavHopMaxTiles` (12) tiles**, because
+  `FastAStarAlgorithm` searches a 38x38 box and returns no path *silently* beyond it. A walker may
+  stop `NavWalker.ArrivalRangeFor` (2) tiles short and plan the next hop from there, so a new
+  subdivision cuts at `cap - ArrivalRangeFor` rather than at the cap. Existing edges were not
+  rewritten: 566 of the 1153 sit at exactly 12.
+- **Z resolution has four outcomes**, and a successful one may be a land Z - see the schema section.
+  A *failed* resolution is never committed as a correction, which is the whole promise
+  `[NavResampleZ` makes.
+- **A cached route is invalidated by edge health, not merely aged out.** `NavEdgeHealth` carries a
+  `Version` bumped by every strike, clear and expiry-that-drops-a-record; `NavGraph` stamps each
+  cached route with it and a mismatch clears the whole cache. `Custom.NavRouteCacheTtlSeconds` is
+  the backstop for anything that changes a cost without touching edge health. Before this, a struck
+  edge kept carrying traffic for as long as somebody kept the entry warm (REVIEW.md F4).
+- **The heuristic is admissible against one discounting tag, and no more.** An edge multiplies all
+  of its tags while the heuristic takes the cheapest one, and a gate edge is a flat cost for which
+  geographic distance is no lower bound at all. Neither case arises in the current data - **gate
+  routing is not active and no gate edge has ever been authored** - and both must be settled before
+  it is.
+- **The mainland is the ANCHOR's component**, `Custom.NavHomeWaypoint` (Britain's bank plaza), with
+  largest-component only as a fallback for a graph that has named no anchor. Largest was wrong, and
+  one adopt proved it by bringing in 481 waypoints against it.
+- **The graph, Trammel**: 1001 waypoints, 1153 walk edges, 65 destinations, 136 arrival points, 8
+  zones, 4 routes. `[NavAudit` paths every edge both ways against real map data in about half a
+  second warm; `full` adds the approach-tile cliff scan at about 9 s.
+- **The shove diagnostic is two predicates.** `NavWalkFailures.Describe` tests types in order and no
+  longer splits `Player` on the `NetState`, which used to file every link-dead player as a PlayerBot.
+
 ## Schema
 
 Four record types plus edges, cost tags and self-tests, all in one file. **Every record is flat
@@ -63,11 +101,28 @@ scalars, so a nested `"tags": [...]` would expand its record over eight lines.
 | `costTags` | Edge cost multipliers, applied as `distance × Π(multipliers)` |
 | `selfTests` | Canary route pairs, checked by `Nav.Data` |
 
-**`z` is mostly advisory.** A hop's goal Z is the authored Z when a mobile can actually stand
-there, and `map.GetAverageZ(x, y)` when it cannot — `NavWalker.ResolveZ`, which `[NavAudit` uses
-too so the two always agree. So a slightly wrong Z self-corrects, but an authored Z is what makes
-an upper floor or a raised entrance reachable at all, since `GetAverageZ` only sees land and
-would aim at the ground beneath it.
+**`z` is mostly advisory, and the resolver has four outcomes rather than two.** A hop's goal Z is
+`NavWalker.ResolveZ`, which `[NavAudit` and `[NavResampleZ` both use so that none of the three can
+disagree. `TryResolveZ` (`NavWalker.cs:2311-2375`) answers in this order:
+
+1. **The step windows** - a real standing surface within reach of the stored Z, which is the
+   ordinary case and the one a slightly stale authored Z self-corrects through.
+2. **A doorway**, at the authored Z first and then at `map.GetAverageZ(x, y)`. A closed door is an
+   `Impassable` item, so nothing stands in either window at a door tile; the hint comes first
+   because an upper-floor doorway authored at its own Z is right as authored.
+3. **The seed scan**, outward from the land surface to `SeedScanRange`, nearest first - uo-offline's
+   `Walkable.TryFindSeedZ`. This is what reaches a pier deck from a hint left under water. Upward
+   it stops a storey above the higher of hint and land (`SeedClimb`), but **only where the land is
+   ground**: a deck over water has no ground storey, and a ceiling measured from the river bed put
+   the Britain-Trinsic bridge out of reach of its own waypoint.
+4. **Failure**, with the land Z (or the hint, with no facet) left in the out value. `ResolveZ`
+   returns that number; `[NavResampleZ` and `NavAdopt.CorrectZ` refuse to commit it as a
+   correction, because a record nothing can place is in the wrong PLACE rather than at a stale Z.
+
+So an authored Z is still what makes an upper floor or a raised entrance reachable at all - steps 1
+and 2 both consult it first, and `GetAverageZ` alone sees land and would aim at the ground beneath
+the building. **Note that a successful answer may BE a land Z**: step 2's second branch returns
+exactly that.
 
 **Polygons, and the promised migration was free.** A zone may carry `"shape":"poly"` plus a
 `points` token list (`"1443,1508 1456,1512 …"`) alongside `x`/`y`/`width`/`height`. Absent `shape`
@@ -144,6 +199,8 @@ take it offline:
   it** (see below); a waypoint with no edges; a failing self-test.
 
 ## The last hop is the one nobody audited
+
+*Measured 9 September 2026 (`6dccdb6f`); the rule it settled is in force.*
 
 Every waypoint hop was authored against the engine and `[NavAudit` walks it in both directions.
 **The arrival is not.** `NavArrivals.TryPick` chooses a point, scatters it by
@@ -535,6 +592,9 @@ seven tiles from `uo-wp-990` and inside the hop cap. Unstandable arrivals: 20 ->
 
 ### What three measured windows say
 
+*Measured 9 September 2026 (`ac547257`). Windows A-C; window D below is annotated where its
+unshovable count was later found to be counting occupied tiles.*
+
 Same shard, same graph, sixty bots walking themselves. `[BotSendTo` needs a connected client, so
 nothing was steered in any of them.
 
@@ -773,31 +833,6 @@ gates the walk counters, the rung totals, the terminal ledger **and `NavEdgeHeal
 sweep that struck every edge it found hard would put a fifteen-minute cost multiplier on the
 fleet's routing, which is the audit rewriting what it was asked to measure. Verified: two 1450-walk
 sweeps left `walksStarted` at 252 and `walksCompleted` at 227, untouched.
-
-### The instrument was wrong three times before it was right
-
-Worth keeping, because every one of the three would have produced a confident, wrong report, and
-two of them were the *shard* being right and the *test* being wrong.
-
-1. **A seeded hop into a wall passed, correctly.** `brit-shop-tinker`'s old arrival at
-   `1421,1651` is a plaster wall twenty tall. As a `Walk` step it names no real waypoint, so
-   `ArrivalRangeFor` returns `DefaultArrivalRange` — **2** — and the probe stopping two tiles from
-   the wall *is* an arrival. Walking into a wall with two tiles of latitude is a goal you can meet
-   from outside the wall.
-2. **The same tile as a range-0 arrival passed too.** `TryShiftWithinArrival` retargeted onto
-   `1422,1651`, the standable pathable neighbour, exactly as last session built it to. With the
-   ladder and the arrival shift both running, very nearly nothing is impossible — so the seed has
-   to be a tile the shift has nowhere to shift *to*.
-3. **A 45-second deadline could not reach the top rung.** The ladder is five rungs twenty seconds
-   apart, so a walk that is going to give up needs a hundred seconds. Every hard failure came back
-   as `timeout` and named no cause at all. `cause` and `endedBy` are now two fields — what was
-   wrong with the goal, and how the walk ended — and the deadline is 120 s.
-
-`[WalkAudit selftest` is the standing version: one hop it **must** fail (`2072,2865`, the water
-under the Trinsic pier — `CanFit` false, `TryResolveZ` no, all eight neighbour steps refused) and
-one it **must** pass, and it prints `SELF-TEST OK` or `SELF-TEST BROKEN` rather than leaving a
-reader to invert the verdict themselves. It seeds the *work list*, never `navigation.json`, so
-there is no seed to remove and no window in which a road through a wall could be committed.
 
 ### The detour factor is the engine's route, not the probe's steps
 
@@ -1043,6 +1078,8 @@ quietly after every nav save. It runs from **`[NavAudit full`** and from **`[Wal
 
 ### What the five real cliffs turned out to be, and the fix
 
+*Measured 11 September 2026 (`5629b56d`); the fix it describes is in force.*
+
 After the reachability filter, **five pairs on four waypoints** survived: `uo-rec-1-s2` toward both
 `uo-rec-1` and `uo-brit-north-d-s1`, `uo-rec-4-2-s2` toward `uo-rec-4-2`, `uo-wp-194-s3` toward
 `uo-wp-204`, and `uo-wp-41-s1` toward `uo-wp-42`. Ten stranded tiles between them, every one
@@ -1140,6 +1177,9 @@ seam and a loaded gun in the same object.
 the blast radius first: every creature in the world paths through it.
 
 ## Adopting uo-offline's data
+
+*The sweep figures below were measured 7 September 2026 (`f62e2813`). The TOOL is current: see the
+note in [History](#history) for why this section is not filed there.*
 
 `Data/Custom/reference/uo-offline-nav.trammel.json` holds 3952 waypoints and 4291 edges converted
 from uo-offline (see that directory's README). `NavAdopt` proposes a region of it.
@@ -1364,7 +1404,9 @@ edges walked at adopt time and nothing else.
 
 ## Seed data, and what is still missing
 
-The whole file, Trammel: **996 waypoints, 1148 walk edges, 65 destinations, 8 zones, 4 routes.**
+The whole file, Trammel: **1001 waypoints, 1153 walk edges, 65 destinations, 136 arrival points, 8
+zones, 4 routes** - counted from `navigation.json` on 11 September 2026, when it read 996 and 1148
+here. Every edge is `kind: walk`; no gate edge has ever been authored.
 `[NavAudit` reports **0 blocked, 0 over-cap, 0 unstandable arrivals and 0 stale Z** — every edge has
 been pathed in both directions against real map data.
 
@@ -1412,6 +1454,59 @@ Known gaps, in the order worth fixing:
 4. **Arrival points are audited less strictly than edges** — `[NavAudit` checks edges, and the
    arrival picker validates a scattered tile with `CanSpawnMobile` at pick time, but an arrival
    point sitting in a wall will simply always scatter. `[NavDebug` is how you spot those.
+
+## History
+
+Dated findings, kept for their reasoning. They are here, or marked where they stand, so that nothing
+in this file reads as a statement of current behaviour when it is the record of one that has changed.
+
+**What moves here, and what does not.** A section moves when it narrates a defect that no longer
+exists *and* sits where a reader goes looking for current behaviour. A section that explains the
+shape of something still in force - an instrument, a tool, a rule - stays where it is and carries a
+date line instead, because moving it would separate it from the thing it explains. The same rule is
+written in `Scripts/Custom/Bots/README.md`. Both kinds are dated; neither is shortened. Dates are
+the commit that landed the investigation, from `git log`.
+
+Dated in place, each explaining something still in force:
+
+| Section | Dated | Commit |
+| --- | --- | --- |
+| [The last hop is the one nobody audited](#the-last-hop-is-the-one-nobody-audited) | 9 Sep 2026 | `6dccdb6f` |
+| [What three measured windows say](#what-three-measured-windows-say), and windows D and E below it | 9 Sep 2026 | `ac547257` |
+| [What the five real cliffs turned out to be, and the fix](#what-the-five-real-cliffs-turned-out-to-be-and-the-fix) | 11 Sep 2026 | `5629b56d` |
+| [Adopting uo-offline's data](#adopting-uo-offlines-data) and its sweep figures | 7 Sep 2026 | `f62e2813` |
+
+`NavAdopt` is deliberately NOT moved here even though its section is mostly measurement: it
+documents a tool that still runs, and its safety property - that there is no code path from it to
+`navigation.json` - is a current guarantee a reader needs where the tool is described.
+
+### The instrument was wrong three times before it was right
+
+*Found and fixed 10 September 2026 (`7e7f44a5`). The instrument it corrected is
+[`[WalkAudit`](#walkaudit---the-second-instrument).*
+
+Worth keeping, because every one of the three would have produced a confident, wrong report, and
+two of them were the *shard* being right and the *test* being wrong.
+
+1. **A seeded hop into a wall passed, correctly.** `brit-shop-tinker`'s old arrival at
+   `1421,1651` is a plaster wall twenty tall. As a `Walk` step it names no real waypoint, so
+   `ArrivalRangeFor` returns `DefaultArrivalRange` — **2** — and the probe stopping two tiles from
+   the wall *is* an arrival. Walking into a wall with two tiles of latitude is a goal you can meet
+   from outside the wall.
+2. **The same tile as a range-0 arrival passed too.** `TryShiftWithinArrival` retargeted onto
+   `1422,1651`, the standable pathable neighbour, exactly as last session built it to. With the
+   ladder and the arrival shift both running, very nearly nothing is impossible — so the seed has
+   to be a tile the shift has nowhere to shift *to*.
+3. **A 45-second deadline could not reach the top rung.** The ladder is five rungs twenty seconds
+   apart, so a walk that is going to give up needs a hundred seconds. Every hard failure came back
+   as `timeout` and named no cause at all. `cause` and `endedBy` are now two fields — what was
+   wrong with the goal, and how the walk ended — and the deadline is 120 s.
+
+`[WalkAudit selftest` is the standing version: one hop it **must** fail (`2072,2865`, the water
+under the Trinsic pier — `CanFit` false, `TryResolveZ` no, all eight neighbour steps refused) and
+one it **must** pass, and it prints `SELF-TEST OK` or `SELF-TEST BROKEN` rather than leaving a
+reader to invert the verdict themselves. It seeds the *work list*, never `navigation.json`, so
+there is no seed to remove and no window in which a road through a wall could be committed.
 
 ## Reference
 
