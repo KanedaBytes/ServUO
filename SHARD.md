@@ -111,7 +111,8 @@ Ported from the ModernUO shard, in this order:
 | 9 | PlayerBots, session 4: the chat corpus, ambient chatter, and a bot that answers to its name | **done** |
 | 10 | PlayerBots, session 5: work — gatherers, artisans, real harvest and real craft | **done** |
 | 11 | PlayerBots, session 6: the population — the recipe, `GG_BotPop.xml`, and the session curve | **done** |
-| 5e | The editor's left column: collapsible sections, a resizable column, the bot card, and create forms fed from the shard | **done** (the admin panel is 5f) |
+| 5e | The editor's left column: collapsible sections, a resizable column, the bot card, and create forms fed from the shard | **done** |
+| 5f | The editor's admin panel: save, restart, the long-running probes, broadcast, and the console feed | **done** |
 
 The bot layer is being ported in sessions, from the survey in `docs-src/uo-offline-port-survey.md`.
 Session 1 was identity — class, tier, skills, stats, name, speech hue, outfit. Session 2 made them
@@ -145,17 +146,25 @@ one thing the floor slider cannot express.
 
 Where a fresh session should start, in order:
 
-1. **`Scripts/Custom/Bots/README.md`**, its **Deviations from uo-offline** and **Severed seams**
-   sections first. Every place this port does something other than upstream is a row there, with
-   the reason; every place it stops short is a seam with the session that restores it. If a
-   behaviour looks wrong, check those two tables before reading code.
-2. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
+1. **`Scripts/Custom/Bots/README.md`** - its **Current contract** section first, then
+   **Deviations from uo-offline** and **Severed seams**. The contract is what is true today; every
+   place this port does something other than upstream is a row in Deviations, with the reason, and
+   every place it stops short is a seam with the session that restores it. If a behaviour looks
+   wrong, check the contract and those two tables before reading code - and note that everything
+   under **History** is a dated finding rather than a statement about now.
+2. **`REVIEW.md`**, the read-only architectural review of 11 September 2026. Required reading
+   before changing this layer: it is where the open defects are named and prioritised. F1 fixed,
+   **F2 reproduced and deliberately not fixed**, F3 interim only, F4 fixed; F5, F6, the save
+   acknowledgement and the full F3 request identity are scheduled before 7f. Its section 11 was
+   the documentation discrepancy list and is now closed.
+3. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
    source and `playerbots/data/` for data - see the table at the top of `CLAUDE.md` for the three
    trees that are *not* it, including the installed snapshot this line used to name. The rule for
    any design question is uo-offline's answer first, deviate only at a named seam.
-3. **`docs-src/uo-offline-port-survey.md`** for what has been ported and what the September 2026
-   upstream release changed under files not yet reached.
-4. **Run `[BotSmoke`** and read `[CoreSmoke`. Two synchronous probes run first - `Bots.Shove`,
+4. **`docs-src/uo-offline-port-survey.md`** for what has been ported and what the September 2026
+   upstream release changed under files not yet reached. Its §1 line counts were taken at the
+   older `91848d8` pin and say so; the reference to read is still the one in item 3.
+5. **Run `[BotSmoke`** and read `[CoreSmoke`. Two synchronous probes run first - `Bots.Shove`,
    which asserts the collision diagnostic against the engine's own `OnMoveOver` for every ordered
    pair of actors, and `Bots.Death`, which REPRODUCES the murder-report cast failure on purpose and
    reports Ok saying so (REVIEW.md F2; it is expected until the class decision) - and then the chain
@@ -261,12 +270,19 @@ checkpoint has shipped it as `True` once already.
 | `[BotBehavior [name]` | GameMaster | Target a bot; report its brain, or switch it (`Idle`, `Traveler`) |
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
-| `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
+| `[BotPace [auto] [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given. `auto` picks a walking bot itself rather than asking for a target, which is how it runs without a client |
 | `[BotSteps [clear]` | GameMaster | Steps per bot-minute in each phase and what moved them - wander, drift-back, walk, teleport. `clear` opens a fresh window (token: `bot-steps`) |
 | `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
 | `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
+| `[BotSendTo <destination or words> [bot name]` | GameMaster | Send a bot to a destination by id or by words, for testing a route by hand |
+| `[BotTrace on \| off \| off all \| list` | GameMaster | Per-bot verbose tracing; `list` names who is traced |
+| `[BotWorkScout` | Administrator | Propose work sites from what the engine says is harvestable and standable, to `Data/Live/work-scout.json`. **Never touches `navigation.json`** - a human merges it |
+| `[BotSiteAudit` | Administrator | Every authored work site against the engine: what can be dug, what can be stood on, and whether the hops path |
+| `[BotSitePick <x> <y> [mine\|chop]` | Administrator | Measure one tile as a work station - standable, and how many harvestable tiles it reaches |
+| `[BotOreSweep [radius]` | Administrator | Sweep for harvestable ore around you, the same question the site tools ask |
+| `[BotForgeAudit` | Administrator | Every forge and anvil the crafters depend on, against `Data/Decoration` |
 | `[NavResampleZ [apply]` | Administrator | Report every record whose stored Z is not where a mobile would stand, and with `apply` correct them. Records it cannot place are reported and never moved (token: `nav-resample-z`) |
 | `[WorldItems [facet]` | Administrator | Write the art view's world-item snapshot - every loose, immovable, visible item on the facet |
 | `[BotOrphans` | Administrator | Names the owner of every item ServUO's boot cleanup is about to reap. `Custom.BotOrphanScanOnStart=True` runs it headlessly 0.5 s before `Cleanup.Run` |
@@ -743,10 +759,13 @@ at 1:1 and 260 ms at 1:8, so a screenful is well under a second.
 873 MB - and is never required. That number is the argument FOR on demand: it is one town out of a
 facet, and nobody pays it for the map they never open.
 
-Art is read-only this session: selecting works, because the editor knows where it drew every shape,
-but placing and dragging need the inverse projection and the inverse is not a function - a screen
-pixel names a world tile only once you assume a Z, which is 2.7 tiles of error where Britain stands.
-A per-pixel pick map from the renderer is the fix.
+**Editing works on the art too, and the pick map is why.** This passage read *"art is read-only this
+session"* until the documentation pass of 11 September 2026, and the reason it gave was sound: the
+isometric projection has no inverse, because a screen pixel names a world tile only once you assume
+a Z - 2.7 tiles of error where Britain stands. The fix it predicted is the one that shipped. The
+renderer emits a per-pixel pick map alongside each tile, so the question is answered by lookup
+rather than by inversion, and selecting, placing and dragging all work. See *The pick map, and why
+the inverse stopped mattering* in `tools/editor/README.md`.
 
 **Terrain is stretched (v2).** Each land tile is drawn across the heights of its four corners with
 a `texmaps.mul` texture, where the client would use one, and as the flat 44x44 art where it would
@@ -833,9 +852,16 @@ after it lands. Their Type list is the **behaviour** registry, exported by `[Voc
 > in. The Bots panel's trailing slot had the same shape of fault - `updateCounts` swept `.count`
 > document-wide, so every row read `0` where its stuck rung should be.
 
-**Still to come: the admin panel** - restart the shard, save the world, a live console feed and the
-named actions. It is the only part of the editor that touches the shard *process*; see the end of
-`tools/editor/README.md` for what else it could hold.
+**The admin panel (5f).** Everything that acts on the shard rather than on its files, and the only
+part of the editor that touches the shard *process*. Eleven buttons - save world, core smoke, bot
+smoke, bots reload, nav audit and `full`, walk audit, world items, resync spawns behind a typed
+`RESYNC`, regen bot spawns behind `REGEN`, broadcast, and restart behind `RESTART` - plus a live
+console feed reading `Data/Live/console.json`, which had to exist before the buttons could.
+**Every button runs without a client**: each case calls the command's underlying static method
+rather than synthesising a `CommandEventArgs`. The three that take minutes - `[CoreSmoke`,
+`[BotSmoke`, `[WalkAudit` - acknowledge *started* and report into Health and the console feed,
+because `Poll` is a `Timer` callback on the game thread and dispatching one inline would freeze the
+world for its whole length. See *The Admin section* in `tools/editor/README.md`.
 
 See `tools/editor/README.md` for the save contract, the two tiers of validation failure - a dangling
 edge id is a warning here, not a rejection - and what is still to bring back from the ModernUO
@@ -847,12 +873,20 @@ original when the editing UI lands.
   `NavigationSystem`, `DailyLifeSystem`). Three is tolerable; the fourth should become a
   `Custom/Core` helper rather than a fourth copy.
 - **21 authored arrival points sit on tiles nothing can stand on** — `brit-bank`, `brit-square`,
-  both taverns, `brit-inn`, five shops, a guard post. `NavArrivals.TryPick` chooses among a
-  destination's arrivals at random and tests occupancy only for `exclusive` ones, so an unstandable
-  arrival is handed out like any other and every bot sent to it is a walk that cannot finish.
+  both taverns, `brit-inn`, five shops, a guard post. **A `[NavAudit` reading of 9 September 2026,
+  not re-measured since**; treat the number as dated rather than as current telemetry.
   `[NavAudit` counts them, `nav-audit.json` carries them, and the editor badges each one with `!`
   so they can be placed by eye. The stand-tile sweep in the arrivals-as-places work will stop them
   mattering; the badge is what will get them actually fixed.
+
+  **The exposure is narrower than this entry used to claim**, and the difference decides how urgent
+  it is. It read *"every bot sent to it is a walk that cannot finish"*, which described
+  `NavArrivals.TryPick` before it learned to scatter. It now takes the tile literally only for an
+  `exclusive` arrival (reserved - one guard, precisely there) or an `exact` one (a forge bench, where
+  two tiles off is out of reach of the anvil); **everything else goes through `Scatter`**, and the
+  walker may additionally stop `NavWalker.ArrivalRangeFor` tiles short. So an ordinary unstandable
+  arrival now costs a scatter rather than a failed journey, and **the points still worth fixing by
+  hand are the exact and exclusive ones** - which the badge does not yet distinguish.
 - **`Data/Live/vocabulary.json` shrank when `[Constructable]` became the filter**, which is
   correct — it now lists what a spawner can actually construct — but nothing has audited which
   types left. If a type that used to be offered turns out to be spawnable some other way, the
