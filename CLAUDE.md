@@ -3,6 +3,17 @@
 Engine-level conventions for this codebase. Shard-specific facts (port, era, facet, custom
 systems) are in `SHARD.md`. The upstream-edit log is `Scripts/Custom/MODIFICATIONS.md`.
 
+**`REVIEW.md` is required reading** - the read-only architectural review of 11 September 2026, and
+where this shard's open defects are named and prioritised. Status: **F1 fixed** (the behaviour
+ticker started twice), **F2 reproduced and deliberately NOT fixed** (a reportable bot death throws
+in the murder report; `Bots.Death` reproduces it on every `[BotSmoke` and reports `Ok` saying so,
+because the repair is the `PlayerMobile` identity decision rather than a patch to an upstream file),
+**F3 interim only** (one pending token per operation; requests still have no durable identity),
+**F4 fixed** (a cached route no longer outlives the edge health it was built from). **F5** (delivery
+reports success after destroying the load), **F6** (a custom save overwrites the last good file
+before serialization succeeds), the **save acknowledgement**, and the **full F3** are scheduled
+before 7f. Its section 11 was the documentation-discrepancy list and is closed.
+
 All file:line references below were verified against this tree (assembly 57.4).
 
 ## Reference installs
@@ -14,7 +25,7 @@ Four trees on this machine get confused for one another. Only the first is curre
 | `E:\dev\UO\uo-offline` | **The uo-offline reference — read this one.** A git clone at `7f38c7c`. `playerbots/source/CustomBots/` is the bot source, `playerbots/data/` the data (`PlayerBotChat/`, `Destinations/`, `Waypoints/`, `Zones/`), `tools/` and `install.ps1` the authoring and install machinery |
 | `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` | The **`fe18a469` snapshot** — an *installed* copy, with the bot source deployed to `Projects/UOContent/CustomBots/` and the data to `Distribution/Data/`. Cite it only where a Deviations row already cites it; new work reads the clone above |
 | `E:\dev\UO\ModernUO` | This shard's **previous engine**. The systems in `Scripts/Custom/` were ported from here; it is history, and still the right reference for how a ported system used to work |
-| `E:\dev\UO\uo-offline-server` | **Stale — do not read.** The previous installed copy, `91848d8`, 2026-09-05 |
+| `E:\dev\UO\uo-offline-server` | **Stale — do not read.** The previous installed copy, `91848d8`, 2026-09-05. Note that older prose across this repository writes "uo-offline-server" meaning the **project**, not this path - `nav-format-comparison.md` and several README sentences do. Read it as a name, never as a directory to open |
 
 Version in force: **uo-offline (`Klein187/uo-offline`) @ `7f38c7c`** ("Update window and README for
 the September 8 update", 2026-09-08), on ModernUO `0.15.6.145-4-ge7f85d404` (2026-08-23).
