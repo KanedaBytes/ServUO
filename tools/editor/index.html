@@ -65,6 +65,18 @@
 
             <p id="art-status" class="muted"></p>
 
+            <!--
+                CLICK TO INSPECT, NOT HOVER. The engine's answer costs a request token, a poll and
+                an ack - fine once per deliberate click, unusable once per mouse position. The
+                hover half is already free and already there: the readout strip names the tile, its
+                standing Z and whether land, a static or an item is on top, all from the pick map.
+            -->
+            <div class="choice">
+                <label title="Click a tile to ask the shard what the engine sees there: land and static flags and heights, whether a mobile fits, and which of the eight steps onto it are allowed.">
+                    <input type="checkbox" id="inspect-tiles"> Inspect tiles
+                </label>
+            </div>
+
             <input id="filter" type="search" placeholder="Filter by name or id">
             <ul id="matches"></ul>
         </details>
@@ -281,6 +293,18 @@
                 <button id="bot-card-close" type="button" title="Close">&times;</button>
             </div>
             <div id="bot-card-body"></div>
+        </div>
+
+        <!-- What the engine sees at one tile. The bot card's furniture minus the drag: a bot card
+             stays open for as long as you are watching that bot, and gets in the way where you
+             leave it; this one holds one tile and is replaced by the next click, so bottom-LEFT and
+             fixed is enough, and it keeps out of the bot card's corner. -->
+        <div id="tile-card" hidden>
+            <div id="tile-card-head">
+                <span id="tile-card-title"></span>
+                <button id="tile-card-close" type="button" title="Close">&times;</button>
+            </div>
+            <pre id="tile-card-body"></pre>
         </div>
 
         <!-- The active tool's instructions. Above the map, not in the readout strip in the

@@ -1348,6 +1348,59 @@ Both passes are tested against a stub canvas that records calls rather than pixe
 the two failures that actually happened: a pass that never ran, and a pass that ran and rejected
 every box.
 
+## The tile inspector
+
+**What the engine sees at one tile**, which this editor has needed for a long time and could only
+get by hand-dropping a token into `Data/Live/requests/` and reading the JSON out the other side.
+`TileProbe` has existed and been fully wired on the shard since the request channel did; nothing in
+the browser had ever asked it anything.
+
+It is the instrument that settled two of the hardest records in the tree. `trinsic-shop-tailor-2`'s
+arrival looked like a Z twenty below its shop floor and was actually the *destination* pointing at
+the upper of two standable storeys on the same tile. `uo-wp-194-s1` read as clean stone with no
+statics, no items and all eight neighbour steps **ALLOWED** — while a bot stood two tiles away
+unable to leave. Both answers came from this command.
+
+Tick **Inspect tiles** in the *View* section and click a tile. The card names, straight from the
+engine:
+
+```
+Movement.Impl is 'FastMovementImpl'; FastMovementImpl.Enabled=True
+LAND 0x043B 'stone' z 20 flags [none]; GetAverageZ low 20 avg 20 top 20
+STATICS none
+STAND hint z 20: TryResolveZ yes (20), ResolveZ 20; CanFit True, CanSpawnMobile False
+ITEM 0x40036A84 0x1F1C 'magical crystal' z 20 h 1 movable False visible False
+STEP North from 1475,1646,20: creature ALLOWED (z 20), point ALLOWED (z 20)
+... seven more
+GOAL 1475,1645,20: CanFit True
+```
+
+That is Old Marta's tile, and `CanSpawnMobile False` beside `CanFit True` is the whole point of
+asking: something is standing there, which no amount of looking at the art would tell you.
+
+### Click, not hover, and the hover half is free
+
+The engine's answer costs a token write, a poll of up to a second and an ack. That is fine once per
+deliberate click and unusable once per mouse position, so hovering does not ask it.
+
+**Hovering already answers the cheap question**, and now says so: the readout strip names the tile,
+the Z a mobile would stand at, and whether **land**, a **static** or an **item** is on top — all out
+of the pick-map sidecar the art view already has open, with no round trip at all. The pick map has
+always known that last part and the strip never said it.
+
+### Three details
+
+- **The Z goes on the wire**, and it decides which storey the answer is about: `TileProbe` takes it
+  as the standing *hint*. A tile with two standable surfaces — the tailor's shop floor at 15 and its
+  upper storey at 36 — answers differently depending on which you asked, and dropping the Z would
+  silently make every question about the lower one.
+- **It runs before the hit test**, so a tile under a waypoint, a zone or a bot is still inspectable.
+  That is the tile somebody most wants to ask about: *"why will nothing stand here"* is asked at the
+  marker, not beside it. The map's cursor changes while the mode is on, because the checkbox is in a
+  panel that may be scrolled out of sight by the time somebody clicks.
+- **The shard being down is not a gate.** The card says which half is missing and hovering keeps
+  working — the same rule the `[BotInfo` block and `sendReach` already follow.
+
 ## The Problems panel
 
 Everything flagged, in one clickable list. It exists because **four systems already knew something
@@ -1666,6 +1719,11 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`; answers to `Data/Live/nav-hop.json` |
 | `tile-probe` | What the engine sees at a tile, and whether it will let a step onto it. Body `"x,y"` or `"x,y,z"` (several may be given), or `"sweep <lo> <hi>"` for every world item in an ItemID range; answers to `Data/Live/tile-probe.json` and in the ack's `warnings` |
 | `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |
+| `core-smoke` | `CoreSmoke.Run(null)` — *started*, not run; the report goes to the console and to `health.json` |
+| `bot-smoke` | `BotSmoke.Run(null)` — *started*, not run; walk, life, chat, work |
+| `bots-reload` | `BotSystem.TryReload` **and** `BotWorkSites.Validate`, which is both halves of `[BotsReload` |
+| `broadcast` | The whole body, to every player, through `CommandHandlers.BroadcastMessage`. Never nonced |
+| `shutdown` | Acks, then `Core.Kill(false)` two seconds later. The **save is the caller's job** |
 
 **`save` exists because there is no other way to save from outside the game.** ServUO's console
 takes no staff commands, and `HandleClosed` does *not* save on exit — it only waits for writes

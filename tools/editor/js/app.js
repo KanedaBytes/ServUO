@@ -199,6 +199,9 @@ async function boot() {
         botCard: $('bot-card'), botCardHead: $('bot-card-head'),
         botCardTitle: $('bot-card-title'), botCardBody: $('bot-card-body'),
         botCardClose: $('bot-card-close'),
+        tileCard: $('tile-card'), tileCardTitle: $('tile-card-title'),
+        tileCardBody: $('tile-card-body'), tileCardClose: $('tile-card-close'),
+        inspectTiles: $('inspect-tiles'),
         problems: $('problems'), gotoXy: $('goto-xy'), gotoStatus: $('goto-status')
     });
 
@@ -209,6 +212,7 @@ async function boot() {
     initSections(dom.sidebar);
     initResize(dom.sidebarResize);
     wireBotCard();
+    wireTileInspector();
     wireGotoBox();
 
     try {
@@ -3417,6 +3421,85 @@ async function pickedTile(event) {
     return found ? { x: found.x, y: found.y, z: found.z, what: found.what, exact: true } : null;
 }
 
+// --- the tile inspector -----------------------------------------------------------------------------
+//
+// WHAT THE ENGINE SEES AT ONE TILE, which is a question this editor has needed for a long time and
+// could only answer by hand-dropping a token into Data/Live/requests and reading the JSON.
+//
+// `TileProbe` is the thing that settled the trinsic-shop-tailor-2 arrival (a shop floor at Z 15
+// with the record pointing at the upper storey at 36) and the uo-wp-194-s1 pocket (clean stone,
+// no statics, all eight neighbour steps ALLOWED - and a bot still stuck two tiles away). Its whole
+// value is that it reports the ENGINE's opinion rather than the renderer's: the land and static
+// flags, the Z a mobile would stand at, whether CanFit and CanSpawnMobile agree, and which of the
+// eight steps onto the tile are allowed.
+//
+// CLICK, NOT HOVER, and that is the only interesting decision here. The engine's answer costs a
+// token write, a poll of up to a second, and an ack - fine once per deliberate click, unusable
+// once per mouse position. The hover half is already free and already drawn: the readout strip
+// names the tile, the Z a mobile stands at, and whether land, a static or an item is on top, all
+// from the pick map, with no round trip at all. So hovering keeps answering the cheap question and
+// the click asks the expensive one.
+
+function wireTileInspector() {
+    if (dom.tileCardClose) {
+        dom.tileCardClose.addEventListener('click', () => {
+            dom.tileCard.hidden = true;
+        });
+    }
+
+    if (dom.inspectTiles) {
+        dom.inspectTiles.addEventListener('change', () => {
+            canvas.classList.toggle('inspecting', dom.inspectTiles.checked);
+
+            setStatus(dom.inspectTiles.checked
+                ? 'Inspect: click a tile to ask the shard what the engine sees there.'
+                : 'Inspect off.', 'ok');
+        });
+    }
+}
+
+/** True while the inspector owns the click, which is when it should beat selection and panning. */
+function inspecting() {
+    return Boolean(dom.inspectTiles && dom.inspectTiles.checked);
+}
+
+/**
+ * Ask the shard about one tile and show what it says.
+ *
+ * The Z goes on the wire, and it matters: TileProbe takes it as the STANDING HINT, and the hint is
+ * what decides which storey the answer is about. A tile with two standable surfaces - the tailor's
+ * shop floor at 15 and its upper storey at 36 - answers differently depending on which one you
+ * asked about, and dropping the Z would silently make every question about the lower one.
+ */
+async function inspectTile(x, y, z) {
+    if (!dom.tileCard) {
+        return;
+    }
+
+    dom.tileCard.hidden = false;
+    dom.tileCardTitle.textContent = `${x}, ${y}`;
+    dom.tileCardBody.textContent = 'Asking the shard...';
+
+    try {
+        const body = z === null || z === undefined ? `${x},${y}` : `${x},${y},${z}`;
+        const dropped = await api.request('tile-probe', body);
+
+        await api.awaitAck('tile-probe', { nonce: dropped.nonce, timeoutMs: 15000 });
+
+        const answer = await api.tileProbe();
+        const lines = (answer.lines || []).filter((line) => !line.startsWith('== '));
+
+        dom.tileCardTitle.textContent = `${x}, ${y}${z === null || z === undefined ? '' : `, z${z}`}`;
+        dom.tileCardBody.textContent = lines.length > 0
+            ? lines.join('\n')
+            : 'The shard answered with nothing for that tile.';
+    } catch (error) {
+        // The shard being down is a normal answer here, the way it is for the [BotInfo block and
+        // for sendReach: the card says which half is missing rather than closing itself.
+        dom.tileCardBody.textContent = `Could not ask the shard: ${error.message}`;
+    }
+}
+
 /** The coordinate strip, from wherever the cursor was last seen. */
 function refreshReadout() {
     if (!view.facet || !dom.coords || !state.cursor || !view.isArt) {
@@ -3461,11 +3544,16 @@ function carryTheHill(shape, index, tile) {
 function readoutFor(tile) {
     const where = tile.exact ? `${tile.x}, ${tile.y}` : `~${tile.x}, ${tile.y}`;
 
+    // WHAT IS ON TOP, which the pick map has always known and the strip never said. It is the
+    // hover half of the tile inspector and it costs nothing: land, static or item, straight out of
+    // the sidecar the art view already has open. The engine's fuller answer is a click away.
+    const what = tile.what && tile.what !== 'none' ? `  ${tile.what}` : '';
+
     if (tile.z !== null && tile.z !== undefined) {
-        return `${where}  z${tile.z}`;
+        return `${where}  z${tile.z}${what}`;
     }
 
-    return tile.exact && landz.problem() ? `${where}  z?` : where;
+    return tile.exact && landz.problem() ? `${where}  z?${what}` : `${where}${what}`;
 }
 
 /**
@@ -3561,6 +3649,16 @@ function wireInput() {
         const [worldX, worldY] = worldAt(event);
         const originX = view.isArt ? tile.x : worldX;
         const originY = view.isArt ? tile.y : worldY;
+
+        // BEFORE THE HIT TEST, and before a tool. The inspector is a question about the TILE, and
+        // a tile under a waypoint, a zone or a bot is exactly the tile somebody most wants to ask
+        // about - "why will nothing stand here" is asked at the marker, not beside it. A tool is
+        // still first in spirit: turning the inspector on is itself choosing a mode, and the
+        // checkbox is visible while it is.
+        if (inspecting()) {
+            inspectTile(tile.x, tile.y, tile.z);
+            return;
+        }
 
         if (state.tool) {
             if (!canPlace()) {

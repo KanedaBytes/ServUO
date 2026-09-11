@@ -695,3 +695,52 @@ body:has(#bot-card.dragging) { user-select: none; }
 
 #sec-admin #admin-status.warn { color: #ffd479; }
 #sec-admin #admin-status.error { color: #ff7a6b; }
+
+/* --- the tile inspector ----------------------------------------------------------------------- */
+
+/*
+ * Bottom-LEFT, where the bot card is bottom-right: both can be open, and the one that holds a
+ * single tile and is replaced by the next click does not need the corner the one you leave open
+ * wants. Not draggable for the same reason.
+ */
+#tile-card {
+    position: absolute;
+    left: 12px;
+    bottom: 34px;
+    z-index: 4;
+    width: 340px;
+    max-height: calc(100% - 90px);
+    display: flex;
+    flex-direction: column;
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+
+#tile-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    user-select: none;
+}
+
+#tile-card-title { flex: 1 1 auto; font-weight: 600; font-size: 12px; }
+#tile-card-close { flex: 0 0 auto; padding: 0 6px; line-height: 1.4; font-size: 14px; }
+
+/* The engine's lines are aligned text; pre-wrap keeps them readable without a second scrollbar. */
+#tile-card-body {
+    margin: 0;
+    padding: 8px;
+    overflow: auto;
+    font: 11px/1.45 ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #cfd4dc;
+}
+
+/* The cursor says which mode the click is in, because the checkbox is in a panel that may be
+   scrolled out of sight by the time somebody clicks the map. */
+#map.inspecting { cursor: help; }
