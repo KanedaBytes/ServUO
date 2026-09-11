@@ -126,11 +126,26 @@ namespace Server.Custom
         /// </summary>
         public static void Run(Mobile from)
         {
+            Run(from, false);
+        }
+
+        /// <summary>
+        /// As above, with the expensive passes.
+        ///
+        /// `full` today means one thing: the approach-tile cliff scan (NavNeighbourhood). It is
+        /// engine-only like the rest of this file, but it is the most MovementPath calls anything
+        /// in this tree makes - every standable tile of every waypoint's arrival box against every
+        /// graph neighbour - where the edge sweep is two calls per edge. The editor re-runs this
+        /// audit quietly after EVERY nav save, so the default path has to stay cheap enough that
+        /// nobody notices it; a flag is how the two live together.
+        /// </summary>
+        public static void Run(Mobile from, bool full)
+        {
             string summary;
             IList<string> report;
             IList<NavAuditProblem> problems;
 
-            TryRun(out summary, out report, out problems);
+            TryRun(full, out summary, out report, out problems);
 
             // One block, not thirty overhead messages. A thirty-finding audit scrolled its own
             // summary out of the journal before the last finding arrived, and the summary is the
@@ -178,6 +193,19 @@ namespace Server.Custom
         public static bool TryRun(
             out string summary, out IList<string> report, out IList<NavAuditProblem> problems)
         {
+            return TryRun(false, out summary, out report, out problems);
+        }
+
+        /// <summary>As above, with the cliff scan. See Run(Mobile, bool).</summary>
+        public static bool TryRun(
+            bool full,
+            out string summary, out IList<string> report, out IList<NavAuditProblem> problems)
+        {
+            // WALL TIME, which this never reported and the README therefore guessed at: its "132
+            // edges take about 25 seconds" is off by more than an order of magnitude against the
+            // measured 1152 edges in 0.9-1.7s. A number nobody prints is a number that goes stale.
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+
             var lines = new List<string>();
             var found = new List<NavAuditProblem>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -354,9 +382,27 @@ namespace Server.Custom
                 lines.Add("STRUCK " + line);
             }
 
+            // THE APPROACH TILES, and only when asked. Every pass above starts on an authored
+            // waypoint; this is the one that does not. See NavNeighbourhood for what a cliff is
+            // and for the measurement that named it.
+            NavNeighbourhoodResult cliffs = null;
+
+            if (full)
+            {
+                cliffs = NavNeighbourhood.Scan(Map.Trammel);
+
+                foreach (string line in NavNeighbourhood.Describe(cliffs, CliffReportCap))
+                {
+                    lines.Add(line);
+                }
+            }
+
+            _lastCliffs = cliffs;
+
             summary = String.Format(
                 "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
-                + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z, {8} struck edge(s).",
+                + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z, {8} struck edge(s)."
+                + " {9}s.{10}",
                 checkedEdges,
                 blocked,
                 far,
@@ -367,12 +413,38 @@ namespace Server.Custom
                     : String.Format(", {0} island(s) holding somewhere to go", islands.Count),
                 unstandable,
                 placement.Changes.Count,
-                struck.Count);
+                struck.Count,
+                Fixed(watch.Elapsed.TotalSeconds),
+                cliffs == null
+                    ? " Approach tiles not checked; [NavAudit full does that."
+                    : " Approach tiles: " + cliffs.Summary);
 
             report = lines;
             problems = found;
 
             return blocked == 0;
+        }
+
+        /// <summary>How many CLIFF lines the report prints before it summarises the rest.</summary>
+        private const int CliffReportCap = 20;
+
+        private static NavNeighbourhoodResult _lastCliffs;
+
+        /// <summary>
+        /// The last scan's findings, so WriteSnapshot can publish them without running it twice.
+        ///
+        /// Null after a default run, which is the honest answer rather than a stale one: a reader
+        /// of nav-audit.json must be able to tell "no cliffs" from "not looked at", and a cached
+        /// list from an earlier `full` run would say the first while meaning the second.
+        /// </summary>
+        public static NavNeighbourhoodResult LastCliffs
+        {
+            get { return _lastCliffs; }
+        }
+
+        private static string Fixed(double value)
+        {
+            return value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -571,8 +643,19 @@ namespace Server.Custom
                 builder.Append("\n");
             }
 
-            builder.Append("  ]\n");
-            builder.Append("}\n");
+            builder.Append("  ],\n");
+
+            // THE CLIFF LIST, and `cliffsChecked` beside it so a reader can tell an empty list
+            // from a pass that was never run. Only [NavAudit full fills it; see LastCliffs.
+            builder.Append("  \"cliffsChecked\": ")
+                .Append(_lastCliffs != null ? "true" : "false").Append(",\n");
+            builder.Append("  \"cliffSeconds\": ")
+                .Append(Fixed(_lastCliffs == null ? 0.0 : _lastCliffs.Seconds)).Append(",\n");
+            builder.Append("  ");
+
+            NavNeighbourhood.AppendJson(builder, _lastCliffs);
+
+            builder.Append("\n}\n");
 
             string error;
 

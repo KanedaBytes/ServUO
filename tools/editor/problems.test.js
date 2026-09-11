@@ -410,3 +410,79 @@ test('a probe consents to being walked through, so it cannot appear in its own r
     assert.match(cs, /public override bool OnMoveOver\(Mobile m\)\s*\{\s*return true;/,
         'the walk probe no longer consents to being walked through');
 });
+
+test('a probe SHOVES like a bot too, which consenting to be walked through does not buy', () => {
+    // The other direction, and it was the one that falsified. BotShove keyed its mover branch on
+    // PlayerBot and a probe is a plain BaseCreature, so every occupant a real bot walks through -
+    // another bot, a GG shopkeeper, a daily-life patron, a stock NPC through MODIFICATIONS entry
+    // 5's guard - refused the probe and cost it a rung. An instrument strictly more obstructed
+    // than the thing it measures inflates exactly the FRAGILE and BUSY rows a reader acts on.
+    const cs = fs.readFileSync(NAV_WALK_AUDIT_CS, 'utf8');
+
+    assert.match(cs, /class WalkAuditProbe : BaseCreature, IBotMover/,
+        'the walk probe no longer moves under the bot shove rule');
+    assert.match(cs, /public override bool CheckShove\(Mobile shoved\)\s*\{\s*return true;/,
+        'the walk probe no longer answers CheckShove the way uo-offline PlayerBot does');
+});
+
+// --- cliffs ------------------------------------------------------------------------------------
+
+const cliff = (over) => ({
+    waypoint: 'uo-wp-194-s1',
+    neighbour: 'uo-wp-194',
+    map: 'Trammel',
+    x: 2036, y: 2830, z: 0,
+    range: 2,
+    standable: 14,
+    stranded: 11,
+    tileX: 2035, tileY: 2832, tileZ: 0,
+    tileDistance: 2,
+    ...over
+});
+
+test('a cliff row jumps to the STRANDED TILE, not to the waypoint', () => {
+    // Same rule as a walk row's stop tile: the waypoint is already on the map and is the half that
+    // works. The pocket is what somebody has to go and look at.
+    const [row] = problems.cliffRows({ cliffsChecked: true, cliffs: [cliff({})] });
+
+    assert.strictEqual(row.kind, 'cliff');
+    assert.strictEqual(row.x, 2035);
+    assert.strictEqual(row.y, 2832);
+    assert.strictEqual(row.shapeId, 'uo-wp-194-s1');
+    assert.match(row.reason, /11 of 14 standable approach tile\(s\) within 2/);
+    assert.match(row.reason, /though the waypoint itself can/);
+});
+
+test('every stranded neighbour of one waypoint survives, because dedupe keys on kind and tile', () => {
+    // A pocket is a pocket in every direction, so the usual shape is one sample tile stranding
+    // several neighbours. Emitted as separate rows they would key identically in dedupe and all
+    // but the first would vanish - silently, which is the worst way for a finding to go missing.
+    const rows = problems.cliffRows({
+        cliffsChecked: true,
+        cliffs: [
+            cliff({ neighbour: 'uo-wp-194' }),
+            cliff({ neighbour: 'uo-wp-194-s2', stranded: 9 }),
+            cliff({ neighbour: 'uo-wp-194-s1-s1', stranded: 4 })
+        ]
+    });
+
+    assert.strictEqual(rows.length, 1);
+    assert.match(rows[0].reason, /uo-wp-194, uo-wp-194-s2, uo-wp-194-s1-s1/);
+
+    // And the worst pair is the one whose numbers and tile the row carries.
+    assert.match(rows[0].reason, /11 of 14/);
+
+    const deduped = problems.dedupe(rows);
+
+    assert.strictEqual(deduped.length, 1, 'the grouped row must survive dedupe unchanged');
+});
+
+test('a default [NavAudit contributes no cliff rows, and that is not the same as none', () => {
+    // Only [NavAudit full runs the scan. An absent array must never read as a clean bill of
+    // health, so the flag rather than the array is what gates the rows.
+    assert.deepStrictEqual(problems.cliffRows(null), []);
+    assert.deepStrictEqual(problems.cliffRows({}), []);
+    assert.deepStrictEqual(problems.cliffRows({ cliffs: [cliff({})] }), [],
+        'cliffs without cliffsChecked must not be reported');
+    assert.strictEqual(problems.cliffRows({ cliffsChecked: true, cliffs: [] }).length, 0);
+});

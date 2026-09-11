@@ -175,6 +175,16 @@ Bots README is the place it will be felt first.
 so **a bot still yields to a real player**, and a real player shoving a bot still pays the engine's
 full-stamina rule. That half of the deviation was always the right half.
 
+**What travels under it, as of the walk-audit fix.** The guard calls
+`BotShove.OnMoveOver(this, m)`, and that method's mover test is now `mover as IBotMover` rather
+than `mover as PlayerBot` — so this edit also passes the walk audit's **probe**, which is a plain
+`BaseCreature` in `Core/Navigation` and was therefore refused by every occupant class a real bot
+walks through. **No second edit was needed and none was made**; the `Custom/`-side predicate
+widened and this file did not change. The interface has exactly two implementers, `PlayerBot` and
+`WalkAuditProbe`, and is tested for in exactly one place. Measured: `[WalkAudit selftest` read
+`SELF-TEST BROKEN` before and `SELF-TEST OK` after, because its must-pass control hop at
+`1849,2711` is a tile a mobile stands on and the probe could not push past it.
+
 **Merge note.** Three lines at the top of one method, above two branches left exactly as upstream
 wrote them, with a `CUSTOM SHARD EDIT` comment naming this entry. An upstream change to
 `OnMoveOver` will conflict loudly. If it does, the guard goes back at the top of whatever the new

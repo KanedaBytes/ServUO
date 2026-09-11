@@ -235,7 +235,7 @@ checkpoint has shipped it as `True` once already.
 | `[NavDelete <id>` | GameMaster | Remove a waypoint and every edge touching it |
 | `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
-| `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
+| `[NavAudit [full]` | Administrator | Pathfind every walk edge against real map data (1153 edges, ~0.5 s). `full` adds the approach-tile cliff scan — 54,683 engine paths, ~9 s — which the editor's quiet post-save run deliberately skips |
 | `[WalkAudit [probes\|selftest]` | Administrator | **Walk** every edge and arrival with real probe walkers; `selftest` proves the instrument |
 | `[TileProbe [<x> <y> [z]]` | Administrator | What the engine sees at a tile - land, statics, items in all three lists, the movement switches, and whether a step onto it is refused from each of the eight neighbours (token: `tile-probe`, which also takes `sweep <lo> <hi>` over an ItemID range) |
 | `[DayPhase` | GameMaster | Report the day phase, anchor time and whether an override is active |
@@ -494,7 +494,16 @@ at once and the audit cannot see why - and a bot standing still can be failing a
 - **`[WalkAudit`** walks the whole graph with real probe walkers - every edge both ways, every
   arrival from each approach - in about three minutes, and reports the engine's route length
   against the authored straight line. `[WalkAudit selftest` proves the instrument before you trust
-  it. See `Scripts/Custom/Core/Navigation/README.md`.
+  it, and **it has caught a real fault once**: the probe was refused by every occupant class a real
+  bot walks through, because `BotShove` keyed on `PlayerBot` and a probe is a plain `BaseCreature`.
+  Run the self-test first; it is two walks and a hundred seconds. See
+  `Scripts/Custom/Core/Navigation/README.md`.
+- **The approach-tile scan**, in `[NavAudit full` and in every `[WalkAudit`. Both of the other two
+  instruments start every measurement *on* an authored waypoint; a bot starts wherever its last hop
+  stopped, anywhere inside `ArrivalRangeFor`'s 5x5 box. A **cliff** is a standable tile in that box
+  that cannot path to a neighbour the waypoint itself reaches - 23 pairs on 15 waypoints today, and
+  **not one of the 70 stranded tiles is adjacent to its waypoint**, so an eight-neighbour version of
+  this check would have reported nothing at all.
 - **Failures per 100 walks.** `NavWalkFailures` counts walks started and completed, so a window's
   rate no longer depends on how long the window was. Both numbers are on `Bots.Population` and in
   `Data/Live/walk-failures.json`; the `walk-failures` token with body `clear` opens a fresh window

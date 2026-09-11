@@ -136,6 +136,62 @@ export function walkAuditRows(walkAudit) {
 }
 
 /**
+ * Waypoints a bot can reach and then cannot leave.
+ *
+ * A cliff is the one thing neither instrument could see, because both start every measurement ON
+ * the authored tile: the waypoint paths to its neighbour, and a tile inside the waypoint's own
+ * arrival tolerance - where a walker is entitled to stop - does not. See NavNeighbourhood.cs.
+ *
+ * THE JUMP TARGET IS THE STRANDED TILE, not the waypoint, for the same reason a walk row jumps to
+ * the stop tile: the waypoint is already on the map and is the half that works. Somebody has to go
+ * and look at the pocket.
+ *
+ * Only [NavAudit full fills this, so an absent `cliffs` array means "not looked at" rather than
+ * "none" - which is why the caller must not turn a missing array into a clean bill of health.
+ */
+export function cliffRows(audit) {
+    if (!audit || !audit.cliffsChecked) {
+        return [];
+    }
+
+    // ONE ROW PER WAYPOINT, not per (waypoint, neighbour) pair, and dedupe is the reason it has to
+    // be. It keys a placed row on `kind|x,y`, so three neighbours stranded from the same pocket -
+    // which is the usual shape, since a pocket is a pocket in every direction - would have become
+    // one row and silently lost the other two. Grouping here says all three on purpose.
+    const byWaypoint = new Map();
+
+    for (const cliff of audit.cliffs || []) {
+        const found = byWaypoint.get(cliff.waypoint);
+
+        if (found) {
+            found.push(cliff);
+        } else {
+            byWaypoint.set(cliff.waypoint, [cliff]);
+        }
+    }
+
+    return [...byWaypoint.values()].map((cliffs) => {
+        const first = cliffs[0];
+        const worst = cliffs.reduce((a, b) => (b.stranded > a.stranded ? b : a), first);
+        const names = cliffs.map((cliff) => cliff.neighbour).join(', ');
+
+        return {
+            kind: 'cliff',
+            severity: 'warning',
+            label: `${first.waypoint} (cliff)`,
+            x: worst.tileX,
+            y: worst.tileY,
+            reason:
+                `${worst.stranded} of ${worst.standable} standable approach tile(s) within `
+                + `${worst.range} cannot path to ${names}, though the waypoint itself can`
+                + ` - e.g. ${worst.tileX},${worst.tileY},${worst.tileZ}`
+                + ` (${worst.tileDistance} tile(s) off the waypoint)`,
+            shapeId: first.waypoint
+        };
+    });
+}
+
+/**
  * What the walk audit said about one record, as a line for the properties panel.
  *
  * Keyed by the record's OWN id, not by an edge's pair, and it takes the worst row that mentions it
@@ -349,6 +405,7 @@ export function problemRows(sources) {
     const rows = dedupe([]
         .concat(unstandableRows(audit && audit.unstandable, shapeAt))
         .concat(edgeRows(audit && audit.problems, labelFor))
+        .concat(cliffRows(audit))
         .concat(walkAuditRows(walkAudit))
         .concat(badgeRows(flagged))
         .concat(validationRows(validation)));

@@ -714,6 +714,30 @@ taken, the seconds, and on a failure the stop tile, the cause, the blocker and t
 Output is `Data/Live/walk-audit.json` plus a console report; the editor has a **Walk audit** button
 beside **Audit**, and every failure becomes a Problems row that jumps to the tile the walk died on.
 
+**And it shoves exactly as a bot does, which took a fourth correction to get right.** The three
+below are about the probe not *disturbing* what it measures. This one is the opposite and it
+falsified in the direction that matters: `BotShove.OnMoveOver` keyed its mover branch on
+`PlayerBot`, and a probe is a plain `BaseCreature`, so a probe stepping onto **another bot, a GG
+shopkeeper, a daily-life patron or a stock NPC** was refused where a real bot walks straight
+through — the last of those through `MODIFICATIONS.md` entry 5's guard, which calls the same
+predicate. The instrument was strictly more obstructed than the thing it stood in for, for every
+occupant class, and every refusal cost it a rung — which is precisely what the **FRAGILE** list is
+made of. The classification lied the other way too: `OccupiedUnshovable` asks
+`NavWalkFailures.Shovable(blocker)`, a question about what a *PlayerBot* could push, about a step
+the *probe* had taken under a different rule.
+
+`IBotMover` is the fix — an interface in `NavWalkFailures.cs` with exactly two implementers,
+`PlayerBot` and `WalkAuditProbe`, tested for in exactly one place. **No engine edit was needed**:
+entry 5's guard already routed through `BotShove`, so widening the predicate in `Custom/` widened
+the guard for free. A stock vendor in a doorway still jams a bot and a bot still jams a stock
+vendor; that named deviation is untouched.
+
+**The self-test caught it, which is what a self-test is for.** `[WalkAudit selftest` read
+`SELF-TEST BROKEN: seed failed as required, control FAILED and should not have` on the shipped
+build — its must-pass control at `1849,2711` is clean wooden floor with `CanFit` true and all
+eight neighbour steps allowed, and a mobile was standing on it. It reads `SELF-TEST OK` after. The
+sweep moved from 1 fragile and 1 contested row to **0 and 0**.
+
 **It leaves nothing behind.** Probes are deleted in a `finally`, they return `true` from
 `OnMoveOver` so they cannot manufacture each other's obstructions, they override `CheckIdle` so they
 never take a step the walker did not ask for, and they carry `NavWalker.Ledger = false` — which
@@ -899,6 +923,45 @@ any adoption:
 
 > 1000 of 1000 waypoints reachable; 1 record with no reachable waypoint inside the cap
 > (`trinsic-shop-tailor-2`, 14 tiles - pre-dates the rebase).
+
+### The approach-tile scan - the third instrument, and the blind spot both others share
+
+**Every measurement above starts ON an authored waypoint, and a bot does not.** `NavAudit.cs:106`
+has said so in its own header for as long as it has existed - *"a walker starts the next hop from
+wherever it stopped, which is anywhere within `ArrivalRangeFor` (2 tiles by default) of the
+waypoint - a 5x5 box the audit never validated"* - and `[WalkAudit` inherited it, because
+`BuildWorkList` seeds each walk at the authored tile. Commit `118be12f` wrote down that a sweep
+*"structurally could not see"* a bot's failure to route **away** from where it stood.
+
+`NavNeighbourhood.Scan` is the check for it. A **cliff** is:
+
+> the waypoint can path to a graph neighbour, and a standable tile inside the waypoint's own
+> arrival tolerance cannot path to that same neighbour.
+
+Both halves are load-bearing. Without the first, every `BLOCKED` edge would be re-reported
+twenty-four times over; without the second this is just `[NavAudit` again.
+
+**Two things it is easy to build smaller, and both would have found nothing.**
+
+- **The box is the arrival tolerance, not the eight neighbours.** Of the 70 stranded tiles across
+  the 23 cliff pairs on the current graph, **none is adjacent to its waypoint** - every one is at
+  Chebyshev 2. A radius-1 check would have reported a clean graph.
+- **The goal is the next waypoint, not this one.** Measured at the case that named this:
+  `2034,2832` and `2035,2832` both path back to `uo-wp-194-s1` *and* to its other two neighbours,
+  and fail only toward `uo-wp-194`. "Can a displaced bot get back on its waypoint" would have
+  passed them.
+
+The sample tile is the **nearest** stranded one, not the first found. The scan walks its box from
+the corner, so a first-found sample reports distance 2 whatever the truth is - a number that looks
+like a finding and is an artefact of a loop order. `strandedAdjacent` counts the radius-1 ones
+beside it, so the question above stays answerable from the output rather than by argument.
+
+**Cost, and where it runs.** 1001 waypoints, 22,476 standable approach tiles, **54,683 engine paths
+in 8.6-8.8 s** - engine-only, no probe mobile, no walker, no world mutation. That is sixteen times
+the edge sweep, so it is **not** on the default `[NavAudit` path: the editor re-runs that quietly
+after every nav save. It runs from **`[NavAudit full`** and from **`[WalkAudit`**, which pays 9
+seconds on top of a 195-second sweep. `cliffsChecked` is published beside the array in both
+snapshots, so a reader can tell "none" from "not looked at".
 
 ### What uo-offline has, and why this is not a port
 
@@ -1100,13 +1163,14 @@ Known gaps, in the order worth fixing:
    real data in one pass.
 2. **Only the west gate is seeded.** The north Chaos guard posts (1521/1525, 1457) and the
    northern approach are outside the seeded box.
-3. **`[NavAudit` is a full re-path every time, and gets slower with the graph.** It pathfinds
-   every walk edge with the real engine, which is the whole point of it - 132 edges take about 25
-   seconds today. Adopting uo-offline's overworld would take the graph into the thousands, and the
-   audit into minutes, at which point it reads as a hang rather than a check. **Later: an
-   incremental mode that re-checks only edges changed since the last full run** - the snapshot at
-   `Data/Live/nav-audit.json` already carries a timestamp, so the missing half is a per-edge
-   fingerprint and a `[NavAudit full` to force the whole sweep.
+3. ~~**`[NavAudit` is a full re-path every time, and gets slower with the graph.**~~ **The "132
+   edges take about 25 seconds" in this entry was wrong by more than an order of magnitude, and it
+   was wrong because nothing printed the number.** Measured on the current graph: **1153 edges in
+   0.52 s warm, 1.7 s cold** — about 3,460 `MovementPath` calls at roughly 0.15 ms each. The
+   summary line now carries its own wall time, so the next reader measures rather than guesses.
+   The expensive pass is the approach-tile scan below, not the edge sweep, which is why `full`
+   exists; whether an *incremental* mode is still worth a per-edge fingerprint against a 0.5-second
+   baseline is a question the measurement has reopened rather than settled.
 4. **Arrival points are audited less strictly than edges** — `[NavAudit` checks edges, and the
    arrival picker validates a scattered tile with `CanSpawnMobile` at pick time, but an arrival
    point sitting in a wall will simply always scatter. `[NavDebug` is how you spot those.

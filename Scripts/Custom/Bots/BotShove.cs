@@ -57,7 +57,19 @@ namespace Server.Custom
         /// </summary>
         public static bool? OnMoveOver(Mobile shoved, Mobile mover)
         {
-            var bot = mover as PlayerBot;
+            // IBotMover, NOT PlayerBot, and the difference is the walk audit's honesty.
+            //
+            // This test was `mover as PlayerBot` and the probe that walks the whole graph on the
+            // fleet's behalf is a plain BaseCreature, so it was refused by every occupant class a
+            // real bot walks through - another bot, a GG shopkeeper, a daily-life patron, and a
+            // stock NPC through the BaseCreature.OnMoveOver guard, which routes here too. The
+            // instrument was strictly more obstructed than the thing it measures, in one direction,
+            // and it booked each refusal as a rung: a FRAGILE row about the probe's own class.
+            //
+            // The interface has exactly two implementers and this is the only place it is tested.
+            // A stock vendor in a doorway still jams a bot and a bot still jams a stock vendor;
+            // that named deviation is untouched.
+            var bot = mover as IBotMover;
 
             if (bot != null)
             {

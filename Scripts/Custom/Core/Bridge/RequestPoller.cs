@@ -242,7 +242,12 @@ namespace Server.Custom
                     IList<string> auditReport;
                     IList<NavAuditProblem> problems;
 
-                    NavAudit.TryRun(out auditSummary, out auditReport, out problems);
+                    // The body was ignored. `full` adds the approach-tile cliff scan, and the
+                    // editor deliberately never sends it: runAudit fires quietly after EVERY nav
+                    // save, so the default has to stay a second rather than a minute.
+                    bool full = (body ?? "").IndexOf("full", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    NavAudit.TryRun(full, out auditSummary, out auditReport, out problems);
                     NavAudit.WriteSnapshot(problems);
 
                     // Never a failure: an audit that finds blocked edges has done its job. The

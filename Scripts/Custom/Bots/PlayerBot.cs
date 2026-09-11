@@ -45,7 +45,7 @@ using Server.Mobiles;
 
 namespace Server.Custom
 {
-    public class PlayerBot : BaseCreature, IBotActor
+    public class PlayerBot : BaseCreature, IBotActor, IBotMover
     {
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
 
@@ -610,6 +610,11 @@ namespace Server.Custom
         /// full-stamina shove rule jammed their bank plazas. This is the MOVER's half; the shoved
         /// side has to consent first, because a BaseCreature is refused before this is ever
         /// asked. See BotShove for the seam and for what a bot still yields to.
+        ///
+        /// It is also the whole of IBotMover, which this class declares so that BotShove can key
+        /// its mover branch on the RULE rather than on this type. The walk audit's probe is the
+        /// other implementer, and it was refused by every occupant a bot walks through until it
+        /// had one.
         /// </summary>
         public override bool CheckShove(Mobile shoved)
         {

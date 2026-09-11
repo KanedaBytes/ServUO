@@ -45,6 +45,31 @@ using Server.Mobiles;
 
 namespace Server.Custom
 {
+    /// <summary>
+    /// A mobile that MOVES under the bot shove rule: it may step onto an occupied tile, and the
+    /// occupant consents through BotShove rather than refusing it as an uncontrolled creature.
+    ///
+    /// It lives in Core, beside Shovable, rather than in Bots - because the two implementers sit
+    /// on opposite sides of that line and the rule has to be one rule. PlayerBot implements it
+    /// (its CheckShove override already satisfies the member), and so does the walk audit's probe,
+    /// which is in Core and must not reach up into Bots.
+    ///
+    /// THE PROBE IS IN HERE BECAUSE THE AUDIT WAS STRICTER THAN THE BOT IT STANDS IN FOR, in every
+    /// direction and for every occupant class. BotShove keyed its mover branch on `PlayerBot`
+    /// directly, and a probe is a plain BaseCreature - so a probe stepping onto a GG vendor, a
+    /// daily-life patron, a stock NPC or another bot was refused where a real bot walks through.
+    /// The audit was reporting the instrument's own class as a fault in the road, and the rows it
+    /// inflated - BUSY and FRAGILE - are exactly the rows a reader uses to decide a road is fragile.
+    ///
+    /// Nothing widens for anybody else. The interface is implemented by two types and tested for
+    /// in one place, so the rule is still "a bot, and the thing that measures bots".
+    /// </summary>
+    public interface IBotMover
+    {
+        /// <summary>Whether this mover may step onto the tile <paramref name="shoved"/> is on.</summary>
+        bool CheckShove(Mobile shoved);
+    }
+
     /// <summary>One walk that climbed the whole ladder and was teleported.</summary>
     public sealed class NavWalkFailure
     {
@@ -386,7 +411,7 @@ namespace Server.Custom
         {
             string kind = Describe(mobile);
 
-            return kind == "PlayerBot" || kind == "daily-life";
+            return kind == "PlayerBot" || kind == "daily-life" || kind == "walk-probe";
         }
 
         /// <summary>
@@ -430,6 +455,16 @@ namespace Server.Custom
             if (creature is IDailyLifeActor)
             {
                 return "daily-life";
+            }
+
+            // The walk audit's own probe. Asked before the body test, because its body is 0x190 -
+            // neither IsAnimal nor IsMonster - so it used to land in the final line as "npc": the
+            // one bucket that means "a bot cannot push this", about the instrument standing in for
+            // a bot. It is the only IBotMover that is not a PlayerBot, and a PlayerBot is already
+            // answered above by the Player branch.
+            if (creature is IBotMover)
+            {
+                return "walk-probe";
             }
 
             if (creature.Body.IsAnimal || creature.Body.IsMonster)

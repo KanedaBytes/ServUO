@@ -946,18 +946,40 @@ namespace Server.Custom
 
         // ---- [NavAudit ----
 
-        [Usage("NavAudit")]
-        [Description("Pathfinds every walk edge against the real map and reports the ones that cannot be walked.")]
+        [Usage("NavAudit [full]")]
+        [Description("Pathfinds every walk edge against the real map and reports the ones that cannot be walked. 'full' adds the approach-tile cliff scan.")]
         private static void NavAudit_OnCommand(CommandEventArgs e)
         {
-            NavAudit.Run(e.Mobile);
+            // This ignored its arguments entirely. `full` adds the one pass that is too expensive
+            // for the editor's quiet post-save run - the cliff scan; see NavNeighbourhood - and
+            // anything unrecognised is refused rather than silently treated as a default run,
+            // because a typo that quietly gives you the cheap audit is a typo you act on.
+            bool full = false;
+
+            for (int i = 0; i < e.Arguments.Length; i++)
+            {
+                if (Insensitive.Equals(e.Arguments[i], "full"))
+                {
+                    full = true;
+                    continue;
+                }
+
+                e.Mobile.SendMessage(
+                    0x25, "[NavAudit] '{0}' is not an argument. Usage: [NavAudit [full]",
+                    e.Arguments[i]);
+
+                return;
+            }
+
+            NavAudit.Run(e.Mobile, full);
 
             CommandLogging.WriteLine(
                 e.Mobile,
                 String.Format(
-                    "{0} {1} auditing navigation edges",
+                    "{0} {1} auditing navigation edges{2}",
                     e.Mobile.AccessLevel,
-                    CommandLogging.Format(e.Mobile)));
+                    CommandLogging.Format(e.Mobile),
+                    full ? " (full)" : ""));
         }
 
         // ---- [WalkAudit ----

@@ -258,7 +258,7 @@ namespace Server.Custom
         ///   IT COUNTS ITS STEPS. Nothing else does - NavWalker knows hops, not steps - and steps
         ///   against the straight line is the ratio the whole re-base argument rests on.
         /// </summary>
-        private class WalkAuditProbe : BaseCreature
+        private class WalkAuditProbe : BaseCreature, IBotMover
         {
             private int _steps;
 
@@ -351,6 +351,29 @@ namespace Server.Custom
             /// thing it is measuring reports its own presence as a fault in the road.
             /// </summary>
             public override bool OnMoveOver(Mobile m)
+            {
+                return true;
+            }
+
+            /// <summary>
+            /// AND IT SHOVES LIKE ONE, which the transparency above does not buy.
+            ///
+            /// OnMoveOver is the probe consenting to be walked THROUGH, and it only ever covered
+            /// probe-on-probe in practice. The other direction was refused by everybody: BotShove
+            /// keyed its mover branch on `PlayerBot`, a probe is a plain BaseCreature, so a probe
+            /// stepping onto a GG vendor, a daily-life patron, a stock NPC (through MODIFICATIONS
+            /// entry 5's guard, which calls the same predicate) or another bot was turned away
+            /// where a real bot walks straight through.
+            ///
+            /// That is one-way strictness, and it falsifies in the direction that matters: every
+            /// one of those refusals cost the probe a rung, and a pass that climbed a rung is what
+            /// the FRAGILE list is. An instrument must be neither stricter nor looser than the
+            /// thing it stands in for, and this was the stricter half.
+            ///
+            /// `true` unconditionally, which is uo-offline's PlayerBot.CheckShove verbatim and is
+            /// what PlayerBot answers here too.
+            /// </summary>
+            public override bool CheckShove(Mobile shoved)
             {
                 return true;
             }
@@ -459,6 +482,12 @@ namespace Server.Custom
             public Timer Poll;
             public Mobile Caller;
             public bool SelfTest;
+
+            /// <summary>
+            /// The approach-tile scan, run once before the probes go out. Null on a self-test,
+            /// which seeds two hand-written walks and has no graph to scan.
+            /// </summary>
+            public NavNeighbourhoodResult Cliffs;
         }
 
         // ---- starting ---------------------------------------------------------------------------
@@ -496,6 +525,22 @@ namespace Server.Custom
             else
             {
                 BuildWorkList(job);
+
+                // THE APPROACH TILES, before a single probe is spawned.
+                //
+                // Engine-only and synchronous, unlike everything below it, and it belongs here
+                // rather than in the walk because it asks a question the walk structurally cannot:
+                // every item in the list above starts ON an authored waypoint, and a real bot
+                // starts wherever its last hop stopped. See NavNeighbourhood.
+                //
+                // Its cost is reported beside the sweep's rather than hidden inside it, because
+                // the two are paid for different things and a reader deciding whether to run this
+                // again needs to see both. The default [NavAudit deliberately does NOT run it -
+                // the editor re-runs that after every save - so a walk audit and [NavAudit full
+                // are the only two places it happens.
+                job.Cliffs = NavNeighbourhood.Scan(Map.Trammel);
+
+                Log.Info("Walk audit approach-tile scan: {0}", job.Cliffs.Summary);
             }
 
             if (job.Pending.Count == 0)
@@ -1280,7 +1325,8 @@ namespace Server.Custom
             return String.Format(
                 "{0} edge walk(s): {1} failed. {2} arrival walk(s): {3} failed, {4} skipped "
                 + "(pending-road). {5} failure(s) had somebody on the next-step tile. "
-                + "Worst detour {6}. {7:F1}s over {8} probe(s).",
+                + "Worst detour {6}. {7:F1}s over {8} probe(s)."
+                + (job.Cliffs == null ? "" : " Approach tiles: " + job.Cliffs.Summary),
                 edges,
                 edgesFailed,
                 arrivals,
@@ -1414,6 +1460,14 @@ namespace Server.Custom
                     row.Label, row.RungTotal, row.Rungs));
             }
 
+            // LAST, because it is about a question none of the four lists above asked. Every row
+            // in them starts on an authored waypoint; a CLIFF row is about the tiles a walker is
+            // entitled to stop on instead. See NavNeighbourhood.
+            foreach (string line in NavNeighbourhood.Describe(job.Cliffs, 20))
+            {
+                lines.Add(line);
+            }
+
             return lines;
         }
 
@@ -1519,6 +1573,20 @@ namespace Server.Custom
             }
 
             builder.Append("},\n");
+
+            // The approach-tile scan, in the same shape nav-audit.json publishes it, so a reader
+            // parses one format. `cliffsChecked` distinguishes "none" from "not run" - a self-test
+            // never runs it, and the editor's Problems panel must not read a missing array as a
+            // clean bill of health.
+            builder.Append("  \"cliffsChecked\": ")
+                .Append(job.Cliffs != null ? "true" : "false").Append(",\n");
+            builder.Append("  \"cliffSeconds\": ")
+                .Append(Fixed(job.Cliffs == null ? 0.0 : job.Cliffs.Seconds)).Append(",\n");
+            builder.Append("  ");
+
+            NavNeighbourhood.AppendJson(builder, job.Cliffs);
+
+            builder.Append(",\n");
 
             builder.Append("  \"rows\": [\n");
 
