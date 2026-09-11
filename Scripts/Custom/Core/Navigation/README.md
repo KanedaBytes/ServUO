@@ -1251,9 +1251,14 @@ Known gaps, in the order worth fixing:
    was wrong because nothing printed the number.** Measured on the current graph: **1153 edges in
    0.52 s warm, 1.7 s cold** — about 3,460 `MovementPath` calls at roughly 0.15 ms each. The
    summary line now carries its own wall time, so the next reader measures rather than guesses.
-   The expensive pass is the approach-tile scan below, not the edge sweep, which is why `full`
-   exists; whether an *incremental* mode is still worth a per-edge fingerprint against a 0.5-second
-   baseline is a question the measurement has reopened rather than settled.
+
+   **The incremental mode this entry asked for was then declined, on the strength of that
+   number.** A per-edge fingerprint saves about half a second and buys the one failure this
+   codebase works hardest to avoid: a stale fingerprint silently skips a changed edge, and a check
+   that quietly does not run is worse than one that is slow. The `full` flag shipped anyway,
+   because the expensive pass is the approach-tile scan (8.6 s) and gating THAT off the editor's
+   post-save run is what was actually needed. If an incremental mode is ever wanted, it belongs on
+   the cliff scan, where the time is.
 4. **Arrival points are audited less strictly than edges** — `[NavAudit` checks edges, and the
    arrival picker validates a scattered tile with `CanSpawnMobile` at pick time, but an arrival
    point sitting in a wall will simply always scatter. `[NavDebug` is how you spot those.
