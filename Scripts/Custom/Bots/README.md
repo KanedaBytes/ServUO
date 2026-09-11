@@ -14,7 +14,7 @@
 Fake players: a `PlayerBot` with a class, a skill tier, a personality, a name, a speech colour and
 an outfit. Config is `Data/Custom/bots.json`; namespace `Server.Custom`.
 
-**Sessions 1 to 4 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
+**Sessions 1 to 6 of the bot layer.** Session 1 was a bot you could spawn and inspect: class,
 tier, skills, stats, name, speech hue, outfit. Session 2 made them live in the world — a behaviour
 tick, a `Traveler` that walks the shard's `NavWalker` between destinations, and class-weighted
 destination choice from `bots.json`.
@@ -38,6 +38,44 @@ half of it rise and fall with the hour. See [Population](#population).
 The full port survey is `docs-src/uo-offline-port-survey.md`.
 
 ---
+
+## Current contract
+
+What is true of the bot layer today, each claim with the condition that controls it rather than only
+a source line. Most of this file is dated narrative - how a rule was arrived at and what it cost to
+find out. **Where the two disagree, this section is the one that has been re-checked**; see
+[History](#history) for the rule about which is which.
+
+- **A bot is a `BaseCreature` with `Player = true`**, not a `PlayerMobile`. The flag is what gets it
+  past the party gate and onto the live map, and it is also why it ghosts rather than vanishing on
+  death. The identity decision is open: REVIEW.md section 3.
+- **A bot walks through every occupant except a real player**, and the reverse pass is narrower.
+  `BotShove.MayBotPass` answers the forward question, mirroring `BaseCreature.OnMoveOver`'s three
+  branches; `ConsentsToBotPass` answers the reverse one, where a stock vendor still jams against a
+  bot. Two predicates, on purpose - they were one until 7e, and that is what made the rung log call a
+  stock NPC unpushable about a step the engine allows. `Bots.Shove` asserts the diagnostic against
+  the engine's own `OnMoveOver` for every ordered pair of actors.
+- **A reportable bot death throws, and is deliberately not fixed.** `ReportMurdererGump` casts the
+  victim to `PlayerMobile` (`ReportMurderer.cs:43`) under `Core.SE` with a reportable player
+  aggressor - a cast a `PlayerBot` cannot satisfy, and a bot killing a bot meets the condition
+  because both are `Player`-flagged. `Bots.Death` reproduces it on every `[BotSmoke` and reports `Ok`
+  saying EXPECTED FAILURE, because a permanently red check is one nobody reads. The repair is the
+  class decision, not a patch to an upstream file that is correct about every mobile ServUO ships.
+- **One behaviour timer**, at `Custom.BotTickSeconds` (2 s). The guard is inside
+  `BotTickManager.Initialize` and not in its caller, because `ScriptCompiler` reflects over every
+  `public static void Initialize()` and calls it as well; the explicit call from `BotSystem` is kept
+  for what it says about ordering and is a no-op when it loses the race. `Bots.Cadence` fails on
+  anything but exactly one timer from N `Initialize` calls.
+- **The tick moves nothing.** `NavWalker.DriveAll` drives movement on its own shared timer, and that
+  is where pathfinding is actually paid for. The tick decides, and watches for stranded walkers. Any
+  figure quoted from the tick's stopwatch is that callback's duration and not the layer's cost.
+- **A behaviour is constructible from its name but not restored from a save.**
+  `BotBehaviors.Create(string)` is the registry; `Deserialize` does not call it, because every bot
+  deletes itself on load.
+- **Caps are read from `Config/PlayerCaps.cfg`**, never written as literals - `bots.json` may only
+  override, and says so in the boot line when it does.
+- **The population target is 60**, in `bots.json`, a measured starting point rather than upstream's
+  1600. `Bots.Recipe` reports the tick cost beside the live count so the next value is arithmetic.
 
 ## The constraint everything else follows from
 
@@ -628,6 +666,8 @@ counts those residents (`no station at home:`) as a report, not a rule.
 
 ### Trinsic's bank weighed what Britain's did, and the hand-over failed three runs in five
 
+*Measured 11 September 2026 (`85262284`); the weights it settled are in force.*
+
 **No commit broke the hand-over.** The work probe was reported failing — *"the miner is still
 carrying its load - it never reached a delivery point... miner ended as Traveler, 37 units mined"* —
 and the first job was to find the regression. There is not one:
@@ -788,6 +828,8 @@ shows up in `[CoreSmoke` rather than as a slower chain nobody can explain. The w
 smith at the forge nearest the mine by road and asserts that the ore reached **that** smith.
 
 ### A fixture reads as a fixture, and the clock it was shown is one nothing reads
+
+*Found 11 September 2026 (`55086e11`).*
 
 `[BotInfo` on a bank sitter read **"Phase BankSitter: 30s of 30s elapsed, 0s left"**, and the bot
 never did anything but talk. Both halves are the report's fault rather than the bot's.
@@ -956,6 +998,8 @@ lands in the same trap.
 
 ## The engine does not refuse a double-equip, it just tells you about it
 
+*Measured 9 September 2026 (`1a09b4a5`); the mechanism it describes is in force.*
+
 `Mobile.AddItem` (`Server/Mobile.cs:6779`) notices that a layer is taken, writes `LayerConflict.log`
 and a red console line — **and then equips the item anyway**, falling through to `m_Items.Add(item)`
 at `:6807`. Nothing is dropped and nothing is refused. Both items sit on the layer,
@@ -991,10 +1035,17 @@ the aproned look survives a taken torso — the accessory apron asks about `Laye
 `Layer.OuterTorso` and stops excluding the gatherers who already have one, and a shield is rolled
 only when `HasFreeHand()`, which the comment beside it always claimed and nothing enforced.
 
-`[BotSmoke` asserts the file does not grow across its run. That is the only assertion available: a
-conflict leaves **no trace on the bot** to inspect afterwards, because both items are equipped and
-one of them is simply invisible. Seventeen classes at Grandmaster, a sixty-bot population fill and
-the full probe chain now leave `LayerConflict.log` byte-identical.
+`[BotSmoke` asserts the file does not grow across its run. Seventeen classes at Grandmaster, a
+sixty-bot population fill and the full probe chain now leave `LayerConflict.log` byte-identical.
+
+**That is the assertion implemented, not the only one available** - a correction this section used
+to get wrong about its own mechanism. A conflict leaves no trace in the CLIENT, because one of the
+two items is invisible there; it leaves a perfectly inspectable one in the object model, which is
+what the paragraphs above describe. `AddItem` falls through to `m_Items.Add(item)` (`Mobile.cs:6807`),
+so **both items stay in the collection** and `FindItemOnLayer` merely returns whichever is first in
+list order. Counting items per layer on a dressed bot is therefore a direct assertion, and a better
+one than log growth: it fails on the bot in front of you rather than on a file, and it cannot be
+defeated by a conflict the logger never saw. Nothing in the tree makes that assertion yet.
 
 ## Equipment is still T2A-flavoured
 
@@ -1007,84 +1058,9 @@ these tables out into `Data/Custom/` rather than to edit 2,000 lines of C# in pl
 
 ## The behaviour tick
 
-### The behaviour ticker started twice, and every per-pass number was against half its interval
-
-**Two repeating timers, both calling `OnTick`, for the life of the process.** `ScriptCompiler.Invoke`
-reflects over every type in every loaded assembly and calls every `public static void Initialize()`
-it finds (`ScriptCompiler.cs:87`), so `BotTickManager.Initialize` was called automatically — and
-`BotSystem.Initialize` called it by name as well, for ordering. The body assigned `_timer`
-unconditionally, so the handle was replaced while the first timer went on running. **Neither
-ordering rescues it**: whichever call lands first, the second makes a second timer. That is why the
-guard is in `BotTickManager` rather than in the caller, and why the explicit call is kept — it still
-says what it meant about ordering, and it is now a no-op when it loses the race.
-
-Measured on the shipped build, the pass counter over a timed minute:
-
-| | passes in ~60 s | passes/s | `Custom.BotTickSeconds` |
-| --- | --- | --- | --- |
-| before | **60** | 1.00 | 2.0 |
-| after | **30** | 0.49 | 2.0 |
-
-Corroborated independently by a `[CoreSmoke` reading *"over 124 pass(es)"* about 126 seconds after
-boot, where 63 was expected.
-
-**What it cost was not CPU.** A pass is two hundredths of the budget either way. It is that every
-cadence this layer measures **in passes** was doubled:
-
-- `Custom.BotPlansPerTick` is a budget reset per pass, so the real planning rate was **twice** the
-  eight per tick it names.
-- Anything rolled per behaviour tick happened twice as often — including the idle beat
-  (`life.idle.beatChance`) and a gatherer's swings, which is why a failing work-probe run showed 63
-  swings where a passing one showed 16.
-- Any figure quoted "per pass" or "per tick" was against **half** the wall-clock interval it named.
-
-**Elapsed-time deadlines are unaffected** and did not need re-measuring: visit windows, phase clocks
-and sessions all compare `CustomTime` rather than counting passes.
-
-#### What the corrected cadence does to the numbers above
-
-A fresh 15-minute window at single cadence, 51 bots, `MeasurementProfile` off:
-
-| | window C, double cadence, ~61 bots | single cadence, 51 bots |
-| --- | --- | --- |
-| idle steps, whole window | 37 | **7** |
-| BankSitter, idle steps per bot-minute | 0.16 | **0.036** |
-| Crafter / Shopper / Traveler | 0.00 | **0.00** |
-| behaviour tick | 0.4 ms mean / 13 ms max of 2000 ms | **0.7 ms mean / 15 ms max of 2000 ms** |
-
-The idle residual was always the drift-back beat, rolled per pass — halve the passes and it falls,
-which is what happened. **The tick mean went up rather than down**, on a smaller population, and the
-likely reason is selection rather than cost: at double cadence roughly half the passes arrived with
-nothing accumulated since the pass a second earlier and were cheap, which dragged the mean down. The
-figure to carry forward is the one on the right, because it is the shipped configuration.
-
-**It was not the unexplained remainder in the haul defect above, and that needs no further
-experiment.** Every measurement in that section — the three failures in five *and* the six passes in
-six after the weight fix — ran at double cadence, because this guard was written after that fix was
-committed. A constant across both arms cannot be what distinguished them.
-Five more work-probe runs at the corrected cadence read **4 passed, 1 failed**, so the residual is
-real and is not timing either. The haul log names it, which is the whole reason it exists:
-
-```
-Morwen Highmoor is hauling to 'brit-forge-south-2', 257 tile(s) away: brit-bank w0.05,
-brit-forge-south w0.29 330t, *brit-forge-south-2 w0.30 317t, trinsic-bank w0.02, ...
-```
-
-**`brit-forge` is not in that list at all.** It scored zero and was dropped, by an exclusion or by
-`DistanceFactor`'s route check failing, which `Nav.TryRouteFrom` distinguishes and this line did not
-carry. The probe puts *two* smiths at that one forge, and `brit-forge` authors four arrivals of which
-two are exclusive, so "the staffed bench is temporarily unroutable because its own crafters are
-standing on it" is the obvious candidate and is **not yet established**. The filter now lists a
-delivery point whatever it weighs, with its no-route reason, so the next failure says which.
-
-**It was a different defect from the weights, and it is fixed above**: the bench was dropping out of
-the haul roll because `VacancyFactor` zeroes a work site at capacity and its own smiths filled it.
-See *The bench vanished from the roll because its smiths were standing at it*. A laden miner whose
-target bench disappears does not need better weights; it needs the bench not to disappear.
-
-One `Timer` at `Custom.BotTickSeconds` (2s) - one, now, and see above for how long it was
-two - started from whichever of `BotSystem.Initialize` and `ScriptCompiler`'s reflection gets there
-first. It is the first caller `PlayerBotBehavior.Tick` has ever had.
+One `Timer` at `Custom.BotTickSeconds` (2s) - one, now, and see [History](#history) for how long it
+was two - started from whichever of `BotSystem.Initialize` and `ScriptCompiler`'s reflection gets
+there first. It is the first caller `PlayerBotBehavior.Tick` has ever had.
 
 **It does not move anything.** `NavWalker` has driven movement on its own shared timer since step
 4a and still does. The tick makes decisions and watches for stranded walkers.
@@ -1125,8 +1101,9 @@ Two details that are easy to get wrong:
 
 **Linger is always bounded.** Upstream had a `Wait` arrival style meaning "indefinitely, until the
 lifecycle moves it"; it parked 40% of arrivals for entire sessions and made their status page read
-as a stuck-bot epidemic. There is no lifecycle here yet to move anyone on, which would make an
-unbounded linger permanent.
+as a stuck-bot epidemic. It stays bounded now that [the lifecycle](#the-lifecycle) exists and could
+in principle move a lingerer on: the roller only fires when a phase expires, so an unbounded linger
+would still be a bot waiting on a clock nobody guarantees. The bound is the guarantee.
 
 ### The watchdog, and why the tick exists at all
 
@@ -2583,99 +2560,6 @@ The first version of this probe called a bot stuck if it was still walking when 
 and duly reported five stuck bots that were simply getting on with it — a Traveler that arrives
 lingers and then departs again of its own accord, so "still walking" is the *normal* steady state.
 
-## The walk-in, and three ways it was broken
-
-A Gatherer sent to a site from anywhere except the site itself did not work. It either turned back
-into a Traveler within a tick, or walked most of the way, spawned its pack beast, and then stood
-outside reporting *"standing outside a work site"* until it gave up seventy-five seconds later.
-
-One symptom, three independent faults. Worth separating, because two of them were invisible and the
-third was mis-attributed to the map.
-
-**It was NOT the slope.** The obvious suspicion is that the site zone does not contain the arrival
-tiles as the ground climbs from z 32 to z 45. It does. `NavZone.Contains(x, y)` never consults Z at
-all, and all five `brit-mine-north` arrivals sit at least four tiles inside the rectangle — further
-in than `Custom.NavArrivalScatter` can push them.
-
-### 1. A hand switch handed over the brain but not the destination
-
-`Crafter` and `Gatherer` are arrival handoffs: the Traveler passes the destination across at the
-same moment it passes the brain across. `[BotBehavior Gatherer` passed only the brain, so
-`DestinationId` was null, `ResolveSite` fell through to `Nav.Destination(null)`, and `OnAttached`
-walked the bot straight back to Traveler. Typing the command appeared to do nothing.
-
-That is also why the rest stayed hidden: **nobody could hold a gatherer still long enough to watch
-it fail.** `BotWorkSites.NearestSiteFor` now supplies the missing half, and a class with nowhere to
-work is told so instead of silently walking away.
-
-### 2. Clocking in and staying clocked in asked different questions
-
-`OnWalkedIn` clocked in on zone containment alone. `CanClockIn`, which decides whether the bot
-*stays* clocked in on the very next tick, demands containment **and** something within harvest
-reach. So a bot that landed on a thin tile clocked in — spawning its pack beast, which is what made
-the failure look like a success — un-clocked one tick later, and asked to walk in again.
-
-The re-walk cannot help, and this is the heart of it: **the route ends at an arrival point of a
-destination the bot is already standing in**, so the walker finishes without taking a step. What was
-needed was not a route across town but a few steps sideways, and nothing could take them —
-`StepAlongTheFace` is reachable only from `Swing`, which runs only *after* clocking in.
-
-`SeekReach` is that missing step: standing inside the site with nothing in reach, sweep
-`SeekRadius` tiles for the nearest one that has something, and walk to it one tile per tick. Every
-candidate passes the same three tests a shuffle does — inside the zone, standable, and still able to
-route home — so it cannot go anywhere `StepAlongTheFace` would refuse.
-
-This one was **not confined to the walk-in.** The event log caught the work probe's own miner —
-spawned directly on a good tile, in a run that passed — clocking in twice in one shift:
-
-```
-clock  clocked in at 1447,1521 in 'brit-mine-north-face', reach 5
-clock  clocked in at 1450,1520 in 'brit-mine-north-face', reach 5
-clock  shift over - 21 swing(s), 17 mined, carrying 17
-```
-
-It had shuffled onto a zero-reach tile and had to walk back in. Every shift was paying this.
-
-**And `SeekReach` did not stop it being announced as a shift.** What that fix corrected was the
-walk-in asking a different question from `Tick`; it left `_clockedIn` meaning "has tiles in reach
-right now", which `Tick` clears on every reach loss and sets again on every reach regain. So the
-bot went back to work, which is what `SeekReach` is for, and said "clocked in" again each time it
-did. A later session found one miner logging four clock-ins in a shift (reach 3, 12, 4, 3) and
-another logging eight, some two seconds apart, none of which had left the site.
-
-The shift now has a latch of its own, keyed on `VisitExpiresAt` rather than held as a plain bool:
-a new `GathererBehavior` is usually a new shift, but the arrival handoff can carry an existing
-window onto a fresh instance and a stuck-recovery teleport can re-arrive mid-shift, and an
-instance bool would call both of those new shifts. Losing and regaining reach now logs
-`lost reach` and `back on the face`, so the oscillation stays visible without being counted as a
-shift it is not. `GathererBehavior.ClockIns` counts them and the work probe asserts exactly one -
-the probe previously sampled `IsWorking` once, twelve seconds in, which cannot tell one clock-in
-from eight, which is why it passed with the log above sitting in the same run.
-
-### 3. The give-up clock was racing the walker's recovery ladder
-
-`NavWalker.ArrivalRangeFor` returns **0** for a `NavStepKind.Arrival` — the last tile of a route
-must be hit exactly — and the recovery ladder is five rungs at `HopTimeout` apiece, so a contended
-one-tile approach can legitimately take 80 to 100 seconds to land. Against a flat 75-second budget
-the give-up fired first, and `Release` then called `_walker.Stop()`, which drops the route with no
-`Arrived` callback: **the recovery that was about to succeed was thrown away.**
-
-Observed on a live run, on the forge arrival rather than the mine:
-
-```
-[WARN] [Nav] Enid Ashdown could not walk 'brit-smith-1' -> '(arrival)' after the whole recovery
-             ladder with nobody watching; it was moved. Check that edge.
-```
-
-The deadline now stops running while the walker is active. That is not the same as removing it —
-the walker has its own abandonment path, watched by the branch below it — so what remains bounded is
-the time spent *not* walking, which is what the timeout was always meant to bound. The budget is
-`Custom.BotWalkInSeconds`.
-
-And the give-up now logs at `Info` and increments `BotTickManager.GaveUpTotal`, which `Bots.Work`
-reports. Previously it logged at `Debug` and counted nothing, which is how three faults shared one
-symptom for a whole session without anybody being able to tell them apart.
-
 ## The work probe
 
 Runs with `[BotSmoke`, last of the four, reports through `Bots.Shift`.
@@ -2743,6 +2627,8 @@ Traveler's and `Bots.Travel` already proves it; spending two minutes of the wind
 covered elsewhere would only make this flakier.
 
 ### The phase clock was never started, and it broke every hand switch
+
+*Found and fixed 6 September 2026 (`ca5e745e`).*
 
 `[BotBehavior Crafter` on a bot was overwritten within seconds, every time. `[BotInfo` said why, in
 a number nobody read as a fault:
@@ -2844,6 +2730,8 @@ rather than assuming the saving applies everywhere.
 
 ### The probe leak, which was real
 
+*Found and fixed 6 September 2026 (`7b12b66a`).*
+
 `BotWalkProbe.Report` and `BotLifeProbe.Report` were not wrapped, and both do substantial work —
 walker and rung accessors, `BotCrowds.BelowFloor`, list indexing — before their single `Finish` at
 the end. A throw anywhere in there skipped `Finish`, which left `_running` true for the life of the
@@ -2898,8 +2786,12 @@ simply does not model a bot whose job is to stay put.
 
 ## Known simplifications
 
-1. **The behaviour name is serialized but not restored.** There is no registry to construct a brain
-   from a string yet, and a bot is deleted on load regardless.
+1. **The behaviour name is serialized but not restored.** The registry to construct a brain from a
+   string does exist - `BotBehaviors.Create(string)` (`BotBehaviors.cs:40-51`), six factories and an
+   Idle fallback for a name a later build removed - and `[BotBehavior` and the editor's bot-spawner
+   form both go through it. `Deserialize` does not, and does not need to: every bot deletes itself on
+   load (see [Ephemerality](#ephemerality)). The seam is the lifecycle session's, and the registry is
+   what it grows into.
 2. **A crafter's ledger is counted, not tracked.** Upstream kept a `List<Item> _made`;
    `CrafterBehavior` counts pack items whose type is in its own bands instead. That is simpler and
    nothing goes stale when an item is moved or destroyed — but it means a starter prop the bot was
@@ -3153,6 +3045,191 @@ Retired by later sessions, listed so a reader of an older diff is not misled:
   starter kit are severed (seams 1 and 3). They are fully dressed and skilled; they just have
   nothing they have made yet."* Session 5 gave four of the six a station, a kit and a shift.
   Fisherman still has none, and now says so out loud — see seam 10.
+
+## History
+
+Dated findings, kept for their reasoning. They are here so that nothing in this file reads as a
+statement of current capability when it is the record of one that has since changed.
+
+**What lands here, and what does not.** A section moves into this one when it narrates a defect that
+no longer exists *and* sits where a reader goes looking for current behaviour. A section that
+explains the shape of something still in force stays where it is and carries a date line instead,
+because moving it would separate it from the thing it explains. Both kinds are dated; neither is
+shortened. The dates are the commit that landed the investigation, from `git log`.
+
+### The behaviour ticker started twice, and every per-pass number was against half its interval
+
+*Found and fixed 11 September 2026 (`57e90483`). The contract it settled is in
+[The behaviour tick](#the-behaviour-tick).*
+
+**Two repeating timers, both calling `OnTick`, for the life of the process.** `ScriptCompiler.Invoke`
+reflects over every type in every loaded assembly and calls every `public static void Initialize()`
+it finds (`ScriptCompiler.cs:87`), so `BotTickManager.Initialize` was called automatically — and
+`BotSystem.Initialize` called it by name as well, for ordering. The body assigned `_timer`
+unconditionally, so the handle was replaced while the first timer went on running. **Neither
+ordering rescues it**: whichever call lands first, the second makes a second timer. That is why the
+guard is in `BotTickManager` rather than in the caller, and why the explicit call is kept — it still
+says what it meant about ordering, and it is now a no-op when it loses the race.
+
+Measured on the shipped build, the pass counter over a timed minute:
+
+| | passes in ~60 s | passes/s | `Custom.BotTickSeconds` |
+| --- | --- | --- | --- |
+| before | **60** | 1.00 | 2.0 |
+| after | **30** | 0.49 | 2.0 |
+
+Corroborated independently by a `[CoreSmoke` reading *"over 124 pass(es)"* about 126 seconds after
+boot, where 63 was expected.
+
+**What it cost was not CPU.** A pass is two hundredths of the budget either way. It is that every
+cadence this layer measures **in passes** was doubled:
+
+- `Custom.BotPlansPerTick` is a budget reset per pass, so the real planning rate was **twice** the
+  eight per tick it names.
+- Anything rolled per behaviour tick happened twice as often — including the idle beat
+  (`life.idle.beatChance`) and a gatherer's swings, which is why a failing work-probe run showed 63
+  swings where a passing one showed 16.
+- Any figure quoted "per pass" or "per tick" was against **half** the wall-clock interval it named.
+
+**Elapsed-time deadlines are unaffected** and did not need re-measuring: visit windows, phase clocks
+and sessions all compare `CustomTime` rather than counting passes.
+
+#### What the corrected cadence does to the numbers above
+
+A fresh 15-minute window at single cadence, 51 bots, `MeasurementProfile` off:
+
+| | window C, double cadence, ~61 bots | single cadence, 51 bots |
+| --- | --- | --- |
+| idle steps, whole window | 37 | **7** |
+| BankSitter, idle steps per bot-minute | 0.16 | **0.036** |
+| Crafter / Shopper / Traveler | 0.00 | **0.00** |
+| behaviour tick | 0.4 ms mean / 13 ms max of 2000 ms | **0.7 ms mean / 15 ms max of 2000 ms** |
+
+The idle residual was always the drift-back beat, rolled per pass — halve the passes and it falls,
+which is what happened. **The tick mean went up rather than down**, on a smaller population, and the
+likely reason is selection rather than cost: at double cadence roughly half the passes arrived with
+nothing accumulated since the pass a second earlier and were cheap, which dragged the mean down. The
+figure to carry forward is the one on the right, because it is the shipped configuration.
+
+**It was not the unexplained remainder in the haul defect above, and that needs no further
+experiment.** Every measurement in that section — the three failures in five *and* the six passes in
+six after the weight fix — ran at double cadence, because this guard was written after that fix was
+committed. A constant across both arms cannot be what distinguished them.
+Five more work-probe runs at the corrected cadence read **4 passed, 1 failed**, so the residual is
+real and is not timing either. The haul log names it, which is the whole reason it exists:
+
+```
+Morwen Highmoor is hauling to 'brit-forge-south-2', 257 tile(s) away: brit-bank w0.05,
+brit-forge-south w0.29 330t, *brit-forge-south-2 w0.30 317t, trinsic-bank w0.02, ...
+```
+
+**`brit-forge` is not in that list at all.** It scored zero and was dropped, by an exclusion or by
+`DistanceFactor`'s route check failing, which `Nav.TryRouteFrom` distinguishes and this line did not
+carry. The probe puts *two* smiths at that one forge, and `brit-forge` authors four arrivals of which
+two are exclusive, so "the staffed bench is temporarily unroutable because its own crafters are
+standing on it" is the obvious candidate and is **not yet established**. The filter now lists a
+delivery point whatever it weighs, with its no-route reason, so the next failure says which.
+
+**It was a different defect from the weights, and it is fixed above**: the bench was dropping out of
+the haul roll because `VacancyFactor` zeroes a work site at capacity and its own smiths filled it.
+See *The bench vanished from the roll because its smiths were standing at it*. A laden miner whose
+target bench disappears does not need better weights; it needs the bench not to disappear.
+
+### The walk-in, and three ways it was broken
+
+*Found and fixed 6 September 2026 (`a6d1fa69`). The budget it settled is
+`Custom.BotWalkInSeconds`; the probe that guards it is [The work probe](#the-work-probe).*
+
+A Gatherer sent to a site from anywhere except the site itself did not work. It either turned back
+into a Traveler within a tick, or walked most of the way, spawned its pack beast, and then stood
+outside reporting *"standing outside a work site"* until it gave up seventy-five seconds later.
+
+One symptom, three independent faults. Worth separating, because two of them were invisible and the
+third was mis-attributed to the map.
+
+**It was NOT the slope.** The obvious suspicion is that the site zone does not contain the arrival
+tiles as the ground climbs from z 32 to z 45. It does. `NavZone.Contains(x, y)` never consults Z at
+all, and all five `brit-mine-north` arrivals sit at least four tiles inside the rectangle — further
+in than `Custom.NavArrivalScatter` can push them.
+
+#### 1. A hand switch handed over the brain but not the destination
+
+`Crafter` and `Gatherer` are arrival handoffs: the Traveler passes the destination across at the
+same moment it passes the brain across. `[BotBehavior Gatherer` passed only the brain, so
+`DestinationId` was null, `ResolveSite` fell through to `Nav.Destination(null)`, and `OnAttached`
+walked the bot straight back to Traveler. Typing the command appeared to do nothing.
+
+That is also why the rest stayed hidden: **nobody could hold a gatherer still long enough to watch
+it fail.** `BotWorkSites.NearestSiteFor` now supplies the missing half, and a class with nowhere to
+work is told so instead of silently walking away.
+
+#### 2. Clocking in and staying clocked in asked different questions
+
+`OnWalkedIn` clocked in on zone containment alone. `CanClockIn`, which decides whether the bot
+*stays* clocked in on the very next tick, demands containment **and** something within harvest
+reach. So a bot that landed on a thin tile clocked in — spawning its pack beast, which is what made
+the failure look like a success — un-clocked one tick later, and asked to walk in again.
+
+The re-walk cannot help, and this is the heart of it: **the route ends at an arrival point of a
+destination the bot is already standing in**, so the walker finishes without taking a step. What was
+needed was not a route across town but a few steps sideways, and nothing could take them —
+`StepAlongTheFace` is reachable only from `Swing`, which runs only *after* clocking in.
+
+`SeekReach` is that missing step: standing inside the site with nothing in reach, sweep
+`SeekRadius` tiles for the nearest one that has something, and walk to it one tile per tick. Every
+candidate passes the same three tests a shuffle does — inside the zone, standable, and still able to
+route home — so it cannot go anywhere `StepAlongTheFace` would refuse.
+
+This one was **not confined to the walk-in.** The event log caught the work probe's own miner —
+spawned directly on a good tile, in a run that passed — clocking in twice in one shift:
+
+```
+clock  clocked in at 1447,1521 in 'brit-mine-north-face', reach 5
+clock  clocked in at 1450,1520 in 'brit-mine-north-face', reach 5
+clock  shift over - 21 swing(s), 17 mined, carrying 17
+```
+
+It had shuffled onto a zero-reach tile and had to walk back in. Every shift was paying this.
+
+**And `SeekReach` did not stop it being announced as a shift.** What that fix corrected was the
+walk-in asking a different question from `Tick`; it left `_clockedIn` meaning "has tiles in reach
+right now", which `Tick` clears on every reach loss and sets again on every reach regain. So the
+bot went back to work, which is what `SeekReach` is for, and said "clocked in" again each time it
+did. A later session found one miner logging four clock-ins in a shift (reach 3, 12, 4, 3) and
+another logging eight, some two seconds apart, none of which had left the site.
+
+The shift now has a latch of its own, keyed on `VisitExpiresAt` rather than held as a plain bool:
+a new `GathererBehavior` is usually a new shift, but the arrival handoff can carry an existing
+window onto a fresh instance and a stuck-recovery teleport can re-arrive mid-shift, and an
+instance bool would call both of those new shifts. Losing and regaining reach now logs
+`lost reach` and `back on the face`, so the oscillation stays visible without being counted as a
+shift it is not. `GathererBehavior.ClockIns` counts them and the work probe asserts exactly one -
+the probe previously sampled `IsWorking` once, twelve seconds in, which cannot tell one clock-in
+from eight, which is why it passed with the log above sitting in the same run.
+
+#### 3. The give-up clock was racing the walker's recovery ladder
+
+`NavWalker.ArrivalRangeFor` returns **0** for a `NavStepKind.Arrival` — the last tile of a route
+must be hit exactly — and the recovery ladder is five rungs at `HopTimeout` apiece, so a contended
+one-tile approach can legitimately take 80 to 100 seconds to land. Against a flat 75-second budget
+the give-up fired first, and `Release` then called `_walker.Stop()`, which drops the route with no
+`Arrived` callback: **the recovery that was about to succeed was thrown away.**
+
+Observed on a live run, on the forge arrival rather than the mine:
+
+```
+[WARN] [Nav] Enid Ashdown could not walk 'brit-smith-1' -> '(arrival)' after the whole recovery
+             ladder with nobody watching; it was moved. Check that edge.
+```
+
+The deadline now stops running while the walker is active. That is not the same as removing it —
+the walker has its own abandonment path, watched by the branch below it — so what remains bounded is
+the time spent *not* walking, which is what the timeout was always meant to bound. The budget is
+`Custom.BotWalkInSeconds`.
+
+And the give-up now logs at `Info` and increments `BotTickManager.GaveUpTotal`, which `Bots.Work`
+reports. Previously it logged at `Debug` and counted nothing, which is how three faults shared one
+symptom for a whole session without anybody being able to tell them apart.
 
 ## Reference
 
