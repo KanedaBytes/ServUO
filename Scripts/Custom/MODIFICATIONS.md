@@ -333,7 +333,7 @@ of these, the dependent system breaks quietly.** Re-verify each after every upst
   (`Scripts/Custom/Zones/RestrictedZoneCommands.cs`) is declared as an alias but never registered,
   so it does not work — `[RestrictedZonesReload` does.
 
-### Spawners
+### Spawners - the XmlSpawner API
 
 - **`[XmlLoad` / `[XmlUnLoad` take an optional `SpawnerPrefixFilter` second argument**, matched
   with an ordinal `Name.StartsWith` (`XmlSpawner2.cs:6178`, `:4776`). The whole `GG_` naming
@@ -371,16 +371,24 @@ Sixteen further blocks in the same file carry `<MinDelay>` twice and no `<MaxDel
 `DataSet` schema inference may well turn into every trammel spawner loading with default delays.
 Unverified; `spawnxml.js` reports both defects and neither is acted on.
 
-### Spawners
+### Spawners - identity and the resolved distance question
 
 - `[XmlLoad` recurses directories and treats `<UniqueId>` as identity, so re-importing
   `Spawns/Custom` replaces rather than duplicates.
-- **To verify before the daily-life port:** whether ServUO's spawner `Defrag` / `OnDefragSpawn`
-  applies a distance check. On ModernUO it did not, which is what made it safe to walk a
-  spawner-owned vendor home at dusk without the spawner deciding it was missing and spawning a
-  duplicate. If ServUO *does* check distance, the shop schedule needs a different approach.
-- **Also to verify:** that `BaseVendor`'s `FightMode.None` exempts it from `BaseCreature`'s
-  return-to-home path, as it did on ModernUO.
+- **RESOLVED 5 September 2026, before the daily-life port - no distance check, and the question is
+  closed.** It was listed here as two things to verify; both were then measured, and the findings
+  live in `Scripts/Custom/DailyLife/README.md` under *The shopkeeper problem*. Kept as a resolved
+  investigation rather than deleted, because the reasoning is what a merge has to re-check:
+  - `XmlSpawner2.Defrag` (`XmlSpawner2.cs:7990`) drops a spawn only when it is **deleted, tamed, or
+    despawn-timed-out in an inactive sector**. No distance, map or home check - which is what makes
+    it safe to walk a spawner-owned vendor home at dusk. Both despawn paths are additionally
+    disabled by data: `SmartSpawning` is `False` and `DespawnTime` `0` on all 2,572 Trammel
+    spawners.
+  - The `FightMode.None` question turned out to be the wrong question. ServUO's return-to-home never
+    fires for these at all: `IsSpawnerBound()` (`BaseCreature.cs:7787`) requires `Spawner is
+    Spawner`, and `XmlSpawner : Item, ISpawner`. The exemption is structural, not a flag.
+  - **If a merge changes either**, the shop schedule needs a different approach and
+    `[DailyLifeSmoke` is what would notice.
 
 ### Timers
 
