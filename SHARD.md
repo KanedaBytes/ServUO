@@ -562,6 +562,42 @@ tools into the same count. One backpack holding one gold pile is `BaseCreature.A
 separate question about ServUO's own creature lifecycle.
 
 
+### The console is readable from outside its window
+
+**The shard's log IS its console, and nothing outside that window could read a line of it.**
+`tools/dev.ps1` deliberately gives the shard its own window so a crash leaves its evidence on
+screen; ServUO writes `Logs/Console.log` only under `-service`; `CustomLogger` goes straight to
+`Utility.WriteConsoleColor`. So there was no file to follow.
+
+`ConsoleTap` (`Scripts/Custom/Core/Bridge/ConsoleTap.cs`) tees `Console.Out` into a ring buffer and
+publishes the last `Custom.ConsoleTapLines` (2000) to **`Data/Live/console.json`**, plus sign-ins
+and sign-outs to **`Data/Live/logins.json`**. `Custom.ConsoleTap=False` turns the whole thing off.
+
+**The seam that looks right is not the one that works.** `Core.MultiConsoleOut` is a
+`MultiTextWriter` and `RemoteAdmin/Network.cs:23` adds a listener to it — but in a **Release** build,
+which is what `build.ps1` produces, `ConsoleHook.Initialize` (`Scripts/Misc/Timestamp.cs:31-38`)
+calls `Console.SetOut` with a writer over the raw stdout stream, and from that moment nothing
+reaches `MultiConsoleOut` at all. (RemoteAdmin's console relay has therefore been dead in Release
+for as long as both have existed. Noted; nothing here uses it.) So the tap wraps whatever
+`Console.Out` *is*, from `[CallPriority(900)]` — after `ConsoleHook`, which is untagged and so
+priority 0.
+
+It installs **twice**: once at `Configure`, which is before `World.Load` and so covers the part of a
+boot worth reading when a boot goes wrong, and again at `Initialize` over the hook. The first is
+discarded rather than chained, because `ConsoleHook` does not chain; the gap between them is one
+`Invoke` pass.
+
+### What the process itself costs
+
+`Core.Process` (`Scripts/Custom/Core/ProcessHealth.cs`) reports `Core.CyclesPerSecond` and
+`AverageCPS`, managed heap, working set, and **how long each world save took** — which matters more
+than it looks, because `World.Save` runs synchronously on the core thread and the Timer thread idles
+through it, so the save duration is the length of the longest freeze the shard has. Nothing in
+`Scripts/Custom/` reported any of these before, and `AdminGump` — which needs a client — was the
+only place they appeared.
+
+Baseline, 61 bots and 219,308 items: **0.26 s** to save, 385 MB managed / 529 MB working set.
+
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is
 refusing to save. Run it after every upstream merge.
