@@ -56,8 +56,29 @@ namespace Server.Custom
 
         public const string SnapshotPath = "Data/Live/bot-orphans.json";
 
+        /// <summary>
+        /// Every item a live bot owned at the last world save, by SERIAL.
+        ///
+        /// THE JOIN KEY HAS TO BE THE ITEM'S OWN SERIAL, because the obvious one is gone by the
+        /// time anybody can ask. The orphan scan runs after World.Load, by which point a bot has
+        /// already deleted itself, so an orphaned backpack has no parent left to name - which is
+        /// exactly why "zero belong to a PlayerBot" was the answer whether or not they were the
+        /// bots'. A serial survives the restart in this file and in the save alike, so matching
+        /// the two asks the question the owner check structurally could not.
+        /// </summary>
+        public const string CensusPath = "Data/Live/bot-items.json";
+
         /// <summary>Half a second before Cleanup.Run, which is at 2.5s. See the header.</summary>
         private static readonly TimeSpan ScanDelay = TimeSpan.FromSeconds(2.0);
+
+        /// <summary>
+        /// Written at every world save, because the save is the only moment that matters: the
+        /// items in the NEXT boot's orphan list are the items that were in THIS save.
+        /// </summary>
+        public static void Configure()
+        {
+            EventSink.WorldSave += delegate { WriteCensus(); };
+        }
 
         public static void Initialize()
         {
@@ -86,6 +107,15 @@ namespace Server.Custom
         /// </summary>
         public static IList<string> Scan(out int total, out int fromBots)
         {
+            List<int> ignored;
+
+            return Scan(out total, out fromBots, out ignored);
+        }
+
+        public static IList<string> Scan(out int total, out int fromBots, out List<int> serials)
+        {
+            serials = new List<int>();
+
             var byOwner = new Dictionary<string, int>(StringComparer.Ordinal);
             var byType = new Dictionary<string, int>(StringComparer.Ordinal);
 
@@ -105,6 +135,7 @@ namespace Server.Custom
                 }
 
                 total++;
+                serials.Add(item.Serial.Value);
 
                 object parent = item.Parent;
                 object root = item.RootParent;
@@ -139,11 +170,104 @@ namespace Server.Custom
             return lines;
         }
 
+        /// <summary>
+        /// Every item every live PlayerBot owns right now, by serial, plus its mount.
+        ///
+        /// Walks each bot's own layers and its container contents rather than World.Items, because
+        /// the question is "what did THIS bot own" and the answer has to be complete: an orphaned
+        /// pack holding one gold pile reads as creature loot until you can show the pack's serial
+        /// was a bot's.
+        /// </summary>
+        public static void WriteCensus()
+        {
+            var builder = new StringBuilder(8192);
+            int bots = 0;
+            int owned = 0;
+
+            builder.Append("{\n");
+            builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
+            builder.Append("  \"bots\": [");
+
+            foreach (Mobile mobile in LiveRegistry.Snapshot())
+            {
+                var bot = mobile as PlayerBot;
+
+                if (bot == null || bot.Deleted)
+                {
+                    continue;
+                }
+
+                if (bots++ > 0)
+                {
+                    builder.Append(',');
+                }
+
+                var serials = new List<int>();
+
+                Collect(bot.Backpack, serials);
+                Collect(bot.BankBox, serials);
+
+                foreach (Item worn in bot.Items)
+                {
+                    Collect(worn, serials);
+                }
+
+                var beast = bot.Mount as Mobile;
+
+                owned += serials.Count;
+
+                builder.Append("\n    {\"serial\":").Append(bot.Serial.Value);
+                builder.Append(",\"name\":").Append(Json.Quote(bot.Name));
+                builder.Append(",\"mount\":").Append(beast == null ? 0 : beast.Serial.Value);
+                builder.Append(",\"items\":[");
+
+                for (int i = 0; i < serials.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    builder.Append(serials[i]);
+                }
+
+                builder.Append("]}");
+            }
+
+            builder.Append("\n  ],\n");
+            builder.Append("  \"botCount\": ").Append(bots).Append(",\n");
+            builder.Append("  \"itemCount\": ").Append(owned).Append("\n}\n");
+
+            string error;
+
+            if (!AtomicFile.Write(CensusPath, builder.ToString(), out error))
+            {
+                Log.Error("Could not write {0}: {1}", CensusPath, error);
+            }
+        }
+
+        /// <summary>An item and everything inside it, recursively.</summary>
+        private static void Collect(Item item, List<int> into)
+        {
+            if (item == null || item.Deleted)
+            {
+                return;
+            }
+
+            into.Add(item.Serial.Value);
+
+            foreach (Item child in item.Items)
+            {
+                Collect(child, into);
+            }
+        }
+
         private static void Report(Mobile from)
         {
             int total, fromBots;
+            List<int> serials;
 
-            IList<string> lines = Scan(out total, out fromBots);
+            IList<string> lines = Scan(out total, out fromBots, out serials);
 
             var builder = new StringBuilder(512);
 
@@ -151,6 +275,24 @@ namespace Server.Custom
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
             builder.Append("  \"total\": ").Append(total).Append(",\n");
             builder.Append("  \"fromBots\": ").Append(fromBots).Append(",\n");
+
+            // THE SERIALS, which is what makes this answerable across a boot at all. The owner
+            // columns above can only ever say "nobody", because the parent deleted itself before
+            // anything could look; a serial matched against bot-items.json from the last save says
+            // whose it was regardless.
+            builder.Append("  \"serials\": [");
+
+            for (int i = 0; i < serials.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(',');
+                }
+
+                builder.Append(serials[i]);
+            }
+
+            builder.Append("],\n");
             builder.Append("  \"lines\": [");
 
             for (int i = 0; i < lines.Count; i++)

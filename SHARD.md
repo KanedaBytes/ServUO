@@ -555,6 +555,61 @@ at once and the audit cannot see why - and a bot standing still can be failing a
 
 ## Health checks
 
+### The orphans are still not the bots, and now the test can tell
+
+The earlier answer was right and the objection to it was fair. `[BotOrphans` runs half a second
+before `Cleanup.Run`, which is **after** `World.Load` - by which time a bot has already deleted
+itself. So "zero belong to a `PlayerBot`" is exactly what you would see whether or not they were the
+bots', because the parent is gone before anything can look. The owner check could not answer its own
+question.
+
+**The join key has to be the item's own serial**, recorded while the parent is still alive.
+`BotOrphans.WriteCensus` runs at every `WorldSave` and writes `Data/Live/bot-items.json`: every live
+bot, its mount, and every item on it or inside its pack and bank box, by serial. The orphan snapshot
+now carries the serials it found. Match the two across a restart and the parent's absence stops
+mattering.
+
+Measured, over a save taken after twelve minutes of ordinary running:
+
+| | |
+| --- | --- |
+| in the save | **57 bots owning 2,871 items** |
+| orphans at the next boot | **26** - 13 `Backpack`, 13 `Gold` |
+| orphan serials found in the bot census | **0 of 26** |
+| bot-owned items that were orphaned | **0 of 2,871** |
+
+**It is the second row that settles it.** A null owner check on 26 items is weak; *not one of 2,871
+bot-owned items being orphaned* is not. If the ephemeral delete ran before its items were attached,
+those 2,871 would be the orphan list.
+
+**And the ordering says why it cannot.** `Timer.DelayCall(Delete)` queued inside `Deserialize` goes
+onto the timer queue, and the **Timer thread does not start until after `World.Load` and after
+`Initialize`** (`Server/Main.cs`, and the boot sequence in `CLAUDE.md` section 3). By the time the
+callback can run, every item in the save is loaded and attached to its parent, so `Mobile.Delete`
+cascades exactly as designed - `OnDelete`, then `OnParentDeleted` on every item, which is `Delete()`,
+which recurses into its own contents. The 2,871-to-0 figure is that cascade working.
+
+The composition still points where it pointed: **26 serials in 14 consecutive runs**, almost all
+adjacent `Backpack`+`Gold` pairs with every gold's parent one of those packs, which is
+`BaseCreature.AddLoot`/`PackGold` allocating exactly those two back to back and nothing in between.
+A bot's pack is never gold-only - `EquipmentTable.RollOutfit` puts six to twenty items in before the
+gold - so an orphaned bot pack would have dragged its robe and its shoes into the same list.
+
+Two things worth keeping for whoever picks this up:
+
+- **"Swept N stray bot mounts" did not appear at this boot at all**, so it is not the reliable
+  companion the hypothesis assumed. When it does fire it is `SweepStrayMounts` clearing *parked*
+  mounts, which reach the save precisely because the dismount stopped deleting them - a different
+  mechanism from an orphaned pack, and one that already has an owner.
+- **The count tracking the bot population is a coincidence of scale, not a link.** Both track how
+  busy the shard has been; 26 here against 57 bots, and 132 on a longer-running shard, are the same
+  loot packs accumulating at their own rate.
+
+**No code changed.** Where those loot packs come from is ServUO's own creature lifecycle rather than
+this shard's, `Scripts/Misc/Cleanup.cs` is upstream and untouched, and the ephemeral delete is
+correct where it is. What changed is that the question is now answerable: run `[BotOrphans` after any
+restart and the serial match either names a bot or rules one out.
+
 **`Cleanup: Detected N inaccessible items` is not the bots.** That line appears on every boot —
 30, 288, 50, 240, 240, 136 and 132 across this session's boots — and the standing suspicion was
 that it was the packs and purses of PlayerBots, which delete themselves on load because nothing
