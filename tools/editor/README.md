@@ -1490,6 +1490,14 @@ the shard and forgotten here would draw as an ordinary bot and look deliberate.
 The trailing slot shows the stuck rung when there is one, in preference to the behaviour name: a
 wedged bot is the thing somebody opened this panel to find.
 
+**A fixture is badged `fixed`, and only a fixture.** `Lifecycle` is the default and about two
+bots in three are one, so marking both would say nothing; the fixture is the exception, and it is
+the answer to the question this panel most often provokes - a bank sitter that has stood in one
+place for three hours reads as a stuck bot until you know it is the garrison. A bot on a timed
+visit also shows `Ns left`. Both come from `entities.json`, which carries `role` and `visitLeft`
+for this; `modules.test.js` pins the role vocabulary to `BotRole.cs` the way it already pins
+`BEHAVIOR_COLORS` to `BotBehaviors.cs`.
+
 > **And it never once did.** `updateCounts` swept `document.querySelectorAll('.count')` to fill in
 > the layer-row totals, and the Bots panel's trailing slot is a span of class `count` too. Those
 > carry no `data-layer`, so they fell through to the last branch and were set to the number of
@@ -1551,6 +1559,78 @@ Three details:
 
 `bridge.test.js` asserts that every `api.request('...')` in `app.js` has a matching `case "...":`
 in `RequestPoller.cs`, so the browser half cannot ship without the shard half.
+
+## Two panels that redraw on a timer, and what that cost the reader
+
+The Bots card and the Admin console feed had the same fault from opposite ends: **a timer redraw
+destroying what the reader was in the middle of doing.**
+
+### The `[BotInfo` block closed itself about a second after it was opened
+
+`pollEntities` runs every two seconds and ends in `fillBotDetail`, whose first line was
+`host.innerHTML = ''`. That destroyed the whole detail body and rebuilt it - including the
+`<details class="botinfo">` node - and `appendBotInfo` then made a **fresh** one, which has no
+`open` attribute. Nothing anywhere recorded that it had been expanded; `state.botInfo` caches only
+the fetched *text*, keyed by serial.
+
+Two halves, and the second is the one that was actually asked for.
+
+**The expanded state is remembered by serial.** `state.botInfoOpen` is a `Set`, applied to
+`details.open` before the toggle listener is attached. Keyed by serial rather than by one flag
+because the sidebar block and the floating card are two hosts showing one bot, and selecting a
+different bot must not inherit the last one's state. The listener only fetches when the cache for
+that serial is missing - **without that guard, restoring the flag would drop a `botinfo` request
+token every two seconds** for as long as the block stayed open.
+
+**And the rebuild itself is skipped when nothing changed.** The body was recreated on every poll for
+a bot whose rendered fields usually had not moved at all, which threw away the expanded block *and*
+any text selection inside its forty-line report - precisely what somebody reading one is doing.
+`botDetailSignature` (`js/liveview.js`) is compared first, and an unchanged signature returns
+without touching the DOM.
+
+**`visitLeft` is deliberately outside the signature.** It counts down every two seconds, so
+including it would make the signature differ on every poll for exactly the bots somebody is most
+likely to be reading about - a sitter or a shopper running its visit down - and the guard would
+never fire for them. That one number is updated in place instead.
+
+**The hazard is omission, and it is invisible**: a field rendered but not compared is a card that
+silently stops updating. `liveview.test.js` reads `fillBotDetail`'s own `bot.<field>` references out
+of `app.js` and asserts the signature covers every one.
+
+### The console feed snapped to the bottom while you were reading
+
+`pollAdminFeeds` redrew only when the `sequence` moved - which was right - and then set
+`scrollTop = scrollHeight` **unconditionally**. Scroll up to read a stack trace and the next poll,
+two seconds later, takes you back to the end.
+
+The question is now asked **before** the write and acted on after. At the bottom, follow, as before.
+Scrolled up, leave `scrollTop` exactly alone and count what arrived.
+
+`atBottom` is a pure function with a **slack of four pixels**, and that is the part worth testing:
+none of `scrollTop`, `scrollHeight` or `clientHeight` is reliably an integer - a fractional device
+pixel ratio, a zoom level or a sub-pixel line height all leave the sum a shade under `scrollHeight`
+when the box is *visibly* at the end. Comparing for equality reports "the reader has scrolled up"
+about somebody who has not moved, which is this same bug in the other direction.
+
+**`N new ↓`** appears in the feed's own label beside the age readout, and clicking it jumps to the
+bottom. In the label rather than floating over the feed, because a control over the feed would cover
+the newest lines it is advertising.
+
+**One limitation, written down rather than engineered around:** the console is a 2000-line ring
+buffer, so once it is full and rotating, holding `scrollTop` lets the text drift upward under the
+reader - the lines above the viewport are the ones being dropped. Correcting that exactly needs the
+pixel height of what was removed. The unread count is what makes the drift recoverable, and it is
+most useful in precisely that case.
+
+### Why both live in `js/liveview.js`
+
+Neither decision could be tested where it was: both sat inline in a handler, and the suite has no
+real DOM - `modules.test.js`'s shim is deliberately dumb and `panels.test.js` never exercises
+`initSections`. That is the fault `js/problems.js` records in its own header, *"the line it replaced
+lived inside a click handler, was wrong for a year, and nothing could have caught it"*, and the
+answer `js/repoint.js` already used: lift the decision out of the handler into a pure function over
+plain values. `liveview.test.js` covers the fractional-pixel case, the omission case, and asserts in
+source that `app.js` asks before it scrolls.
 
 ## The Live panel
 

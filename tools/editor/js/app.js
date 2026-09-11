@@ -36,6 +36,7 @@ import { auditLine, hasBlocked } from './audit.js';
 import { problemRows, problemSummary, walkAuditSummary, walkAuditFor } from './problems.js';
 import { HOP_CAP, validate, plainFromShapes, farListed } from './validate.js';
 import { repointFor, reachableFrom } from './repoint.js';
+import { botDetailSignature, elementAtBottom } from './liveview.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId, insertedId, insertedName } from './ids.js';
 import { buildShape } from './build.js';
@@ -89,6 +90,18 @@ const state = {
     // changed would fight the scrollbar of anybody reading it.
     consoleSequence: null,
     loginSequence: null,
+
+    // Which bots have their [BotInfo block expanded, by SERIAL. The block lives in a node the
+    // detail rebuild destroys, so without this the disclosure closed itself on the next poll -
+    // about a second after somebody opened it. Keyed by serial rather than by a single flag
+    // because the sidebar block and the floating card are two hosts showing one bot, and
+    // selecting a different bot must not inherit the last one's state.
+    botInfoOpen: new Set(),
+
+    // Per feed: how many lines the reader had seen at the last time they were at the bottom, and
+    // how many there are now. The difference is the unread count the label offers as a way back.
+    feedSeen: {},
+    feedLines: {},
 
     // The replicated validator's last answer, kept so the Problems panel can list it. It used
     // to be computed on every edit and thrown away except for fatal[0], which went to the
@@ -1378,11 +1391,40 @@ function renderBotDetail(bot) {
 }
 
 function fillBotDetail(host, bot) {
-    host.innerHTML = '';
-
     if (!bot) {
+        host.innerHTML = '';
+        host.gg = null;
         return;
     }
+
+    const logEntry = (state.botLog && state.botLog.bots || [])
+        .find((row) => row.serial === bot.serial);
+
+    // DO NOT REBUILD WHAT HAS NOT CHANGED, which is the other half of the collapsing-block fix.
+    //
+    // This ran `innerHTML = ''` and recreated every node on every two-second entity poll, for a
+    // bot whose rendered fields usually had not moved at all. That threw away the expanded
+    // [BotInfo block - the visible symptom - and it also threw away any text selection inside its
+    // forty-line report, every two seconds, which is precisely what somebody reading one is doing.
+    //
+    // The signature lives in js/liveview.js so it can be tested against the fields this function
+    // actually reads: one omitted there is a card that silently stops updating, which is a worse
+    // fault than the flicker being removed.
+    const signature = botDetailSignature(bot, logEntry);
+
+    if (host.gg && host.gg.signature === signature) {
+        // The one thing that moves on its own. Updated in place rather than counted in the
+        // signature, which would otherwise differ on every poll for exactly the bots somebody is
+        // most likely to be reading about - a sitter or a shopper running its visit down.
+        if (host.gg.visit) {
+            host.gg.visit.textContent = ` ${Math.max(0, bot.visitLeft)}s left`;
+        }
+
+        return;
+    }
+
+    host.innerHTML = '';
+    host.gg = { signature, visit: null };
 
     const name = document.createElement('div');
 
@@ -1421,6 +1463,7 @@ function fillBotDetail(host, bot) {
         visit.title = 'Seconds remaining on this visit before the bot hands its brain back to a '
             + 'Traveler.';
         kind.append(visit);
+        host.gg.visit = visit;
     }
 
     const status = document.createElement('div');
@@ -1453,8 +1496,7 @@ function fillBotDetail(host, bot) {
         host.append(dest);
     }
 
-    const entry = (state.botLog && state.botLog.bots || [])
-        .find((row) => row.serial === bot.serial);
+    const entry = logEntry;
 
     const events = document.createElement('ul');
 
@@ -1524,11 +1566,35 @@ function appendBotInfo(host, bot) {
 
     details.append(body);
 
+    // REOPEN IT IF IT WAS OPEN, keyed by serial. This node is recreated whenever the detail block
+    // genuinely changes, and a fresh <details> has no `open` attribute, so an expanded report shut
+    // itself at the next redraw however little had moved.
+    //
+    // Set BEFORE the listener is attached, so restoring the state cannot look like the user
+    // opening it - and the listener is idempotent anyway, because it only fetches when the cache
+    // for this serial is missing. Without that second guard, restoring the flag would drop a
+    // `botinfo` request token every two seconds for as long as the block stayed open.
+    details.open = state.botInfoOpen.has(bot.serial);
+
     details.addEventListener('toggle', () => {
-        if (details.open) {
+        if (!details.open) {
+            state.botInfoOpen.delete(bot.serial);
+            return;
+        }
+
+        state.botInfoOpen.add(bot.serial);
+
+        if (!state.botInfo || state.botInfo.serial !== bot.serial) {
             loadBotInfo(bot.serial, body);
         }
     });
+
+    // Restored open with nothing cached - a bot selected, opened, and then re-selected after the
+    // cache moved to somebody else. Fetch once here rather than leaning on the toggle event, which
+    // may or may not fire for a property set before the node is in the document.
+    if (details.open && !cached) {
+        loadBotInfo(bot.serial, body);
+    }
 
     host.append(details);
 }
@@ -4264,6 +4330,14 @@ function wireAdmin() {
     wireBroadcast();
     wireRestart();
 
+    for (const key of ['console', 'logins']) {
+        const label = $(`admin-${key}-unread`);
+
+        if (label) {
+            label.addEventListener('click', () => jumpFeedToBottom(key));
+        }
+    }
+
     pollAdminFeeds();
 }
 
@@ -4444,17 +4518,23 @@ async function pollAdminFeeds() {
             // Only redraw when the shard has actually said something. Rewriting the <pre> on every
             // poll would fight the scrollbar of anybody reading it.
             if (tail.sequence !== state.consoleSequence) {
+                const lines = (tail.lines || []).map((l) => l.text);
+
+                writeFeed(consoleBox, lines.join('\n'), lines.length, 'console');
                 state.consoleSequence = tail.sequence;
-                consoleBox.textContent = (tail.lines || []).map((l) => l.text).join('\n');
-                consoleBox.scrollTop = consoleBox.scrollHeight;
             }
 
             if (loginBox && logins.sequence !== state.loginSequence) {
+                const rows = (logins.lines || []);
+
+                writeFeed(
+                    loginBox,
+                    rows.length === 0
+                        ? 'No sign-ins this boot. Bots never log in - they have no NetState.'
+                        : rows.map((l) => `${l.utc.slice(11, 19)}  ${l.text}`).join('\n'),
+                    rows.length,
+                    'logins');
                 state.loginSequence = logins.sequence;
-                loginBox.textContent = (logins.lines || []).length === 0
-                    ? 'No sign-ins this boot. Bots never log in - they have no NetState.'
-                    : (logins.lines || []).map((l) => `${l.utc.slice(11, 19)}  ${l.text}`).join('\n');
-                loginBox.scrollTop = loginBox.scrollHeight;
             }
 
             setConsoleAge(tail.utc);
@@ -4466,6 +4546,81 @@ async function pollAdminFeeds() {
     }
 
     setTimeout(pollAdminFeeds, CONSOLE_POLL_MS);
+}
+
+/**
+ * Write new content into a feed WITHOUT throwing away where the reader was.
+ *
+ * The old line was `box.scrollTop = box.scrollHeight` on every redraw, unconditionally. That is
+ * right for somebody watching the tail and wrong for everybody else: scroll up to read a stack
+ * trace and the next poll - two seconds later - snaps you back to the bottom.
+ *
+ * So the question is asked BEFORE the write and acted on after. At the bottom, follow, as before.
+ * Scrolled up, leave `scrollTop` exactly alone and count what arrived, which the label then offers
+ * as a way back.
+ *
+ * ONE LIMITATION, WRITTEN DOWN RATHER THAN ENGINEERED AROUND: the console is a 2000-line ring
+ * buffer, so once it is full and rotating, holding `scrollTop` lets the text drift upward under the
+ * reader - the lines above the viewport are being dropped. Correcting that exactly needs the pixel
+ * height of what was removed. The unread count is what makes the drift recoverable, and it is most
+ * useful in precisely that case.
+ */
+function writeFeed(box, text, lineCount, key) {
+    if (!box) {
+        return;
+    }
+
+    const follow = elementAtBottom(box);
+
+    box.textContent = text;
+    state.feedLines[key] = lineCount;
+
+    if (follow) {
+        box.scrollTop = box.scrollHeight;
+        state.feedSeen[key] = lineCount;
+    }
+
+    renderFeedUnread(key, lineCount);
+}
+
+/** How many lines have arrived since the reader last saw the bottom of this feed. */
+function feedUnread(key, lineCount) {
+    const seen = state.feedSeen[key];
+
+    return typeof seen === 'number' ? Math.max(0, lineCount - seen) : 0;
+}
+
+/**
+ * The way back down, offered rather than taken.
+ *
+ * It sits in the same `<label>` as the age readout and uses the same vocabulary, so the heading
+ * stays one line that answers "is this live, and am I missing anything" - rather than a floating
+ * control over the feed, which would cover the newest lines it is advertising.
+ */
+function renderFeedUnread(key, lineCount) {
+    const label = $(`admin-${key}-unread`);
+
+    if (!label) {
+        return;
+    }
+
+    const unread = feedUnread(key, lineCount);
+
+    label.textContent = unread > 0 ? `${unread} new ↓` : '';
+    label.className = unread > 0 ? 'feed-unread warn' : 'feed-unread';
+    label.hidden = unread === 0;
+}
+
+function jumpFeedToBottom(key) {
+    const box = $(`admin-${key}`);
+
+    if (!box) {
+        return;
+    }
+
+    box.scrollTop = box.scrollHeight;
+    state.feedSeen[key] = state.feedLines[key] || 0;
+    renderFeedUnread(key, state.feedLines[key] || 0);
 }
 
 /**

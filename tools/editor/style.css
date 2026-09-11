@@ -759,3 +759,10 @@ body:has(#bot-card.dragging) { user-select: none; }
     color: #9fb3c8;
     vertical-align: middle;
 }
+
+/* The way back down, offered rather than taken. In the feed's own label beside the age readout,
+   so the heading stays one line answering "is this live, and am I missing anything" - a floating
+   control over the feed would cover the newest lines it is advertising. */
+.feed-unread { cursor: pointer; margin-left: 6px; font-size: 11px; color: var(--muted); }
+.feed-unread.warn { color: #ffd479; }
+.feed-unread:hover { text-decoration: underline; }

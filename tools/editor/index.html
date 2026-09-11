@@ -206,10 +206,16 @@
 
             <label class="field" for="admin-console">
                 Console <span id="admin-console-age" class="muted"></span>
+                <span id="admin-console-unread" class="feed-unread" hidden
+                      title="Lines that arrived while you were scrolled up. Click to jump to the bottom."></span>
             </label>
             <pre id="admin-console" class="feed"></pre>
 
-            <label class="field" for="admin-logins">Logins</label>
+            <label class="field" for="admin-logins">
+                Logins
+                <span id="admin-logins-unread" class="feed-unread" hidden
+                      title="Lines that arrived while you were scrolled up. Click to jump to the bottom."></span>
+            </label>
             <pre id="admin-logins" class="feed feed-short"></pre>
         </details>
 
