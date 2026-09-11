@@ -375,11 +375,22 @@ namespace Server.Custom
 
         // ---- what the population costs, per tick ----
         //
-        // This exists so a population target is raised on a number rather than on nerve. The whole
-        // per-tick cost of the bot layer is this method: the LiveRegistry sweep, every behaviour's
-        // Tick, the lifecycle pass and the session pass. Bots.Recipe and Bots.Population report the
-        // mean and the max against the Custom.BotTickSeconds budget beside the live bot count, so
-        // "61 bots, 8.4 ms mean / 19 ms max of 2000 ms" is the answer to "can we run more?".
+        // This exists so a population target is raised on a number rather than on nerve. What it
+        // measures is THIS METHOD: the LiveRegistry sweep, every behaviour's Tick, the lifecycle
+        // pass and the session pass. Bots.Recipe and Bots.Population report the mean and the max
+        // against the Custom.BotTickSeconds budget beside the live bot count.
+        //
+        // IT IS NOT THE WHOLE PER-TICK COST OF THE BOT LAYER, which is what this comment used to
+        // say and what REVIEW.md section 11 called. The largest omission is movement: NavWalker
+        // runs DriveAll on its own shared timer, independently of this one, and that is where the
+        // engine's stepping and whatever pathfinding a blocked step provokes are actually paid for -
+        // see NavWalker's own sampler, which measures it there. The live-map snapshot writer and the
+        // botlog writer are two more timers this stopwatch cannot see.
+        //
+        // So "61 bots, 8.4 ms mean / 19 ms max of 2000 ms" answers "what do the BRAINS cost?", and
+        // extrapolating it to whole-shard capacity is invalid. The number for that question is
+        // Core.Process's whole-loop figures - CyclesPerSecond and the save duration - read at a
+        // population, with this as one term in it.
         //
         // Upstream measures nothing and ships a target of 1600 behind a comment reading "with <500
         // bots this is trivially cheap" (BehaviorTickManager.cs) - two numbers that cannot both be
