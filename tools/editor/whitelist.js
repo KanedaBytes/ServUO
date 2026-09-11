@@ -64,6 +64,14 @@ const FILES = {
     // to answer a question about one of them. Not in WRITABLE - the shard writes it.
     botInfo: path.join(REPO_ROOT, 'Data', 'Live', 'botinfo.json'),
 
+    // The shard's console, teed into a ring buffer by ConsoleTap because the console is otherwise
+    // only readable in the window it is printed in. Read-only: the shard writes both.
+    console: path.join(REPO_ROOT, 'Data', 'Live', 'console.json'),
+    logins: path.join(REPO_ROOT, 'Data', 'Live', 'logins.json'),
+
+    // What the engine sees at a tile. Written by the `tile-probe` token, read by the inspector.
+    tileProbe: path.join(REPO_ROOT, 'Data', 'Live', 'tile-probe.json'),
+
     // Authoring input, not live data: uo-offline's navigation converted into our schema.
     // Read-only by construction - resolveSave has no entry for it, so the save endpoint
     // cannot name it however the request is spelled.

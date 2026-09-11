@@ -87,6 +87,24 @@ export const api = {
     hops: () => request('GET', '/api/hops'),
     spawnerState: () => request('GET', '/api/spawner-state'),
     health: () => request('GET', '/api/health'),
+
+    /** The shard's console tail and its sign-ins, from ConsoleTap. */
+    console: () => request('GET', '/api/console'),
+    logins: () => request('GET', '/api/logins'),
+
+    /** What the engine sees at a tile. Written by the `tile-probe` token. */
+    tileProbe: () => request('GET', '/api/tile-probe'),
+
+    /**
+     * Restarting the shard: POST starts the sequence, GET reports how far it has got.
+     *
+     * Two calls rather than one held connection, because the whole thing is a save, a stop, a
+     * build and a boot - tens of seconds - and a request held across it would time out somewhere
+     * in the middle and leave the caller unable to tell a slow restart from a failed one.
+     */
+    restart: () => fetch('/api/restart', { method: 'POST' }).then((response) => response.json()),
+    restartState: () => request('GET', '/api/restart'),
+
     artInfo: () => request('GET', '/api/artinfo'),
     artStats: () => request('GET', '/api/artstats'),
 

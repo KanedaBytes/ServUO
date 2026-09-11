@@ -1010,6 +1010,103 @@ namespace Server.Custom
                     message = "golden fixtures written to " + NavExportGolden.GoldenDirectory;
                     return true;
 
+                // ---- the Admin panel -----------------------------------------------------------
+                //
+                // STARTED, NOT RUN, for the two smokes. Poll is a Timer callback on the game
+                // thread, so dispatching a six-minute probe chain inline would freeze the world for
+                // its whole length and the ack would arrive long after any caller had given up -
+                // which is exactly why `walk-audit` answers "started" and publishes its own status.
+                // Both of these already report through HealthCheck, so the panel reads the result
+                // out of health.json rather than out of an ack that cannot wait for it.
+                case "core-smoke":
+                {
+                    // Run(null) is the path Custom.CoreSmokeOnStart already takes at
+                    // EventSink.ServerStarted, so the null-Mobile branch is the tested one rather
+                    // than a new one this case invented.
+                    CoreSmoke.Run(null);
+
+                    message = "core smoke started; its report is on the console and in health.json";
+                    return true;
+                }
+
+                case "bot-smoke":
+                {
+                    // BotSmoke.Run handles from == null by falling back to Trammel and the
+                    // Britain spawn point (BotSmoke.cs:270), for the same reason.
+                    BotSmoke.Run(null);
+
+                    message = "bot smoke started; watch health.json for Bots.* and the console";
+                    return true;
+                }
+
+                // BOTH HALVES OF THE COMMAND, because the second one is the half that is easy to
+                // lose. BotsReload_OnCommand re-validates the work sites after reloading, and it
+                // does that in the command body rather than inside TryReload - so a dispatch that
+                // called only TryReload would silently do less than [BotsReload and leave a site
+                // fixed by a nav edit excluded until a restart.
+                case "bots-reload":
+                {
+                    IList<string> botErrors;
+
+                    if (!BotSystem.TryReload(out error, out botErrors))
+                    {
+                        message = "bot config NOT reloaded: " + error;
+                        errors = botErrors;
+                        return false;
+                    }
+
+                    BotWorkSites.Validate(Map.Trammel);
+
+                    var excluded = new List<string>();
+
+                    foreach (var entry in BotWorkSites.Excluded)
+                    {
+                        excluded.Add(String.Format(
+                            "work site '{0}' excluded: {1}", entry.Key, entry.Value));
+                    }
+
+                    warnings = excluded;
+                    message = "bot config reloaded. " + BotSystem.Caps.Describe();
+                    return true;
+                }
+
+                // The body IS the message, in full - no FirstWord here, and no nonce to strip
+                // either, which is why `broadcast` is not in the bridge's NONCED set: appending
+                // "#a1b2c3d4" to what every player is about to read is not a thing to do.
+                case "broadcast":
+                {
+                    string text = (body ?? "").Trim();
+
+                    if (text.Length == 0)
+                    {
+                        message = "nothing to broadcast";
+                        return false;
+                    }
+
+                    Server.Commands.CommandHandlers.BroadcastMessage(AccessLevel.Player, 0x482, text);
+
+                    message = String.Format(
+                        "broadcast to {0} client(s)", Server.Network.NetState.Instances.Count);
+                    return true;
+                }
+
+                // THE ACK IS WRITTEN BEFORE THE PROCESS DIES, which is the whole trick. Core.Kill
+                // calls HandleClosed and then Process.Kill, so a caller polling for an ack after
+                // dispatch would poll a dead shard for its timeout and read the shutdown as a
+                // failure. Handle() writes the ack when Dispatch returns, so the kill is deferred
+                // by one poll interval instead of running inline.
+                //
+                // The SAVE is the caller's job, not this one's: the bridge drops `save`, waits for
+                // its ack, and only then drops this. Doing both here would make a shutdown that
+                // failed to save indistinguishable from one that did.
+                case "shutdown":
+                {
+                    Timer.DelayCall(TimeSpan.FromSeconds(2.0), () => Core.Kill(false));
+
+                    message = "shutting down in 2s";
+                    return true;
+                }
+
                 default:
                     message = "unknown request";
                     return false;

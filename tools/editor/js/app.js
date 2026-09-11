@@ -50,6 +50,10 @@ import * as vocab from './vocab.js';
 const ENTITY_POLL_MS = 2000;
 const HEALTH_POLL_MS = 15000;
 
+// The console tail is 2000 lines, so it goes on the wire slower than the entities do - and only
+// while the Admin section is open. See pollAdminFeeds.
+const CONSOLE_POLL_MS = 2000;
+
 // Stock spawners: how zoomed in you must be before they are worth fetching, how long a pan settles
 // before asking, and the grid the request box snaps to so revisits hit the same box.
 const STOCK_MIN_SCALE = 0.5;
@@ -80,6 +84,11 @@ const state = {
     // The last [NavAudit result, drawn over the edges.
     audit: null,
     walkAudit: null,
+
+    // The last sequence number each Admin feed was drawn at. Redrawing a <pre> that has not
+    // changed would fight the scrollbar of anybody reading it.
+    consoleSequence: null,
+    loginSequence: null,
 
     // The replicated validator's last answer, kept so the Problems panel can list it. It used
     // to be computed on every edit and thrown away except for fatal[0], which went to the
@@ -4066,6 +4075,295 @@ function wireInput() {
     wireRequest('reload-dailylife', 'dailylife-reload', '', 'Daily life reloaded');
     wireRequest('live-on', 'livemap-on', '2', 'Live map on');
     wireRequest('live-off', 'livemap-off', '', 'Live map off');
+
+    wireAdmin();
+}
+
+// --- the Admin section ------------------------------------------------------------------------------
+//
+// The only part of this editor that touches the shard PROCESS, which is why it was left out until
+// now. Everything here either runs a staff command the shard can run WITHOUT A CLIENT - the
+// RequestPoller cases call the command's underlying static, never a synthesised CommandEventArgs -
+// or, for Restart, drives the sequence tools/dev.ps1 drives.
+//
+// STARTED, NOT RUN, for the two smokes and the walk audit. Those take minutes and `Poll` is a
+// game-thread Timer callback, so dispatching one inline would freeze the world for its length. The
+// ack says "started" and the result arrives in Health and in the console feed - which is the
+// pattern `walk-audit` already set, and the reason the console feed had to exist first.
+
+function wireAdmin() {
+    // Plain fire-and-ack. The status line carries the shard's own words, unedited, so the banner
+    // and the console say the same sentence.
+    wireRequest('admin-save', 'save', '', 'World saved');
+    wireRequest('admin-core-smoke', 'core-smoke', '', 'Core smoke started');
+    wireRequest('admin-bot-smoke', 'bot-smoke', '', 'Bot smoke started');
+    wireRequest('admin-bots-reload', 'bots-reload', '', 'Bots reloaded');
+    wireRequest('admin-world-items', 'world-items', '', 'World items written');
+
+    // The default audit, and the one that adds the approach-tile scan. Two buttons rather than a
+    // checkbox because they cost an order of magnitude apart - half a second against eight - and
+    // the expensive one is deliberately NOT what a nav save re-runs quietly.
+    wireRequest('admin-nav-audit', 'nav-audit', '', 'Audit done');
+    wireRequest('admin-nav-audit-full', 'nav-audit', 'full', 'Audit (full) done');
+    wireRequest('admin-walk-audit', 'walk-audit', '', 'Walk audit started');
+
+    wireConfirmed('admin-reimport', 'Resync all spawns?', 'RESYNC',
+        'This deletes every GG_ spawner in the world and re-imports every file, so the '
+        + 'shopkeepers and Old Marta all vanish and come back. Type RESYNC.',
+        async () => {
+            await run('gg-reimport', '', 30000);
+            await refreshSpawners({ force: true });
+
+            return 'Spawns resynced.';
+        });
+
+    // THREE REQUESTS AS ONE ACTION, in this order and no other. The recipe is derived and the file
+    // is not, so a regen that is not re-imported leaves the world running the old population for
+    // ever; and the audit afterwards is what says the file and the recipe now agree.
+    wireConfirmed('admin-botpop', 'Regenerate the bot population?', 'REGEN',
+        'Rewrites Spawns/Custom/trammel/GG_BotPop.xml from bots.json, re-imports every GG_ '
+        + 'spawner, then audits. Every bot in the world is replaced. Type REGEN.',
+        async () => {
+            await run('botpop-gen', '', 30000);
+            await run('gg-reimport', '', 60000);
+
+            const audit = await run('botpop-audit', '', 30000);
+
+            await refreshSpawners({ force: true });
+
+            return audit.message;
+        });
+
+    wireBroadcast();
+    wireRestart();
+
+    pollAdminFeeds();
+}
+
+/** Drops a token, waits for its ack, and throws the shard's own words on a refusal. */
+async function run(request, body, timeoutMs) {
+    const dropped = await api.request(request, body);
+    const ack = await api.awaitAck(request, { nonce: dropped.nonce, timeoutMs: timeoutMs || 15000 });
+
+    if (!ack.ok) {
+        throw new Error(ack.message);
+    }
+
+    return ack;
+}
+
+/** A button behind the typed confirmation that `wireResync` already established for destructive acts. */
+function wireConfirmed(buttonId, title, word, explain, action) {
+    const button = $(buttonId);
+
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener('click', async () => {
+        const values = await askFor({
+            title, submit: word.charAt(0) + word.slice(1).toLowerCase(),
+            fields: [{ key: 'confirm', label: explain, required: true }]
+        });
+
+        if (!values || values.confirm.trim().toUpperCase() !== word) {
+            setAdminStatus(`${title} cancelled.`, 'ok');
+            return;
+        }
+
+        button.disabled = true;
+        setAdminStatus(`${title.replace(/\?$/, '')}...`, 'ok');
+
+        try {
+            setAdminStatus(await action(), 'ok');
+        } catch (error) {
+            setAdminStatus(`Failed: ${error.message}`, 'error');
+            showBanner(`The shard refused and changed nothing:\n\n${error.message}`, 'warn');
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
+
+function wireBroadcast() {
+    const button = $('admin-broadcast-send');
+    const box = $('admin-broadcast');
+
+    if (!button || !box) {
+        return;
+    }
+
+    const send = async () => {
+        const text = box.value.trim();
+
+        if (text.length === 0) {
+            setAdminStatus('Nothing to broadcast.', 'warn');
+            return;
+        }
+
+        button.disabled = true;
+
+        try {
+            // No nonce on this one: the token body IS the message, and appending "#a1b2c3d4" to
+            // what every player is about to read is not a thing to do. The bridge leaves
+            // `broadcast` out of NONCED for that reason, so the ack is matched by its absence of
+            // one - the bridge still deletes the ack before dropping the token.
+            const ack = await run('broadcast', text, 10000);
+
+            box.value = '';
+            setAdminStatus(ack.message, 'ok');
+        } catch (error) {
+            setAdminStatus(`Broadcast failed: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+        }
+    };
+
+    button.addEventListener('click', send);
+    box.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            send();
+        }
+    });
+}
+
+function wireRestart() {
+    const button = $('admin-restart');
+
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener('click', async () => {
+        const values = await askFor({
+            title: 'Restart the shard?',
+            submit: 'Restart',
+            fields: [{
+                key: 'confirm',
+                label: 'Saves the world, stops the shard, rebuilds through build.ps1 and starts it '
+                    + 'again in its own window. Every player is disconnected, and a failed build '
+                    + 'leaves the shard DOWN. Type RESTART.',
+                required: true
+            }]
+        });
+
+        if (!values || values.confirm.trim().toUpperCase() !== 'RESTART') {
+            setAdminStatus('Restart cancelled.', 'ok');
+            return;
+        }
+
+        button.disabled = true;
+
+        try {
+            await api.restart();
+            await followRestart();
+        } catch (error) {
+            setAdminStatus(`Restart failed: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
+
+/** Polls the bridge's restart state until it settles, reporting each stage as it happens. */
+async function followRestart() {
+    for (;;) {
+        const state_ = await api.restartState();
+
+        setAdminStatus(`${state_.stage}: ${state_.message}`, state_.ok === false ? 'error' : 'ok');
+
+        if (!state_.running) {
+            if (state_.ok === false) {
+                showBanner(
+                    `The restart stopped at "${state_.stage}":\n\n${state_.message}\n\n`
+                    + 'The shard may be down. Its own window has the build output.', 'warn');
+            }
+
+            return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+}
+
+function setAdminStatus(text, kind) {
+    const line = $('admin-status');
+
+    if (line) {
+        line.textContent = text;
+        line.className = kind === 'error' ? 'error' : (kind === 'warn' ? 'warn' : 'muted');
+    }
+
+    setStatus(text, kind);
+}
+
+/**
+ * The console tail and the login feed.
+ *
+ * A setTimeout chain rather than setInterval, for pollEntities' reason: a slow answer must not
+ * stack polls on each other. It runs only while the section is open, because the tail is 2000
+ * lines and nobody looking at the map wants it on the wire twice a second.
+ */
+async function pollAdminFeeds() {
+    const section = $('sec-admin');
+    const consoleBox = $('admin-console');
+    const loginBox = $('admin-logins');
+
+    if (section && section.open && consoleBox) {
+        try {
+            const [tail, logins] = await Promise.all([api.console(), api.logins()]);
+
+            // Only redraw when the shard has actually said something. Rewriting the <pre> on every
+            // poll would fight the scrollbar of anybody reading it.
+            if (tail.sequence !== state.consoleSequence) {
+                state.consoleSequence = tail.sequence;
+                consoleBox.textContent = (tail.lines || []).map((l) => l.text).join('\n');
+                consoleBox.scrollTop = consoleBox.scrollHeight;
+            }
+
+            if (loginBox && logins.sequence !== state.loginSequence) {
+                state.loginSequence = logins.sequence;
+                loginBox.textContent = (logins.lines || []).length === 0
+                    ? 'No sign-ins this boot. Bots never log in - they have no NetState.'
+                    : (logins.lines || []).map((l) => `${l.utc.slice(11, 19)}  ${l.text}`).join('\n');
+                loginBox.scrollTop = loginBox.scrollHeight;
+            }
+
+            setConsoleAge(tail.utc);
+        } catch {
+            // The shard being down is not an error here. The age going stale says so already, and
+            // a banner per second would be worse than the silence.
+            setConsoleAge(null);
+        }
+    }
+
+    setTimeout(pollAdminFeeds, CONSOLE_POLL_MS);
+}
+
+/**
+ * How old the tail is, which is the point of showing it at all.
+ *
+ * A sequence number that has stopped moving looks exactly like a quiet shard until you know when
+ * it last moved - the same reason the Live panel shows an age. Past ten seconds it is amber.
+ */
+function setConsoleAge(utc) {
+    const label = $('admin-console-age');
+
+    if (!label) {
+        return;
+    }
+
+    if (!utc) {
+        label.textContent = '- shard not answering';
+        label.className = 'warn';
+        return;
+    }
+
+    const age = Math.max(0, Math.round((Date.now() - Date.parse(utc)) / 1000));
+
+    label.textContent = `- ${age}s ago`;
+    label.className = age > 10 ? 'warn' : 'muted';
 }
 
 function isDerivedGeometry(shape) {

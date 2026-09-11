@@ -43,9 +43,12 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 // reads a file name off the front of it and stops at the first space, which leaves the tail free.
 // livemap-on is NOT here: it parses its whole body, and a nonce would be an argument it did not
 // ask for.
+// `broadcast` is deliberately NOT here for a different reason from livemap-on's: its body is the
+// message every player is about to read, and appending "#a1b2c3d4" to that is not a thing to do.
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
-    'botpop-audit', 'botpop-gen', 'botinfo'
+    'botpop-audit', 'botpop-gen', 'botinfo',
+    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe'
 ]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a
@@ -581,6 +584,35 @@ const ROUTES = {
     },
 
     /**
+     * The shard's console tail, and its sign-ins.
+     *
+     * `sequence` is what makes these readable: a tail that has stopped moving looks exactly like a
+     * quiet shard until you know when it last moved, which is the same reason the Live panel shows
+     * an age rather than only a count. An absent file is a shard that is down or has
+     * `Custom.ConsoleTap=False`, and the empty shape says so without the panel having to guard.
+     */
+    '/api/console': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.console) || { utc: null, sequence: 0, lines: [] });
+    },
+
+    '/api/logins': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.logins) || { utc: null, sequence: 0, lines: [] });
+    },
+
+    /** What the engine sees at a tile. Written by the `tile-probe` token. */
+    '/api/tile-probe': (request, response) => {
+        sendJson(response, 200,
+            readJson(whitelist.FILES.tileProbe) || { utc: null, lines: [] });
+    },
+
+    /** How the last restart is going. See handleRestart. */
+    '/api/restart': (request, response) => {
+        sendJson(response, 200, restartState);
+    },
+
+    /**
      * Every list the create forms offer, so no form has to carry one.
      *
      * Half of it is the shard's report of what it loaded and half is derived from the files here;
@@ -650,7 +682,8 @@ function handleRequest(request, response) {
         const posts = [
             ['/api/request/', dropToken],
             ['/api/save/', handleSave],
-            ['/api/restore/', handleRestore]
+            ['/api/restore/', handleRestore],
+            ['/api/restart', handleRestart]
         ];
 
         for (const [prefix, handler] of posts) {
@@ -944,6 +977,165 @@ async function dropToken(name, request, response) {
     } catch (error) {
         sendError(response, error.status || 500, error.message);
     }
+}
+
+// ---- restarting the shard ------------------------------------------------------------------------
+//
+// THE ONLY THING IN THIS BRIDGE THAT TOUCHES THE SHARD PROCESS, and the only one that can leave it
+// down - which is why it was left out of the editor until now (see the README).
+//
+// The sequence is dev.ps1's, in order, and each step exists because skipping it loses something:
+//
+//   save      -> and WAIT FOR THE ACK. HandleClosed does not save on exit; it only waits for writes
+//                already in flight. Killing without this loses everything since the last autosave.
+//   shutdown  -> the shard writes its ack BEFORE Core.Kill, so "did it hear us" is answerable.
+//   wait      -> for ServUO.exe to actually go. Scripts.dll is locked while loaded, so a build
+//                started too early fails on a file lock rather than on anything real.
+//   start     -> tools/restart-shard.ps1, which runs build.ps1 - so a restart REBUILDS, and a
+//                failed build still refuses to launch. That is the whole reason this shard has
+//                build scripts (CLAUDE.md section 2), and a restart that skipped it would be the
+//                one path back around the hole they exist to close.
+//   watch     -> for the shard to answer again, which is health.json moving.
+//
+// The bridge spawns exactly ONE known script and passes it nothing. artrenderer.js:50 is the
+// existing precedent for the bridge spawning a child at all.
+const RESTART_SCRIPT = path.join(whitelist.REPO_ROOT, 'tools', 'restart-shard.ps1');
+
+/** Progress, polled by the panel. Deliberately a plain object: there is only ever one restart. */
+let restartState = { running: false, stage: 'idle', message: '', startedAt: null, ok: null };
+
+function restartStep(stage, message, extra) {
+    restartState = Object.assign({}, restartState, { stage, message }, extra || {});
+    console.log(`restart: ${stage} - ${message}`);
+}
+
+/** True while ServUO.exe is still in the process table. */
+function shardIsUp() {
+    try {
+        const { execFileSync } = require('child_process');
+        const out = execFileSync(
+            'tasklist', ['/FI', 'IMAGENAME eq ServUO.exe', '/NH'], { encoding: 'utf8' });
+
+        return /ServUO\.exe/i.test(out);
+    } catch {
+        // Cannot tell. Reported as still up, so the caller waits rather than racing a live process
+        // into a build that will fail on a locked Scripts.dll.
+        return true;
+    }
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Runs tools/restart-shard.ps1 and waits for IT to finish - not for the shard it launches.
+ *
+ * `powershell.exe`, with the extension, and the pipes read rather than ignored. Both are the same
+ * bug, found by this failing in the least useful way possible: `spawn('powershell', ...)` without
+ * `shell: true` does not consult PATHEXT, so it raised ENOENT - onto an `error` event nothing was
+ * listening for, with `stdio: 'ignore'` throwing the evidence away. The restart then sat in
+ * "waiting" for its full two minutes and reported that the shard had not come back, which is true
+ * and says nothing about why. A launcher that cannot say it failed to launch is worse than no
+ * launcher.
+ *
+ * The script starts the shard in its own window and returns immediately, so this resolves in
+ * about a second; the wait for the shard itself is the caller's loop.
+ */
+function startShard() {
+    return new Promise((resolve, reject) => {
+        const { execFile } = require('child_process');
+
+        execFile(
+            'powershell.exe',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', RESTART_SCRIPT],
+            { cwd: whitelist.REPO_ROOT, windowsHide: true, timeout: 30000 },
+            (error, stdout, stderr) => {
+                const said = String(stdout || '').trim() || String(stderr || '').trim();
+
+                if (error) {
+                    reject(new Error(
+                        `Could not start the shard: ${said || error.message}`));
+                    return;
+                }
+
+                console.log(`restart: launcher said - ${said}`);
+                resolve(said);
+            });
+    });
+}
+
+async function handleRestart(rest, request, response) {
+    if (restartState.running) {
+        sendJson(response, 409, Object.assign({ error: 'A restart is already running.' }, restartState));
+        return;
+    }
+
+    restartState = {
+        running: true, stage: 'saving', message: 'Saving the world...',
+        startedAt: new Date().toISOString(), ok: null
+    };
+
+    // Answered immediately and followed by polling /api/restart. The whole sequence is a build and
+    // a boot - tens of seconds - and a held connection would time out somewhere in the middle and
+    // leave the caller unable to tell a slow restart from a failed one.
+    sendJson(response, 202, restartState);
+
+    runRestart().catch((error) => {
+        restartStep('failed', error.message, { running: false, ok: false });
+    });
+}
+
+async function runRestart() {
+    const saveNonce = writeToken('save', '');
+    const saved = await waitForAck('save', saveNonce, 60000);
+
+    if (!saved || !saved.ok) {
+        throw new Error(saved
+            ? `The shard refused to save: ${saved.message}`
+            : 'The shard did not answer the save. Nothing was stopped.');
+    }
+
+    restartStep('stopping', `Saved (${saved.message}). Stopping the shard...`);
+
+    const killNonce = writeToken('shutdown', '');
+    const killed = await waitForAck('shutdown', killNonce, 30000);
+
+    if (!killed || !killed.ok) {
+        throw new Error('The shard did not acknowledge the shutdown. It is still running.');
+    }
+
+    for (let attempt = 0; attempt < 60 && shardIsUp(); attempt++) {
+        await wait(1000);
+    }
+
+    if (shardIsUp()) {
+        throw new Error('ServUO.exe is still running after 60s. Nothing was started.');
+    }
+
+    restartStep('building', 'Stopped. Building and starting (build.ps1 refuses a failed build)...');
+
+    await startShard();
+
+    restartStep('waiting', 'Waiting for the shard to answer...');
+
+    // The health snapshot is the shard saying it is up, and asking for a fresh one is the same
+    // request the Health panel already makes. Two minutes covers a build and a world load.
+    for (let attempt = 0; attempt < 120; attempt++) {
+        await wait(1000);
+
+        if (!shardIsUp()) {
+            continue;
+        }
+
+        const nonce = writeToken('health', '');
+        const ack = await waitForAck('health', nonce, 2000);
+
+        if (ack && ack.ok) {
+            restartStep('done', 'The shard is up.', { running: false, ok: true });
+            return;
+        }
+    }
+
+    throw new Error('The shard did not answer within two minutes. Check its window.');
 }
 
 /** Runs the reload for a file and shapes the half of the answer that comes from the shard. */

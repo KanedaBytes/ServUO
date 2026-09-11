@@ -656,3 +656,42 @@ body:has(#bot-card.dragging) { user-select: none; }
 #floor-row.inactive {
     opacity: .45;
 }
+
+/* --- the Admin section ---------------------------------------------------------------------- */
+
+/* A destructive action reads as one before it is clicked, not only in the modal that follows. */
+#sidebar .buttons button.danger { border-color: #7a3b33; color: #ffb4a8; }
+#sidebar .buttons button.danger:hover:not(:disabled) { background: #3a211d; }
+
+#sec-admin label.field {
+    display: block;
+    margin: 10px 0 4px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+#sec-admin .buttons input[type="text"] { flex: 3 1 0; min-width: 0; }
+#sec-admin .buttons button { flex: 1 1 0; }
+
+/*
+ * The console tail. Monospace and pre-wrap: a console line is aligned text and unwrapping it would
+ * put a horizontal scrollbar on the sidebar, which is the one axis it has no room on.
+ */
+#sec-admin .feed {
+    max-height: 240px;
+    overflow: auto;
+    margin: 0;
+    padding: 6px 8px;
+    background: var(--panel-deep, #14161a);
+    border: 1px solid var(--line, #2a2e35);
+    border-radius: 3px;
+    font: 11px/1.45 ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #cfd4dc;
+}
+
+#sec-admin .feed-short { max-height: 120px; }
+
+#sec-admin #admin-status.warn { color: #ffd479; }
+#sec-admin #admin-status.error { color: #ff7a6b; }

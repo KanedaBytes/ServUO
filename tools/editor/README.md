@@ -1734,29 +1734,135 @@ editor tabs and a bridge that dies mid-sequence. The nonce is generated in the b
 browser, and only for the four requests whose dispatch ignores its body — `livemap-on` parses
 its body and is excluded.
 
-## The admin panel, and what is not in it yet
+The nonce set has grown with the Admin section: `core-smoke`, `bot-smoke`, `bots-reload`,
+`shutdown` and `tile-probe` are all nonced now. **`broadcast` is deliberately not**, for a different
+reason from `livemap-on`'s — its body is the message every player is about to read, and appending
+`#a1b2c3d4` to that is not a thing to do. (`tile-probe` is safe to nonce because its parser skips
+any word that is not an `x,y` pair.)
 
-The next session adds a **Shard** admin section: restart the shard the way `tools/dev.ps1` does
-(behind a confirmation, with the `save` request acked before the process is stopped), save the
-world, a live console feed with logins and warnings picked out, and four named actions as
-buttons — `[WorldItems`, `[BotSmoke`, resync spawns (which exists today) and broadcast a message.
+## The Admin section
 
-It is deliberately not in this one. Every other item here is the editor and the bridge; this is the
-only one that touches the shard **process**, it needs a console channel that does not exist yet,
-and it is the only one that can leave the shard down.
+Everything that acts on the shard rather than on its files. It was deliberately left out until now:
+it is the only part of this editor that touches the shard **process**, it needed a console channel
+that did not exist, and it is the only one that can leave the shard down.
 
-What else such a panel could hold, in rough order of how often you would want it:
+**Every button here runs without a client.** That is not a coincidence — the `RequestPoller` cases
+call each command's underlying static method, never a synthesised `CommandEventArgs`, which is the
+shape the existing cases already had (`GGSpawnCommands.TryReimport(null, …)`,
+`NavWalkAudit.TryStart(null, …)`). Anything that needs a client is listed below rather than stubbed.
+
+| Button | Request | What it is |
+| --- | --- | --- |
+| Save world | `save` | Exactly what `[Save` runs, backup rotation included |
+| Restart shard | *bridge* | Save, stop, rebuild, start. See below |
+| Core smoke | `core-smoke` | `CoreSmoke.Run(null)` — the path `Custom.CoreSmokeOnStart` already takes |
+| Bot smoke | `bot-smoke` | `BotSmoke.Run(null)` — walk, life, chat, work. Minutes |
+| Reload bots | `bots-reload` | `BotSystem.TryReload` **and** `BotWorkSites.Validate` |
+| Nav audit / full | `nav-audit` | Body empty or `full`; `full` adds the ~8 s cliff scan |
+| Walk audit | `walk-audit` | Real probe walkers over the whole graph. Minutes |
+| World items | `world-items` | The art view's furniture snapshot |
+| Resync spawns | `gg-reimport` | Behind a typed `RESYNC` |
+| Regen bot spawns | three | `botpop-gen` → `gg-reimport` → `botpop-audit`, behind `REGEN` |
+| Broadcast | `broadcast` | `CommandHandlers.BroadcastMessage`, which needs no Mobile |
+
+**`bots-reload` runs both halves of the command, and the second is the one easy to lose.**
+`BotsReload_OnCommand` re-validates the work sites *in the command body*, not inside `TryReload` —
+so a dispatch calling only `TryReload` would silently do less than `[BotsReload` and leave a site
+fixed by a nav edit excluded until a restart.
+
+**Regenerating the bot population is three requests in one order and no other.** The recipe is
+derived and the file is not, so a regen that is not re-imported leaves the world running the old
+population for ever; the audit afterwards is what says the file and the recipe now agree.
+
+### Started, not run
+
+`[CoreSmoke`, `[BotSmoke` and `[WalkAudit` take minutes, and `Poll` is a `Timer` callback on the
+game thread — dispatching one inline would freeze the world for its whole length and the ack would
+arrive long after any caller had given up. So the ack says *started* and the result arrives in
+**Health** and in the **console feed**. That is the pattern `walk-audit` already set, and it is the
+reason the console feed had to exist before the buttons did.
+
+Proved end to end: `[CoreSmoke` dropped as a token read
+`RESULT: PASS (foundations); 4 warning` in the panel's own feed, with all forty-odd check lines.
+
+### The console feed
+
+**The shard's log IS its console, and nothing outside that window could read a line of it.** See
+`SHARD.md` for the mechanism (`ConsoleTap`, and why `Core.MultiConsoleOut` is the seam that looks
+right and is dead in Release). The panel reads `Data/Live/console.json` and `logins.json` through
+`/api/console` and `/api/logins`.
+
+It polls only **while the section is open** — the tail is 2000 lines — and redraws only when the
+`sequence` has moved, because rewriting the `<pre>` on every poll would fight the scrollbar of
+anybody reading it. The age beside the heading is the point of showing a sequence at all: a feed
+that has stopped moving looks exactly like a quiet shard until you know when it last moved, which
+is the Live panel's reason for showing an age rather than only a count.
+
+The login feed is usually empty, and says so rather than looking broken: **bots never log in**, as
+they have no `NetState`.
+
+### Restart
+
+The one thing here that can leave the shard down, so it is behind a typed `RESTART` and it reports
+every stage. The sequence is `tools/dev.ps1`'s, and each step is there because skipping it loses
+something:
+
+1. **`save`, and wait for the ack.** `HandleClosed` does *not* save on exit — it only waits for
+   writes already in flight. Killing without this loses everything since the last autosave.
+2. **`shutdown`.** The shard writes its ack **before** `Core.Kill`, so "did it hear us" stays
+   answerable; a caller polling afterwards would be polling a dead shard for its whole timeout.
+3. **Wait for `ServUO.exe` to go.** `Scripts.dll` is locked while loaded, so a build started too
+   early fails on a file lock rather than on anything real.
+4. **`tools/restart-shard.ps1`**, which runs `build.ps1` — so a restart **rebuilds**, and a failed
+   build still refuses to launch. That is the entire reason this shard has build scripts
+   (`CLAUDE.md` section 2), and a restart that started `ServUO.exe` directly would be the one path
+   back around the hole they exist to close. The script refuses outright if a shard is already
+   running.
+5. **Watch for the shard to answer**, which is a fresh `health` ack.
+
+`POST /api/restart` starts it and answers immediately; `GET /api/restart` reports the stage. Two
+calls rather than one held connection, because the whole thing is a build and a boot and a request
+held across it would time out in the middle, leaving the caller unable to tell a slow restart from
+a failed one.
+
+The bridge spawns exactly **one known script and passes it nothing** — `artrenderer.js:50` is the
+existing precedent for the bridge spawning a child at all.
+
+> **It failed in the least useful way possible first, and that is why the launcher is read rather
+> than ignored.** `spawn('powershell', …)` without `shell: true` does not consult `PATHEXT`, so it
+> raised `ENOENT` — onto an `error` event nothing was listening for, with `stdio: 'ignore'` throwing
+> the evidence away. The restart then sat in *waiting* for its full two minutes and reported that
+> the shard had not come back: true, and silent about why. It is `execFile('powershell.exe', …)`
+> now, with stdout and stderr read back into the failure message. **A launcher that cannot say it
+> failed to launch is worse than no launcher.**
+
+Measured on the shipped build: save 0.24 s, stop, rebuild, boot, answering again — the whole
+restart in about 25 seconds.
+
+### Needs a client, and stays out
+
+Not stubbed, not greyed out — absent, and listed here instead:
+
+- **`[BotSendTo`** — resolves its bot and destination by name perfectly well without a client, but
+  delegates to `SendBot(Mobile from, …)` (`BotCommands.cs:747`), which calls `from.SendMessage` on
+  every branch and would dereference null. A `TrySendTo(serial, destinationId, out message)` would
+  fix it; nothing needs it yet.
+- **`[BotPace`** and **`[BotTrace`** — both `BeginTarget` a mobile.
+- Anything that opens a gump: `[Quests`, `[JailInfo`, `[Props`.
+
+### Later, in rough order of how often you would want it
 
 - **Who is connected** — `NetState.Instances` with account, IP and idle time, and a kick.
-- **A save-progress line.** `World.Save` freezes the world on the core thread, so an editor that
-  keeps polling through one has no way to say *why* everything stopped.
-- **The request log** — the last N tokens and their acks, which is the whole editor-to-shard
-  channel and is currently only readable with `type` in `Data/Live/requests/`.
-- **`[CoreSmoke` and `[DailyLifeSmoke` on demand**, with their result lines in the panel rather
-  than in a console window behind the browser. The Health section already shows what they register.
+- **A save-progress line.** `World.Save` freezes the world on the core thread, so an editor polling
+  through one has no way to say *why* everything stopped. `Core.Process` now reports the duration
+  after the fact; during is a different problem.
+- **The request log** — the last N tokens and their acks, which is the whole editor-to-shard channel
+  and is readable today only with `type` in `Data/Live/requests/`.
 - **Config, read-only** — the `Custom.*` keys actually in force, which today means opening
   `Config/Custom.cfg` and hoping `_DEBUG.cfg` is not overriding it.
-- **Toggle the smoke-on-start flags**, which is the one edit anybody makes to `Custom.cfg` by hand
-  and the one that has been committed as `True` by accident once already (SHARD.md).
-- **Build and restart**, as opposed to restart — it would have to refuse while `Scripts.dll` is
-  locked, which is exactly the failure `build.ps1` exists to make loud.
+- **Toggle the smoke-on-start flags**, the one edit anybody makes to `Custom.cfg` by hand and the
+  one that has been committed as `True` by accident (`SHARD.md`).
+- **Filter the console feed** — warnings and errors only, or a search box. 2000 lines is a lot to
+  scroll when you know what you are looking for.
+- **Build without restarting**, which would have to refuse while `Scripts.dll` is locked — exactly
+  the failure `build.ps1` exists to make loud.

@@ -887,3 +887,66 @@ test('the art cache is not writable through the save path', () => {
         assert.strictEqual(whitelist.resolveSave(name), null, name + ' resolved');
     }
 });
+
+// --- the Admin section's endpoints --------------------------------------------------------------
+
+test('the shard feeds answer with the shard down, in the shape the panel draws', async () => {
+    // The temp root has no Data/Live/console.json: that is a shard that is down, or one with
+    // Custom.ConsoleTap=False. A panel that had to guard against an absent key would be a panel
+    // where one reader forgets to, so the empty shape is always the same shape.
+    for (const [url, extra] of [['/api/console', true], ['/api/logins', true], ['/api/tile-probe', false]]) {
+        const { status, body } = await call('GET', url);
+
+        assert.strictEqual(status, 200, url);
+        assert.ok(Array.isArray(body.lines), `${url} always carries a lines array`);
+
+        if (extra) {
+            assert.strictEqual(body.sequence, 0,
+                `${url} carries a sequence, so a stalled feed is distinguishable from a quiet one`);
+        }
+    }
+});
+
+test('the restart endpoint reports idle before anything has asked for one', async () => {
+    const { status, body } = await call('GET', '/api/restart');
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.running, false);
+    assert.strictEqual(body.stage, 'idle');
+});
+
+test('a cross-site restart is refused', async () => {
+    // The most destructive thing the bridge can do, and it goes through the same same-origin gate
+    // as every other POST - which sits before the dispatch table rather than inside each handler,
+    // so a new endpoint cannot forget it. Asserted here because this is the one where forgetting
+    // would matter most.
+    const response = await fetch(origin + '/api/restart', {
+        method: 'POST',
+        headers: { 'Sec-Fetch-Site': 'cross-site' }
+    });
+
+    assert.strictEqual(response.status, 403);
+
+    const after = await call('GET', '/api/restart');
+
+    assert.strictEqual(after.body.running, false, 'and nothing was started');
+});
+
+test('the restart launcher is one fixed script, with nothing the caller supplies', () => {
+    // The bridge spawns exactly one child on this path. If that ever becomes a name built from a
+    // request, the sandbox argument in the README stops being true - so the shape is asserted
+    // rather than described.
+    const source = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
+
+    assert.ok(source.includes("'restart-shard.ps1'"),
+        'the restart script is named as a constant');
+    assert.ok(/execFile\(\s*\n?\s*'powershell\.exe'/.test(source),
+        "powershell.exe with the extension - spawn() does not consult PATHEXT, and 'powershell' "
+        + 'raised an ENOENT that a two-minute timeout then reported as the shard not coming back');
+
+    const script = fs.readFileSync(
+        path.join(SOURCE_ROOT, 'tools', 'restart-shard.ps1'), 'utf8');
+
+    assert.ok(script.includes('build.ps1'),
+        'a restart rebuilds, so a failed build still refuses to launch');
+});

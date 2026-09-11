@@ -132,6 +132,75 @@
             <ul id="health"></ul>
         </details>
 
+        <!--
+            The only section that touches the shard PROCESS, and the only one that can leave it
+            down. Everything here either runs a staff command the shard can run without a client,
+            or - for Restart - drives the sequence tools/dev.ps1 drives. Anything needing a client
+            is listed in the README as "needs a client" rather than stubbed here.
+        -->
+        <details class="grp" id="sec-admin">
+            <summary>Admin</summary>
+            <p id="admin-help" class="muted">
+                Each button drops a request token and shows the shard's own answer.
+                The two smoke tests are <strong>started, not run</strong> - they take minutes,
+                so their result arrives in <em>Health</em> above and in the console feed below.
+                <strong>Restart</strong> saves the world, stops the shard, rebuilds through
+                <code>build.ps1</code> and starts it again; a failed build leaves the shard down
+                and says so in its own window.
+            </p>
+
+            <div class="buttons">
+                <button id="admin-save" type="button"
+                        title="Exactly what [Save runs, backup rotation included">Save world</button>
+                <button id="admin-restart" type="button" class="danger"
+                        title="Save, stop, rebuild and start. Asks first.">Restart shard</button>
+            </div>
+
+            <div class="buttons">
+                <button id="admin-core-smoke" type="button"
+                        title="[CoreSmoke - the Custom/Core foundations and every health check">Core smoke</button>
+                <button id="admin-bot-smoke" type="button"
+                        title="[BotSmoke - walk, life, chat and work. Several minutes.">Bot smoke</button>
+                <button id="admin-bots-reload" type="button"
+                        title="[BotsReload - re-read bots.json and re-validate the work sites">Reload bots</button>
+            </div>
+
+            <div class="buttons">
+                <button id="admin-nav-audit" type="button"
+                        title="[NavAudit - pathfind every walk edge">Nav audit</button>
+                <button id="admin-nav-audit-full" type="button"
+                        title="[NavAudit full - adds the approach-tile cliff scan, about 8s">Nav audit full</button>
+                <button id="admin-walk-audit" type="button"
+                        title="[WalkAudit - real probe walkers over the whole graph. Minutes.">Walk audit</button>
+            </div>
+
+            <div class="buttons">
+                <button id="admin-world-items" type="button"
+                        title="[WorldItems - the art view's furniture snapshot">World items</button>
+                <button id="admin-reimport" type="button" class="danger"
+                        title="[GG_Reimport - delete and re-import every GG spawner">Resync spawns</button>
+                <button id="admin-botpop" type="button" class="danger"
+                        title="[BotPopulationGen, [GG_Reimport, [BotPopulationAudit as one action">Regen bot spawns</button>
+            </div>
+
+            <p id="admin-status" class="muted">idle</p>
+
+            <label class="field" for="admin-broadcast">Broadcast to every player</label>
+            <div class="buttons">
+                <input id="admin-broadcast" type="text" maxlength="256"
+                       placeholder="Server going down in 5 minutes" autocomplete="off">
+                <button id="admin-broadcast-send" type="button">Send</button>
+            </div>
+
+            <label class="field" for="admin-console">
+                Console <span id="admin-console-age" class="muted"></span>
+            </label>
+            <pre id="admin-console" class="feed"></pre>
+
+            <label class="field" for="admin-logins">Logins</label>
+            <pre id="admin-logins" class="feed feed-short"></pre>
+        </details>
+
         <details class="grp" id="sec-keys">
             <summary>Keys</summary>
             <dl class="keys">
