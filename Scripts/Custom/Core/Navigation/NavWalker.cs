@@ -2064,8 +2064,23 @@ namespace Server.Custom
                 return step.Range;
             }
 
-            NavWaypoint waypoint = Nav.Waypoint(step.WaypointId);
+            return ArrivalRangeFor(Nav.Waypoint(step.WaypointId));
+        }
 
+        /// <summary>
+        /// How far off a walker may legitimately stop at this waypoint. THE one rule.
+        ///
+        /// Public and static because three other things need the same answer and used to carry
+        /// their own copy of it: NavNeighbourhood sizes its approach-tile box with it, and
+        /// NavAdopt.Subdivide has to subtract it from the hop cap or it mints edges that a
+        /// legitimately-displaced walker cannot walk. NavNeighbourhood's copy was a deliberate
+        /// mirror with a comment saying so; a third copy is where a mirror becomes a drift.
+        ///
+        /// A null waypoint answers the default, which is what a caller that could not resolve an
+        /// id needs: the box is still the box.
+        /// </summary>
+        public static int ArrivalRangeFor(NavWaypoint waypoint)
+        {
             // Adopted from uo-offline-server: a doorway waypoint at an unusual Z needs the
             // mobile on the exact tile, so its authored tolerance wins.
             if (waypoint != null && waypoint.ArrivalRange > 0)

@@ -651,6 +651,15 @@ namespace Server.Custom
                 .Append(_lastCliffs != null ? "true" : "false").Append(",\n");
             builder.Append("  \"cliffSeconds\": ")
                 .Append(Fixed(_lastCliffs == null ? 0.0 : _lastCliffs.Seconds)).Append(",\n");
+
+            // How much of every box was TESTED, beside how much was set aside as sealed off. The
+            // scan drops a standable tile its own waypoint cannot path to, because no walker can
+            // stop somewhere it cannot walk to - and a filter that is invisible in the output is
+            // a filter nobody can audit.
+            builder.Append("  \"cliffTilesTested\": ")
+                .Append(_lastCliffs == null ? 0 : _lastCliffs.StandableTiles).Append(",\n");
+            builder.Append("  \"cliffTilesUnreachable\": ")
+                .Append(_lastCliffs == null ? 0 : _lastCliffs.Unreachable).Append(",\n");
             builder.Append("  ");
 
             NavNeighbourhood.AppendJson(builder, _lastCliffs);

@@ -31,9 +31,9 @@
 // THE BOX IS THE ARRIVAL TOLERANCE, NOT THE EIGHT NEIGHBOURS, and that is not a detail: the tile
 // that produced the finding is at Chebyshev 2. NavWalker.ArrivalRangeFor is the authority on how
 // far off a walker may legitimately stop - the waypoint's own ArrivalRange when it authored one,
-// and DefaultArrivalRange (2) when it did not, which is 996 of the 1000 records - so this reads
-// that same method's rule rather than a constant of its own. A radius-1 check would have been
-// cheaper by two thirds and blind to the case it was built for.
+// and DefaultArrivalRange (2) when it did not, which is 996 of the 1000 records - so this CALLS
+// that method rather than keeping a constant, or a mirror, of its own. A radius-1 check would have
+// been cheaper by two thirds and blind to the case it was built for.
 //
 // AND THE GOAL IS THE NEXT WAYPOINT, NOT THIS ONE. "Can a displaced bot get back onto its
 // waypoint" is a different and weaker question: the walker does not route via the waypoint it
@@ -111,7 +111,14 @@ namespace Server.Custom
 
         public int Waypoints { get; set; }
 
+        /// <summary>Standable tiles a walker could actually arrive on - the ones that were tested.</summary>
         public int StandableTiles { get; set; }
+
+        /// <summary>
+        /// Tiles that fit a mobile but that their own waypoint cannot path to, so no walker can
+        /// stop there. Published rather than silently dropped: see the note at the filter.
+        /// </summary>
+        public int Unreachable { get; set; }
 
         public int Paths { get; set; }
 
@@ -138,9 +145,10 @@ namespace Server.Custom
             get
             {
                 return String.Format(
-                    "{0} waypoint(s), {1} standable approach tile(s), {2} engine path(s) in "
-                    + "{3:F1}s: {4} cliff pair(s) on {5} waypoint(s).",
-                    Waypoints, StandableTiles, Paths, Seconds, Cliffs.Count, AffectedWaypoints);
+                    "{0} waypoint(s), {1} reachable approach tile(s) ({2} standable but sealed off, "
+                    + "not tested), {3} engine path(s) in {4:F1}s: {5} cliff pair(s) on {6} waypoint(s).",
+                    Waypoints, StandableTiles, Unreachable, Paths, Seconds,
+                    Cliffs.Count, AffectedWaypoints);
             }
         }
     }
@@ -206,7 +214,9 @@ namespace Server.Custom
                     continue;
                 }
 
-                int range = RangeFor(waypoint);
+                // NavWalker owns this rule; this used to keep a mirror of it. See
+                // NavWalker.ArrivalRangeFor(NavWaypoint).
+                int range = NavWalker.ArrivalRangeFor(waypoint);
 
                 // Counted per neighbour, so the report can say "eleven of the fourteen standable
                 // approach tiles are stranded" rather than only "some are".
@@ -234,6 +244,36 @@ namespace Server.Custom
 
                         if (!TryStand(map, home, waypoint.X + dx, waypoint.Y + dy, out tile))
                         {
+                            continue;
+                        }
+
+                        // A TILE A WALKER CANNOT GET TO IS NOT A TILE A WALKER CAN STOP ON.
+                        //
+                        // CanFit says a mobile FITS here; it says nothing about whether one can
+                        // ever arrive. Measured on the graph this check was built against: of the
+                        // 44 stranded tiles across the 22 cliff pairs, THIRTY-FOUR could not be
+                        // pathed to from their own waypoint - and, tested separately, not from any
+                        // graph neighbour of it either. Every one of those was a building interior
+                        // behind a wall, or a ledge across a fence, two tiles from a waypoint on
+                        // the street outside: 'wooden floor' at a raised Z, standable and sealed.
+                        // A walker planning a hop THROUGH the waypoint can no more stop inside the
+                        // shop than it can walk through the wall.
+                        //
+                        // So the box is filtered by reachability before anything is asked about
+                        // leaving it, and the ones it drops are COUNTED rather than discarded: a
+                        // check that quietly stops looking is the failure this tree works hardest
+                        // to avoid, so Unreachable rides in the summary beside StandableTiles and
+                        // a reader can always see how much of the box was set aside and why.
+                        //
+                        // This runs BEFORE the per-neighbour paths rather than after, so a sealed
+                        // tile costs one path instead of one per neighbour. On the current graph
+                        // that is close to free: it adds a path per standable tile and removes
+                        // several for every tile it rejects.
+                        result.Paths++;
+
+                        if (!Paths(map, home, tile))
+                        {
+                            result.Unreachable++;
                             continue;
                         }
 
@@ -443,16 +483,6 @@ namespace Server.Custom
             }
 
             list.Add(node);
-        }
-
-        /// <summary>
-        /// NavWalker.ArrivalRangeFor's rule for a Walk step, which is the only rule that decides
-        /// how far off a walker is allowed to stop. Kept as a mirror rather than a constant so a
-        /// change there cannot leave this box the wrong size and silently narrow the check.
-        /// </summary>
-        private static int RangeFor(NavWaypoint waypoint)
-        {
-            return waypoint.ArrivalRange > 0 ? waypoint.ArrivalRange : NavWalker.DefaultArrivalRange;
         }
 
         /// <summary>

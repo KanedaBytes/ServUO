@@ -503,9 +503,19 @@ at once and the audit cannot see why - and a bot standing still can be failing a
   `Scripts/Custom/Core/Navigation/README.md`.
 - **The approach-tile scan**, in `[NavAudit full` and in every `[WalkAudit`. Both of the other two
   instruments start every measurement *on* an authored waypoint; a bot starts wherever its last hop
-  stopped, anywhere inside `ArrivalRangeFor`'s 5x5 box. A **cliff** is a standable tile in that box
-  that cannot path to a neighbour the waypoint itself reaches - 23 pairs on 15 waypoints today, and
-  **not one of the 70 stranded tiles is adjacent to its waypoint**, so an eight-neighbour version of
+  stopped, anywhere inside `ArrivalRangeFor`'s 5x5 box. A **cliff** is a tile in that box the
+  waypoint can reach that cannot path to a neighbour the waypoint itself reaches. **The graph reads
+  0 cliffs today**, and getting there took two corrections rather than one:
+  - **`CanFit` was the wrong first question.** Of the 44 stranded tiles the first run reported, 34
+    could be pathed to from nowhere on the graph - building interiors behind a wall, two tiles from
+    a waypoint standing in the street. The box is filtered by reachability now, which drops 0.3% of
+    it and 17 of the 22 findings; `cliffTilesUnreachable` publishes how much was set aside.
+  - **The five real ones were not the hop cap**, which was the standing hypothesis. Seven of their
+    ten tiles put the goal comfortably inside it. All four waypoints stand in the street with their
+    box reaching inside the shop next door, so they carry `arrivalRange: 1` - measured clean over
+    all four 3x3 rings before it was authored.
+
+  **Not one of the 44 stranded tiles was adjacent to its waypoint**, so an eight-neighbour version of
   this check would have reported nothing at all.
 - **Failures per 100 walks.** `NavWalkFailures` counts walks started and completed, so a window's
   rate no longer depends on how long the window was. Both numbers are on `Bots.Population` and in

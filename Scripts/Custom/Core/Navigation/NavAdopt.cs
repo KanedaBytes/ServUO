@@ -792,7 +792,32 @@ namespace Server.Custom
             /// </summary>
             private void Subdivide(PendingEdge pending, NavWaypoint from, NavWaypoint to, List<Point3D> path)
             {
+                // THE BUDGET IS THE CAP MINUS WHERE A WALKER IS ALLOWED TO STAND, NOT THE CAP.
+                //
+                // This cut at the cap for as long as it existed, which is why 566 of the graph's
+                // 1153 walk edges are authored at exactly 12 - and why a whole class of cliff
+                // exists. NavWalker.ArrivalRangeFor lets a walker stop two tiles short of the
+                // waypoint it was heading for, so a 12-tile edge is a FOURTEEN tile hop for the
+                // bot that actually has to plan it, past what the greedy 38x38-box pathfinder is
+                // calibrated for. uo-wp-194-s1 -> uo-wp-194 was exactly that (commit 239ff6e2):
+                // clean on every instrument that starts ON the waypoint, and two of its twenty-four
+                // approach tiles could not leave.
+                //
+                // Expressed as cap minus ArrivalRangeFor rather than as a literal, so a later
+                // pathfinder evaluation can move Custom.NavHopMaxTiles without touching this line.
+                // The far end of every hop this test governs is a waypoint this method is about to
+                // mint, and a minted waypoint takes DefaultArrivalRange - so the displacement can
+                // be at either end and the budget has to allow for the larger. The last hop is
+                // emitted unconditionally and is not governed by this at all.
+                //
+                // Existing edges are NOT rewritten by this. It changes what a future adopt mints.
                 int cap = NavigationSystem.HopMaxTiles;
+                int anchorRange = NavWalker.ArrivalRangeFor(from);
+
+                // At least one tile of budget whatever the cap says: a configuration that leaves
+                // none would cut at every point on the path and mint a waypoint per tile.
+                int budget = Math.Max(
+                    1, cap - Math.Max(anchorRange, NavWalker.DefaultArrivalRange));
 
                 // The path with its snapped ends replaced by the records the edge will name.
                 var points = new List<Point3D>();
@@ -823,14 +848,14 @@ namespace Server.Custom
                 {
                     bool last = i == points.Count - 1;
 
-                    // Cut at the point BEFORE the cap breaks, not after. Looking ahead is what
+                    // Cut at the point BEFORE the budget breaks, not after. Looking ahead is what
                     // keeps the emitted hop under it; looking behind emits the one that broke it.
                     if (!last)
                     {
                         int ahead = Math.Max(
                             Math.Abs(points[i + 1].X - anchor.X), Math.Abs(points[i + 1].Y - anchor.Y));
 
-                        if (ahead <= cap)
+                        if (ahead <= budget)
                         {
                             continue;
                         }

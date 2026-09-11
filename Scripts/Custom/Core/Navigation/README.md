@@ -20,6 +20,15 @@ So travel is **two-layer**: a coarse graph of short, explicitly authored hops, e
 the engine's own pathfinder. `Custom.NavHopMaxTiles` (default **12**) is the authored cap. The
 ModernUO shard independently arrived at 15 for the same reason.
 
+**The cap is not the budget an authoring tool gets.** A walker is allowed to stop up to
+`NavWalker.ArrivalRangeFor` tiles short of the waypoint it was heading for — 2 by default — and it
+then plans the next hop from *there*, so an edge authored at the cap is a `cap + 2` hop for the bot
+that actually has to walk it. `NavAdopt.Subdivide` cut at the cap for as long as it existed, which is
+why **566 of the graph's 1153 walk edges are authored at exactly 12**, and it is the mechanism behind
+`uo-wp-194-s1` (commit `239ff6e2`). It now cuts at `cap - ArrivalRangeFor`, expressed that way rather
+than as a literal so that moving the cap moves the budget with it. **Existing edges were not
+rewritten**; this changes what a future adopt mints.
+
 Two more ServUO facts that shape the code:
 
 - **`BaseAI.MoveTo` compares its cached goal by reference** (`BaseAI.cs:2644`). `Point3D` is a
@@ -935,17 +944,66 @@ waypoint - a 5x5 box the audit never validated"* - and `[WalkAudit` inherited it
 
 `NavNeighbourhood.Scan` is the check for it. A **cliff** is:
 
-> the waypoint can path to a graph neighbour, and a standable tile inside the waypoint's own
-> arrival tolerance cannot path to that same neighbour.
+> the waypoint can path to a graph neighbour, and a tile inside the waypoint's own arrival
+> tolerance **that the waypoint can path to** cannot path to that same neighbour.
 
-Both halves are load-bearing. Without the first, every `BLOCKED` edge would be re-reported
-twenty-four times over; without the second this is just `[NavAudit` again.
+All three clauses are load-bearing. Without the first, every `BLOCKED` edge would be re-reported
+twenty-four times over; without the last this is just `[NavAudit` again. The middle one —
+reachability — was added after the first pass at fixing the findings, and it is the subject of the
+next section.
+
+#### A tile a walker cannot get to is not a tile a walker can stop on
+
+**The scan's first clause was `CanFit`, and `CanFit` answers the wrong question.** It says a mobile
+*fits* on a tile. It says nothing about whether one can ever *arrive* there — and the check exists
+to ask where a walker might legitimately have stopped.
+
+Measured, on the 22 pairs the first run reported. Of their **44 stranded tiles, 34 could not be
+pathed to from their own waypoint** — and, tested separately as the falsification, **not from any
+graph neighbour of it either: 0 of 34 reachable from anywhere on the graph.** `[TileProbe` says what
+they are, and they are all the same thing:
+
+```
+== 1469,1548,32 ==                        (2 tiles from brit-north-4, which is on cobblestones)
+LAND 0x0408 'wooden floor' z 30 ...
+STAND hint z 32: TryResolveZ yes (32); CanFit True, CanSpawnMobile True
+```
+
+A **building interior behind a wall**, or a ledge across a fence: standable, sealed, and two tiles
+from a waypoint standing in the street outside. A walker planning a hop through that waypoint can no
+more stop inside the shop than it can walk through the wall. Ten of the fourteen sample tiles were
+`wooden floor` under a `stone roof` or `wooden shingles`; the rest were forest, dirt and grass on the
+far side of something.
+
+So the box is filtered by reachability before anything is asked about leaving it. On the current
+graph that drops **77 tiles of 22,474 — 0.3%** — and with them **17 of the 22 cliff pairs**. It is a
+narrow filter, not a blanket one, and it is the reason the remaining five are worth acting on.
+
+**The count it drops is published, not discarded.** `cliffTilesTested` and `cliffTilesUnreachable`
+ride in both snapshots beside `cliffsChecked`, and the summary line reads *"22,349 reachable approach
+tile(s) (72 standable but sealed off, not tested)"*. A check that quietly stops looking is the
+failure this tree works hardest to avoid; a reader has to be able to see how much of the box was set
+aside and why.
+
+It also costs nothing. The reachability path runs **before** the per-neighbour paths, so a sealed
+tile costs one `MovementPath` instead of one per neighbour: 54,706 paths in 7.6s became 76,866 in
+8.0s.
+
+**The probe that established this over-reported twice, both times the same way.** `nav-hop` answers
+with `MovementPath(probe, goal)` and has no special case for an adjacent goal, where `MovementPath`
+returns no path at all — so probing *waypoint to a tile one away*, or *a box tile to a neighbour one
+away*, reads `ok:false` for a step that is simply a step. `NavNeighbourhood.Paths` has had the
+`Chebyshev <= 1` short-circuit since it was written, and `[NavAudit` skips adjacent edges for the
+same reason. Filter those out and the two instruments agreed on all 22 pairs exactly, which is what
+made the 34 trustworthy.
 
 **Two things it is easy to build smaller, and both would have found nothing.**
 
-- **The box is the arrival tolerance, not the eight neighbours.** Of the 70 stranded tiles across
-  the 23 cliff pairs on the current graph, **none is adjacent to its waypoint** - every one is at
-  Chebyshev 2. A radius-1 check would have reported a clean graph.
+- **The box is the arrival tolerance, not the eight neighbours.** Of the 44 stranded tiles across
+  the 22 cliff pairs the first run reported, **none is adjacent to its waypoint** - every one is at
+  Chebyshev 2, and so is every one of the ten that survived the reachability filter. A radius-1
+  check would have reported a clean graph. (That is also *why* `arrivalRange: 1` closes the five
+  real ones: the box shrinks past the only ring that had anything in it.)
 - **The goal is the next waypoint, not this one.** Measured at the case that named this:
   `2034,2832` and `2035,2832` both path back to `uo-wp-194-s1` *and* to its other two neighbours,
   and fail only toward `uo-wp-194`. "Can a displaced bot get back on its waypoint" would have
@@ -956,12 +1014,85 @@ the corner, so a first-found sample reports distance 2 whatever the truth is - a
 like a finding and is an artefact of a loop order. `strandedAdjacent` counts the radius-1 ones
 beside it, so the question above stays answerable from the output rather than by argument.
 
-**Cost, and where it runs.** 1001 waypoints, 22,476 standable approach tiles, **54,683 engine paths
-in 8.6-8.8 s** - engine-only, no probe mobile, no walker, no world mutation. That is sixteen times
-the edge sweep, so it is **not** on the default `[NavAudit` path: the editor re-runs that quietly
-after every nav save. It runs from **`[NavAudit full`** and from **`[WalkAudit`**, which pays 9
-seconds on top of a 195-second sweep. `cliffsChecked` is published beside the array in both
-snapshots, so a reader can tell "none" from "not looked at".
+**Cost, and where it runs.** 1001 waypoints, 22,349 reachable approach tiles (72 sealed), **76,866
+engine paths in 8.0 s** - engine-only, no probe mobile, no walker, no world mutation. That is sixteen
+times the edge sweep, so it is **not** on the default `[NavAudit` path: the editor re-runs that
+quietly after every nav save. It runs from **`[NavAudit full`** and from **`[WalkAudit`**, which pays
+8 seconds on top of a 195-second sweep. `cliffsChecked`, `cliffTilesTested` and
+`cliffTilesUnreachable` are published beside the array in both snapshots, so a reader can tell
+"none" from "not looked at", and "clean" from "filtered".
+
+### What the five real cliffs turned out to be, and the fix
+
+After the reachability filter, **five pairs on four waypoints** survived: `uo-rec-1-s2` toward both
+`uo-rec-1` and `uo-brit-north-d-s1`, `uo-rec-4-2-s2` toward `uo-rec-4-2`, `uo-wp-194-s3` toward
+`uo-wp-204`, and `uo-wp-41-s1` toward `uo-wp-42`. Ten stranded tiles between them, every one
+reachable, every one at Chebyshev 2.
+
+**The hop cap does not explain them, and that was the hypothesis going in.** `uo-wp-194-s1` (commit
+`239ff6e2`) was a cap case — an edge authored at exactly 12, plus the 2-tile displacement, planning
+a 14-tile hop — and the obvious reading was that these were more of the same. Measured, **only 3 of
+the 10 tiles put the goal over the cap**; the other 7 were comfortably inside it, and `uo-wp-41-s1`'s
+edge is 9 tiles with both its stranded tiles at 8 and 9. A subdivision would have changed nothing.
+
+`[TileProbe` says what they are, and all four are one shape:
+
+| waypoint | stands on | its stranded tiles stand on |
+| --- | --- | --- |
+| `uo-rec-1-s2` | `cobblestones` z30 | `wooden floor` z30 under `stone roof` |
+| `uo-rec-4-2-s2` | `dirt` z20 | `wooden floor` z20 under `wooden shingles` |
+| `uo-wp-194-s3` | `grass` z0 | `wooden floor` z10 on `wooden boards`, under `stone roof` |
+| `uo-wp-41-s1` | `cobblestones` z0 | `wooden floor` z5 on `wooden boards`, under `slate roof` |
+
+**The waypoint is in the street and its 5x5 box reaches inside the building next to it.** Unlike the
+34 sealed tiles above, these interiors have a door, so a walker that legitimately stops two tiles
+short can end up on the shop floor or the porch — and from there the pathfinder will not route back
+out toward the next road node.
+
+So the fix is `arrivalRange: 1` on those four waypoints, and it is the mechanism used as designed
+rather than a check narrowed to pass. `NavWalker.ArrivalRangeFor` carries uo-offline's own reason for
+the field in its comment — *"a doorway waypoint at an unusual Z needs the mobile on the exact tile,
+so its authored tolerance wins"* — and these are exactly doorway-adjacent nodes. It does not hide the
+stranding; it stops the walker considering itself arrived while it is still on the porch. Verified
+before authoring: every standable tile of all four 3x3 rings, toward every graph neighbour, 48 probes,
+**0 stranded**. `strandedAdjacent` was 0 for all five pairs, which said the same thing from the
+other side.
+
+The cost is that a walker takes one more step at four waypoints.
+
+### The evidence for a pathfinder evaluation at a higher cap
+
+Kept deliberately, because the fixes above erase most of the traces and this is the one question the
+findings were expected to answer.
+
+**The premise this session started with did not survive measurement, and that is the first thing
+worth recording.** The plan read the 22 pairs as "18 of them sit on edges 9-12 tiles long, so
+`length + ArrivalRangeFor` crosses the cap, so subdivide them like `uo-wp-194-s1`". Seventeen of the
+22 turned out to be sealed tiles no walker can reach, and of the ten stranded tiles that were real,
+**seven put their goal comfortably inside the cap**. Authored edge length correlated with the
+findings and did not cause them.
+
+What is genuinely evidence, and what a higher-cap evaluation should start from:
+
+- **566 of 1153 walk edges are authored at exactly 12**, the cap itself. That is not a coincidence:
+  `NavAdopt.Subdivide` cut at the cap for as long as it existed, so an adopted road is a chain of
+  hops each exactly as long as the pathfinder is allowed. Raising the cap without re-subdividing
+  leaves those 566 edges where they are; raising it *and* re-adopting lengthens them all.
+- **An edge at the cap is a `cap + ArrivalRangeFor` hop for the bot that has to plan it.** That is
+  the `uo-wp-194-s1` mechanism (`239ff6e2`) and it is why `Subdivide` now cuts at
+  `cap - ArrivalRangeFor` instead. Whatever the cap becomes, that subtraction has to survive.
+- **The three stranded tiles that were over the cap**, as the worked cases:
+
+  | waypoint | goal | authored edge | stranded tile | tile-to-goal |
+  | --- | --- | --- | --- | --- |
+  | `uo-rec-1-s2` | `uo-rec-1` | 12 | `1465,1566,30` | **14** |
+  | `uo-rec-1-s2` | `uo-rec-1` | 12 | `1466,1566,30` | **13** |
+  | `uo-wp-194-s3` | `uo-wp-204` | 11 | `2038,2808,10` | **13** |
+
+- **`Custom.NavHopMaxTiles` is 12 because `FastAStarAlgorithm`'s search box is 38x38 centred on the
+  *midpoint***, so a detour round a building leaves the box. An evaluation at a higher cap is really
+  an evaluation of that box, and `MovementPath.OverrideAlgorithm` is the seam for replacing it - see
+  the note further down, including the blast radius.
 
 ### What uo-offline has, and why this is not a port
 

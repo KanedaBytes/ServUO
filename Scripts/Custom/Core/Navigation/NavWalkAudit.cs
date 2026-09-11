@@ -1582,6 +1582,10 @@ namespace Server.Custom
                 .Append(job.Cliffs != null ? "true" : "false").Append(",\n");
             builder.Append("  \"cliffSeconds\": ")
                 .Append(Fixed(job.Cliffs == null ? 0.0 : job.Cliffs.Seconds)).Append(",\n");
+            builder.Append("  \"cliffTilesTested\": ")
+                .Append(job.Cliffs == null ? 0 : job.Cliffs.StandableTiles).Append(",\n");
+            builder.Append("  \"cliffTilesUnreachable\": ")
+                .Append(job.Cliffs == null ? 0 : job.Cliffs.Unreachable).Append(",\n");
             builder.Append("  ");
 
             NavNeighbourhood.AppendJson(builder, job.Cliffs);
