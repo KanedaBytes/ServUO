@@ -593,7 +593,7 @@ seven tiles from `uo-wp-990` and inside the hop cap. Unstandable arrivals: 20 ->
 ### What three measured windows say
 
 *Measured 9 September 2026 (`ac547257`). Windows A-C; window D below is annotated where its
-unshovable count was later found to be counting occupied tiles.*
+unshovable count was later found to be counting occupied tiles.*
 
 Same shard, same graph, sixty bots walking themselves. `[BotSendTo` needs a connected client, so
 nothing was steered in any of them.
@@ -1179,7 +1179,7 @@ the blast radius first: every creature in the world paths through it.
 ## Adopting uo-offline's data
 
 *The sweep figures below were measured 7 September 2026 (`f62e2813`). The TOOL is current: see the
-note in [History](#history) for why this section is not filed there.*
+note in [History](#history) for why this section is not filed there.*
 
 `Data/Custom/reference/uo-offline-nav.trammel.json` holds 3952 waypoints and 4291 edges converted
 from uo-offline (see that directory's README). `NavAdopt` proposes a region of it.
