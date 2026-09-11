@@ -21,17 +21,30 @@
 // The two functions answer different questions and this file needs the walker's one, which is
 // also the one NavAudit uses so that the audit and the walker cannot disagree (NavAudit.cs:472).
 //
-// A RECORD THE WINDOW CANNOT PLACE IS REPORTED, NEVER MOVED
-// ---------------------------------------------------------
+// A RECORD NOTHING CAN PLACE IS REPORTED, NEVER MOVED
+// ---------------------------------------------------
 // TryResolveZ's return value already draws the distinction this needs:
 //
-//   true  - a real standing surface was found within the window of the stored Z  -> correct it
-//   false - nothing standable near it; the out value fell through to the land Z  -> LEAVE IT
+//   true  - SOMETHING standable was found  -> correct the record to it
+//   false - nothing was; the out value fell through to the land Z (or to the hint, with no facet,
+//           which is not a resolution either)  -> LEAVE IT
 //
-// So this never writes a land Z. A record the window cannot place is not a stale Z at all - it is
-// a record in the wrong PLACE, like an arrival authored inside a shop's display case, and quietly
-// dropping it to the ground would bury the one fault worth finding. Those come out as their own
-// section of the report for a human to place by hand.
+// Read that true case for what it is, because two earlier versions of this comment read it too
+// narrowly and REVIEW.md section 11 called both. It is NOT "within the window of the stored Z":
+// the windows are only the first of four branches (NavWalker.cs:2311-2375). A true answer may also
+// be a DOORWAY - where nothing stands in either window, because a closed door is an Impassable
+// item - or a SEED-SCAN hit expanding outward from the land surface as far as SeedScanRange, which
+// is what reaches a pier deck from a hint left under the water.
+//
+// Nor is it true that this "never writes a land Z". The doorway branch's second arm returns
+// map.GetAverageZ(x, y) exactly, and is RIGHT to: NavCorridor.CanStand counts a door tile as
+// standable at the Z beside it, and so does the walker that has to open it.
+//
+// The accurate promise is the one that matters to this file: A FAILED RESOLUTION IS NEVER
+// COMMITTED AS A CORRECTION. A record nothing can place is not a stale Z at all - it is a record
+// in the wrong PLACE, like an arrival authored inside a shop's display case, and quietly dropping
+// it to the ground would bury the one fault worth finding. Those come out as their own section of
+// the report for a human to place by hand.
 //
 // That splits two failure classes that have been indistinguishable until now: "your Z is out of
 // date", which this fixes, and "your X,Y is wrong", which it can only point at.
