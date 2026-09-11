@@ -1188,7 +1188,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * bug, found by this failing in the least useful way possible: `spawn('powershell', ...)` without
  * `shell: true` does not consult PATHEXT, so it raised ENOENT - onto an `error` event nothing was
  * listening for, with `stdio: 'ignore'` throwing the evidence away. The restart then sat in
- * "waiting" for its full two minutes and reported that the shard had not come back, which is true
+ * "waiting" for its full timeout and reported that the shard had not come back, which is true
  * and says nothing about why. A launcher that cannot say it failed to launch is worse than no
  * launcher.
  *
@@ -1273,7 +1273,14 @@ async function runRestart() {
     restartStep('waiting', 'Waiting for the shard to answer...');
 
     // The health snapshot is the shard saying it is up, and asking for a fresh one is the same
-    // request the Health panel already makes. Two minutes covers a build and a world load.
+    // request the Health panel already makes.
+    //
+    // 120 ATTEMPTS, NOT TWO MINUTES. Each attempt sleeps a second, and once ServUO.exe is up it
+    // also waits up to two more for the health ack - so the ceiling is nearer six minutes than
+    // two, and the floor is two. Three messages here used to say two minutes flat. The attempt
+    // count is deliberately kept rather than converted to a wall-clock deadline: a build plus a
+    // world load can legitimately run past two minutes, and what this loop is really bounding is
+    // the number of times it is willing to ask.
     for (let attempt = 0; attempt < 120; attempt++) {
         await wait(1000);
 
@@ -1303,7 +1310,7 @@ async function runRestart() {
         }
     }
 
-    throw new Error('The shard did not answer within two minutes. Check its window.');
+    throw new Error('The shard did not answer after 120 attempts (at least two minutes, up to about six). Check its window.');
 }
 
 /** Runs the reload for a file and shapes the half of the answer that comes from the shard. */
