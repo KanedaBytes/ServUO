@@ -121,7 +121,29 @@ namespace Server.Custom
                     // attractive rather than equally attractive right up to the last slot.
                     if (BotWorkSites.IsWorkType(candidate.Type))
                     {
-                        weight *= BotWorkSites.VacancyFactor(candidate);
+                        // NOT WHILE HAULING, and this is the crowd floor's rule from four lines up
+                        // arriving at the same answer from the other side. Capacity is how many
+                        // bots may WORK at a site; VacancyFactor reaches exactly 0.0 at capacity,
+                        // which removes the destination from the roll altogether. A miner walking
+                        // ore to a forge is not taking a work slot - it hands the load over and
+                        // leaves - and BotWorkDelivery.BuyerRange is TWELVE TILES, so it does not
+                        // need an arrival tile, let alone a free one.
+                        //
+                        // Left in, the rule inverted itself: a bench is a delivery point BECAUSE
+                        // somebody is working at it (see HaulWeightFor's staffed branch, which
+                        // pays 20.0 for exactly that), and the same crafters standing there filled
+                        // it to capacity and zeroed it. 'brit-forge' holds 4 and the work probe
+                        // puts two smiths on it beside the population's own fixture smith.
+                        //
+                        // Caught by the haul log, and the giveaway was that the row carried route
+                        // tiles: "brit-forge w0.00 73t" is a destination the router reached in 73
+                        // tiles and the weighting then threw away. The miner took its ore to
+                        // 'brit-forge-south-2', 254 tiles off, and the probe read it as a
+                        // hand-over that never happened.
+                        if (!hauling)
+                        {
+                            weight *= BotWorkSites.VacancyFactor(candidate);
+                        }
 
                         // And how far it actually is to walk. Nothing here considered distance
                         // at all, so a Miner at the west gate weighed the face across the map

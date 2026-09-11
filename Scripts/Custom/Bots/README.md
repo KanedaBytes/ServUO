@@ -685,6 +685,39 @@ the anvil had a nineteen-in-twenty chance of becoming a Crafter with the ore sti
 `BotSession` refuses to log out a bot that is hauling, so it would carry it until something else
 moved it.
 
+#### The bench vanished from the roll because its smiths were standing at it
+
+The weight fix above took the work probe from three failures in five to one in five, and the residual
+was a **different defect** that the haul log was built to catch. It caught it on the eighth run:
+
+```
+Tobias is hauling to 'brit-forge-south-2', 254 tile(s) away: brit-bank w0.05,
+brit-forge w0.00 73t, brit-mine-north w0.00, brit-mine-west w0.00,
+brit-forge-south w0.29 330t, *brit-forge-south-2 w0.30 317t, ...
+```
+
+**`brit-forge w0.00 73t`** — and the route tiles are the giveaway. A row that carries `73t` is a
+destination the router *reached*, in 73 tiles, which the weighting then threw away. So it was not an
+exclusion and not a route failure; nothing was ever logged excluding `brit-forge`, and
+`Nav.TryRouteFrom` plainly succeeded.
+
+It was **`BotWorkSites.VacancyFactor`**, which returns exactly **0.0 at capacity**
+(`BotWorkSites.cs:453`) and is multiplied into every work-type candidate. `brit-forge` holds four,
+and the work probe puts *two* smiths on it beside the population's own fixture smith. At capacity the
+forge did not merely weigh less — it left the roll altogether, and the miner took its ore 254 tiles
+to `brit-forge-south-2`.
+
+**The rule inverted itself.** A bench is a delivery point *because* somebody is working at it —
+`HaulWeightFor`'s staffed branch pays 20.0 for precisely that — and the same crafters standing there
+filled it to capacity and zeroed it. The better staffed the forge, the less likely a laden miner was
+to bring anything to it.
+
+**So capacity does not apply to a haul**, which is the crowd floor's rule from four lines above
+arriving at the same answer from the other side. Capacity is how many bots may **work** at a site; a
+miner walking ore to a forge is not taking a work slot — it hands the load over and leaves. And
+`BotWorkDelivery.BuyerRange` is **twelve tiles**, so a delivery does not need an arrival tile, let
+alone a free one.
+
 #### The roll is in the log now, and was not
 
 `LogChoice` filtered to **work sites** — a mine or a lumber camp. A laden gatherer rolls forges and
@@ -698,12 +731,13 @@ Ivor is hauling to 'brit-forge', 34 tile(s) away: brit-bank w0.05, *brit-forge w
 brit-forge-south w0.29 337t, brit-forge-south-2 w0.30 324t, trinsic-bank w0.02, trinsic-forge w0.03
 ```
 
-**What the arithmetic does not do is predict three-in-five.** The terms above explain the failure
-*mode* and each is worth removing on its own, but they do not add up to the observed rate, so the
-fix is carried by the measurement rather than by the model. The likeliest remaining ingredient is a
-race the probe has with itself — whether its smith has clocked in by the time the 120-second shift
-ends, which decides whether the roll takes the staffed branch or the unstaffed one — and the haul log
-is now what would settle that on the next failure rather than another afternoon.
+**The arithmetic above does not predict three-in-five, and the missing term turned out to be a
+second defect rather than a mis-estimated weight.** The haul log found it two sections down: the
+staffed forge was being removed from the roll entirely by `VacancyFactor` whenever its own smiths
+filled it to capacity. That is the target disappearing rather than a weighting subtlety, and it is
+much the larger half of the original rate. The weights still needed every change above - a
+non-delivery destination at 0.02, and a flat 2.0 on a bank 1307 tiles away, are each wrong on their
+own terms - but the model and the measurement only agree once both defects are counted.
 
 ### An empty bench weighs what the bank weighs
 
@@ -948,9 +982,10 @@ two are exclusive, so "the staffed bench is temporarily unroutable because its o
 standing on it" is the obvious candidate and is **not yet established**. The filter now lists a
 delivery point whatever it weighs, with its no-route reason, so the next failure says which.
 
-**This is the next thing to chase, and it is a different defect from the weights.** A laden miner
-whose target bench drops out of the roll does not need better weights; it needs the bench not to drop
-out, or to wait rather than take its ore 257 tiles somewhere else.
+**It was a different defect from the weights, and it is fixed above**: the bench was dropping out of
+the haul roll because `VacancyFactor` zeroes a work site at capacity and its own smiths filled it.
+See *The bench vanished from the roll because its smiths were standing at it*. A laden miner whose
+target bench disappears does not need better weights; it needs the bench not to disappear.
 
 One `Timer` at `Custom.BotTickSeconds` (2s) - one, now, and see above for how long it was
 two - started from whichever of `BotSystem.Initialize` and `ScriptCompiler`'s reflection gets there
