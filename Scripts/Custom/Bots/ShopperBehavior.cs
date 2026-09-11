@@ -182,6 +182,21 @@ namespace Server.Custom
             // Wraparound-safe: compare by subtraction, never a < b.
             if (Core.TickCount - _pauseUntil < 0)
             {
+                // LOOKING OVER THE GOODS, which is upstream's whole idle texture and the half of
+                // their shopper we had not ported. Theirs turns to a random facing 15% of a tick
+                // (uo-offline ShopperBehavior.cs:113-122) and does nothing else, because it does not
+                // move at all; ours walks between the shop's arrival points, so it needs this for
+                // the eight to twenty seconds between hops.
+                //
+                // It only reads as texture now that the stock wander is gone: before the fidget fix
+                // a paused shopper was taking 21 steps a bot-minute of BaseAI.WalkRandomInHome, and
+                // a turn added to that was invisible. A turn is not a step and the step census does
+                // not count it - Direction is not Location.
+                if (Utility.RandomDouble() < BotLifecycle.Config_.Idle.ShopperTurnChance)
+                {
+                    bot.Direction = (Direction)Utility.Random(8);
+                }
+
                 return;
             }
 

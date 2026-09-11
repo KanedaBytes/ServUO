@@ -71,6 +71,107 @@ namespace Server.Custom
     }
 
     /// <summary>
+    /// What a bot that has ARRIVED does with its feet, and how often it does anything at all.
+    ///
+    /// These are here rather than as constants because they are the numbers somebody re-tunes by
+    /// LOOKING: "do they read as people waiting or as statues" is not a question a test can answer,
+    /// and a stop-rebuild-restart between each look is what stops anybody asking it twice. A change
+    /// here plus [BotsReload is the whole loop.
+    ///
+    /// Upstream keeps the same four as C# literals, and ours are theirs: a 3% idle beat
+    /// (BankSitterBehavior.cs:330), HomeRadius 1 for the walk-back (:58), a 15% facing shift for
+    /// the shopper (ShopperBehavior.cs:113-122), and a 4-9 second turn for an arrived Traveler with
+    /// nothing to do (TravelerBehavior.cs:2727-2732). Ours is 5% rather than 3% because our tick is
+    /// the same 2 seconds and the beat had already been ported at 5%; it is a feel dial, not a
+    /// translation, and it is the one most likely to move.
+    ///
+    /// WHAT NONE OF THEM CONTROLS is the fidgeting this section was written for. That was
+    /// BaseAI.WalkRandomInHome running underneath every behaviour, and it is suppressed in
+    /// PlayerBot.CheckIdle rather than tuned - a wander nobody asked for is not a number to lower.
+    /// </summary>
+    public class BotIdleConfig : IValidatableConfig
+    {
+        /// <summary>
+        /// How far a settled bot may stand from its pinned tile before the engine walks it back.
+        ///
+        /// Upstream's `HomeRadius = 1` (BankSitterBehavior.cs:58), whose comment is "I got shoved":
+        /// the tolerance exists so a sitter nudged one tile does not march back and re-jam the tile
+        /// that nudged it. A crafter overrides this to 0 from its own behaviour - its tile was
+        /// chosen for crafting reach and one step off is one step too far.
+        /// </summary>
+        [JsonProperty("sitterTolerance")]
+        public int SitterTolerance { get; set; }
+
+        /// <summary>Chance per tick that an idle sitter does something - a gesture or a look.</summary>
+        [JsonProperty("beatChance")]
+        public double BeatChance { get; set; }
+
+        /// <summary>Of those beats, the share that is the bank-box bend rather than a look.</summary>
+        [JsonProperty("bankBoxShare")]
+        public double BankBoxShare { get; set; }
+
+        /// <summary>Chance per tick that a paused shopper turns, as if looking over the goods.</summary>
+        [JsonProperty("shopperTurnChance")]
+        public double ShopperTurnChance { get; set; }
+
+        /// <summary>How long an arrived Traveler with nothing to do waits between turns, [min, max].</summary>
+        [JsonProperty("turnSeconds")]
+        public double[] TurnSeconds { get; set; }
+
+        [JsonConstructor]
+        public BotIdleConfig()
+        {
+            SitterTolerance = 1;
+            BeatChance = 0.05;
+            BankBoxShare = 0.35;
+            ShopperTurnChance = 0.15;
+            TurnSeconds = new[] { 4.0, 9.0 };
+        }
+
+        public TimeSpan MinTurn
+        {
+            get { return TimeSpan.FromSeconds(TurnSeconds != null && TurnSeconds.Length > 0 ? TurnSeconds[0] : 4.0); }
+        }
+
+        public TimeSpan MaxTurn
+        {
+            get { return TimeSpan.FromSeconds(TurnSeconds != null && TurnSeconds.Length > 1 ? TurnSeconds[1] : 9.0); }
+        }
+
+        public void Validate(ConfigErrors errors)
+        {
+            if (SitterTolerance < 0)
+            {
+                errors.Add("idle.sitterTolerance is {0}; it is a tile distance and cannot be negative.", SitterTolerance);
+            }
+
+            Probability(errors, "idle.beatChance", BeatChance);
+            Probability(errors, "idle.bankBoxShare", BankBoxShare);
+            Probability(errors, "idle.shopperTurnChance", ShopperTurnChance);
+
+            if (TurnSeconds == null || TurnSeconds.Length != 2)
+            {
+                errors.Add("idle.turnSeconds must be [min, max].");
+            }
+            else if (TurnSeconds[0] <= 0.0 || TurnSeconds[1] < TurnSeconds[0])
+            {
+                errors.Add(
+                    "idle.turnSeconds is [{0}, {1}]; min must be positive and max at least min.",
+                    TurnSeconds[0],
+                    TurnSeconds[1]);
+            }
+        }
+
+        private static void Probability(ConfigErrors errors, string where, double value)
+        {
+            if (value < 0.0 || value > 1.0)
+            {
+                errors.Add("{0} is {1}; it is a probability and must be between 0 and 1.", where, value);
+            }
+        }
+    }
+
+    /// <summary>
     /// The lifecycle's data: phase clamps, the standing-crowd floors, and how often an arrival
     /// actually commits to staying.
     /// </summary>
@@ -132,6 +233,10 @@ namespace Server.Custom
         [JsonProperty("station")]
         public double Station { get; set; }
 
+        /// <summary>What an arrived bot does with its feet. See BotIdleConfig.</summary>
+        [JsonProperty("idle")]
+        public BotIdleConfig Idle { get; set; }
+
         [JsonConstructor]
         public BotLifeConfig()
         {
@@ -140,6 +245,7 @@ namespace Server.Custom
             Handoff = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             Capacity = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             Station = 0.95;
+            Idle = new BotIdleConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -168,6 +274,15 @@ namespace Server.Custom
             {
                 errors.Add("station is {0}; it is a probability and must be between 0 and 1.", Station);
             }
+
+            // A present-but-null `idle` is treated as absent rather than as a fault, which is the
+            // rule BotStore.Validate already applies to every section of the file.
+            if (Idle == null)
+            {
+                Idle = new BotIdleConfig();
+            }
+
+            Idle.Validate(errors);
 
             foreach (var entry in Capacity)
             {

@@ -55,6 +55,9 @@ namespace Server.Custom
         private string _lastDestinationId;
         private long _lingerUntil;
 
+        /// <summary>When this bot next turns while standing about. See the Lingering case.</summary>
+        private long _nextIdleTurn;
+
         public TravelerBehavior()
         {
             // Quieter and slower than the bank crowd. A bot on the road is walking past you, not
@@ -259,6 +262,23 @@ namespace Server.Custom
 
                     TrySpeak(bot);
 
+                    // FACE A NEW WAY NOW AND THEN, which is all upstream's arrived Traveler does
+                    // with no handoff: "Occasionally turn to face a new direction so the bot reads
+                    // as awake. Every 4-9 seconds, not every tick" (uo-offline
+                    // TravelerBehavior.cs:2727-2732). There is no movement in theirs and there is
+                    // none here.
+                    //
+                    // This is the phase the step census measured WORST before the fidget fix - 34.3
+                    // idle steps per bot-minute, higher than either resident brain - because a
+                    // lingering Traveler sets no Home at all, and WalkRandomInHome special-cases a
+                    // zero Home into a free untethered WalkRandom (BaseAI.cs:2516, :2542). It is
+                    // now still, and a turn is what makes still read as awake rather than as frozen.
+                    if (Core.TickCount - _nextIdleTurn >= 0)
+                    {
+                        bot.Direction = (Direction)Utility.Random(8);
+                        ScheduleNextIdleTurn();
+                    }
+
                     // Wraparound-safe: compare by subtraction, never a < b (CLAUDE.md section 15).
                     if (Core.TickCount - _lingerUntil >= 0)
                     {
@@ -400,6 +420,19 @@ namespace Server.Custom
             int seconds = Utility.RandomMinMax((int)MinLinger.TotalSeconds, (int)MaxLinger.TotalSeconds);
 
             _lingerUntil = Core.TickCount + (seconds * 1000L);
+
+            ScheduleNextIdleTurn();
+        }
+
+        /// <summary>The gap between idle turns, from bots.json life.idle.turnSeconds.</summary>
+        private void ScheduleNextIdleTurn()
+        {
+            BotIdleConfig idle = BotLifecycle.Config_.Idle;
+
+            int seconds = Utility.RandomMinMax(
+                (int)idle.MinTurn.TotalSeconds, (int)idle.MaxTurn.TotalSeconds);
+
+            _nextIdleTurn = Core.TickCount + (seconds * 1000L);
         }
 
         /// <summary>

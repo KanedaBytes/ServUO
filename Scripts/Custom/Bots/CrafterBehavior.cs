@@ -425,12 +425,22 @@ namespace Server.Custom
         /// upstream's drift-back, done by the engine instead of by hand. It matters more for a
         /// Smith than for anyone else: the arrival tile was chosen because it is within two tiles
         /// of both the forge and the anvil, and one step off is one step too far.
+        ///
+        /// AND IT WAS THE ONLY BEHAVIOUR THAT GOT THIS RIGHT. The same window that measured a
+        /// BankSitter at 30.1 idle steps per bot-minute measured a Crafter at 0.00, which is what
+        /// RangeHome 0 buys and what a non-zero RangeHome throws away - see the Tolerance note in
+        /// BankSitterBehavior. Since the fidget fix, the drift-back is gated by
+        /// PlayerBot.CheckIdle and so needs the tolerance said out loud: ZERO, explicitly, because
+        /// the default a sitter wants is one tile and one tile is exactly what a Smith cannot
+        /// afford. Nothing about this behaviour changes; the number that used to be implicit in
+        /// the engine's own test is now written down.
         /// </summary>
         private void Settle(PlayerBot bot)
         {
             _anchor = bot.Location;
             bot.Home = _anchor;
             bot.RangeHome = 0;
+            bot.IdleTolerance = 0;
 
             if (bot.TradeClass == BotClass.Smith)
             {
@@ -471,6 +481,7 @@ namespace Server.Custom
 
             bot.Home = Point3D.Zero;
             bot.RangeHome = 0;
+            bot.IdleTolerance = 0;
             bot.Commuting = false;
             _walkingToStation = false;
 

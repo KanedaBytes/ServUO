@@ -131,13 +131,20 @@
     }
   },
   "life": {
-    "comment": "phases is DELIBERATELY EMPTY: with no clamps a phase is whatever BotPersonality rolled for that bot (15-360 minutes), which is the production case. The smoke installs short clamps in memory for its own run. crowds is the standing-crowd floor per destination type - an under-floor destination pulls bots toward it rather than anyone being placed there. handoff is how often arriving somewhere turns into staying: not every arrival commits, and the ones who pass through are what make a bank look busy. station is the handoff chance used instead when a bot arrives at the station its own class works, whatever the type. capacity is the mirror of crowds and is keyed by DESTINATION ID, not type: a work site's weight falls as it fills and reaches zero at capacity, so gatherers spread across the faces instead of stacking on one. It is DELIBERATELY EMPTY - with no entry a site's capacity is its authored arrival-point count, which is the number of bots that can actually stand there.",
+    "comment": "phases is DELIBERATELY EMPTY: with no clamps a phase is whatever BotPersonality rolled for that bot (15-360 minutes), which is the production case. The smoke installs short clamps in memory for its own run. crowds is the standing-crowd floor per destination type - an under-floor destination pulls bots toward it rather than anyone being placed there. handoff is how often arriving somewhere turns into staying: not every arrival commits, and the ones who pass through are what make a bank look busy. station is the handoff chance used instead when a bot arrives at the station its own class works, whatever the type. idle is what an arrived bot does with its feet: sitterTolerance is how far it may stand from its pinned tile before the engine walks it back (upstream's HomeRadius 1), beatChance how often it gestures or looks around, bankBoxShare the share of those beats that is the bank-box bend, shopperTurnChance how often a paused shopper turns, and turnSeconds the gap between an arrived Traveler's idle turns. They are here rather than in code because they are re-tuned by LOOKING, and a rebuild between each look is what stops anybody looking twice. What they do NOT control is idle fidgeting: that was BaseAI.WalkRandomInHome running under every behaviour and it is suppressed in PlayerBot.CheckIdle, because a wander nobody asked for is not a number to lower. capacity is the mirror of crowds and is keyed by DESTINATION ID, not type: a work site's weight falls as it fills and reaches zero at capacity, so gatherers spread across the faces instead of stacking on one. It is DELIBERATELY EMPTY - with no entry a site's capacity is its authored arrival-point count, which is the number of bots that can actually stand there.",
     "phases": {},
     "crowds": {
       "bank": 3
     },
     "capacity": {},
     "station": 0.95,
+    "idle": {
+      "sitterTolerance": 1,
+      "beatChance": 0.05,
+      "bankBoxShare": 0.35,
+      "shopperTurnChance": 0.15,
+      "turnSeconds": [4, 9]
+    },
     "handoff": {
       "bank": 0.4,
       "shop": 0.8,

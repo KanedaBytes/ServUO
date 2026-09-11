@@ -280,6 +280,76 @@ through `NavWalker` like every other walk here, and a shopper wedged behind a co
 recovery ladder for free. What made movement dangerous for them is what steps 4a and 7b already
 solved here.
 
+### The stock wander is off, and it WAS the fidget
+
+Sean watched the bank and said they move around far too much. They did, and none of it was written
+here: every idle tick in this layer is speech, an animation and a facing change, and not one of them
+calls a movement primitive. The stepping was the engine's.
+
+`BotAI.DoActionWander` stands aside only while `Commuting` (`BotAI.cs:48-58`), which is exactly the
+case an *arrived* bot is not. So it fell through to `BaseAI.DoActionWander` ->
+`WalkRandomInHome(2,2,1)` (`BaseAI.cs:1061-1067`, `:2509-2582`), on the AI timer, whose interval is
+`CurrentSpeed` - and `BotMovement.Settle` drops that to `Mobile.WalkFoot`, 400ms. `WalkRandom`'s own
+gate is `Utility.Random(16) <= 8`, about 56% (`:2241`), and `BaseCreature.CheckIdle` damps only 5% of
+calls into a 15-25 second pause (`BaseCreature.cs:4754-4759`).
+
+**Upstream has none of this layer at all**, because their bot is a `PlayerMobile` and there is no
+`BaseAI` under it. Their idle is only what their behaviour code does: a BankSitter steps when it is
+further than `HomeRadius = 1` from its spot and otherwise not at all
+(`uo-offline BankSitterBehavior.cs:58, :586-617`), and a Shopper does not move, by explicit design -
+*"does NOT path anywhere... No movement = no wall-grinding"* (`ShopperBehavior.cs:1-14`). We had
+ported their texture faithfully and left the engine running underneath it.
+
+Measured with `[BotSteps`, idle steps per bot-minute, 61 bots - and the "before" column is also the
+argument for the fix, because one phase already had it. Before is a full 15-minute window;
+after is the first reading of the next one, and the full window is in the table further down:
+
+| phase | before | after | |
+| --- | --- | --- | --- |
+| Crafter | **0.00** | **0.00** | already pinned with `RangeHome 0` - the shape the others now copy, and unchanged by any of this |
+| Shopper | 20.35 | **0.00** | no `Home` at all, so the untethered `WalkRandom` branch (`BaseAI.cs:2516, :2542`) |
+| BankSitter | 25.97 | **2.97** | `RangeHome 2`, which is a licence to wander inside 2, not a tolerance |
+| Traveler (lingering) | 24.16 | **0.00** | also untethered, and the worst of the three in the first minute of the window |
+
+Whole window: **101,546 steps**, of which 89,096 were a Traveler walking a route and **11,925 were
+idle** - 3,167 BankSitter wander, 2,711 BankSitter drift-back, 4,838 Shopper and 1,209 lingering
+Traveler.
+
+**The BankSitter does not go to zero, and should not.** Its residual is the settle itself:
+`PickScatteredHome` puts `Home` up to four tiles off the arrival, the engine walks the bot there
+once per visit, and `DoMoveImpl`'s `SuccessAutoTurn` (`BaseAI.cs:2483-2496`) steps round an obstacle
+in a direction that is not toward `Home` - which the census correctly calls `wander` because it
+cannot know better. Twelve such steps against five clean drift-backs in the first reading. That is
+traffic on the way to a chosen spot, not fidgeting at one.
+
+The lever is **`PlayerBot.CheckIdle`**, not `DoActionWander`: `CheckIdle` is the one thing
+`DoActionWander` asks before it wanders and nothing else consults it, so overriding it leaves
+herding, navpoints, waypoints and the combatant-facing tail alone. It is also the lever this tree
+already proved - `NavWalkAudit`'s probe overrides exactly this, and `Navigation/README.md:760-762`
+tabulates three measured variants.
+
+Three consequences worth knowing:
+
+- **`RangeHome` is not a tolerance and never was.** `SitterRange = 2` is gone; the slack is now
+  `PlayerBot.IdleTolerance`, consulted by `CheckIdle`, and `bots.json` `life.idle.sitterTolerance`
+  holds the number. A crafter sets it to **0** explicitly, because the tolerance a sitter wants is
+  one tile and one tile is what a Smith cannot afford.
+- **Off the spot, `CheckIdle` returns `false` rather than `base`**, so the walk-back is immediate and
+  certain; `base` would pause one call in twenty and leave a shoved sitter standing where it was
+  shoved to, which upstream's unconditional walk-back does not. The walk itself is still the
+  engine's pin idiom (`BaseAI.cs:2573-2578`) - nothing here re-implements movement.
+- **A sitter now gives up on a spot it cannot reach.** The walk-back is a straight-line `DoMove`, not
+  a pathfind, and `PickScatteredHome` validates its tile for standing and occupancy but never for
+  reachability - so a spot across a counter is one the bot walks into a wall to reach. That was
+  survivable while the five-percent pause damped it. After 20 seconds off the spot it re-pins to
+  where it actually stands. **The grind would have been invisible to `[BotSteps`** - a blocked
+  `DoMove` takes no step - which is why it is guarded rather than waited for.
+
+And the idle texture gains the half of upstream's we had not ported: the Shopper's 15%-per-tick
+facing shift between hops (`ShopperBehavior.cs:113-122`) and the lingering Traveler's turn every 4-9
+seconds (`TravelerBehavior.cs:2727-2732`). Both are turns, not steps - `Direction` is not `Location`,
+and `[BotSteps` does not count them.
+
 ### `PickScatteredHome` is kept, and matters more here than there
 
 A BankSitter settles a few tiles *off* the arrival point rather than on it. Upstream's reason was

@@ -241,6 +241,18 @@ namespace Server.Custom
         public bool Commuting { get; set; }
 
         /// <summary>
+        /// How far this bot may stand from Home before the engine walks it back. Transient.
+        ///
+        /// Read by CheckIdle, written by whichever behaviour pinned Home, and cleared with Home -
+        /// a leftover tolerance is as wrong as a leftover Home. It lives on the mobile rather than
+        /// on the behaviour because the thing that consults it is an AI override, which cannot see
+        /// the behaviour, and because the two values only make sense together: a sitter wants one
+        /// tile of slack for the shove it just took, and a crafter wants none because its tile was
+        /// chosen for crafting reach.
+        /// </summary>
+        public int IdleTolerance { get; set; }
+
+        /// <summary>
         /// This gatherer has a load on its back and is walking it to town. Transient.
         ///
         /// Upstream's flag, and it lives on the mobile for the same reason PartyAcceptPending
@@ -424,6 +436,7 @@ namespace Server.Custom
             // created every time it paused - the same reason DailyLifeTownsfolk clears Home.
             Home = Point3D.Zero;
             RangeHome = 0;
+            IdleTolerance = 0;
 
             LiveRegistry.Register(this);
 
@@ -603,6 +616,50 @@ namespace Server.Custom
             BotStepCensus.Note(this, oldLocation);
         }
 
+        /// <summary>
+        /// Stand still.
+        ///
+        /// THIS IS THE FIDGET FIX, and what it turns off was never ours. BotAI.DoActionWander stands
+        /// aside only while Commuting (BotAI.cs:48-58), so an ARRIVED bot falls through to
+        /// BaseAI.DoActionWander -> WalkRandomInHome(2,2,1) (BaseAI.cs:1061-1067, :2509-2582) on the
+        /// AI timer, whose interval is CurrentSpeed - which BotMovement.Settle drops to
+        /// Mobile.WalkFoot, 400ms. WalkRandom's own gate is Utility.Random(16) &lt;= 8, about 56%
+        /// (:2241), and BaseCreature.CheckIdle damps only 5% of calls into a 15-25 second pause
+        /// (BaseCreature.cs:4754-4759). Measured on a live window of 61 bots before this override
+        /// existed: 21.0 idle steps per bot-minute for a Shopper, 30.1 for a BankSitter, 34.3 for a
+        /// lingering Traveler - and 0.00 for a Crafter, which is the only one of the four that pins
+        /// with RangeHome 0.
+        ///
+        /// Upstream has none of this layer, because their bot is a PlayerMobile with no BaseAI under
+        /// it: their BankSitter steps only when further than HomeRadius 1 from its spot
+        /// (BankSitterBehavior.cs:586-617), and their Shopper does not move at all - its own header
+        /// says "does NOT path anywhere... No movement = no wall-grinding" (ShopperBehavior.cs:1-14).
+        /// Our idle texture already matched theirs; only the engine underneath it did not.
+        ///
+        /// CheckIdle rather than DoActionWander, because CheckIdle is the ONE thing DoActionWander
+        /// asks before it wanders and nothing else consults it - overriding DoActionWander would
+        /// also skip herding, navpoints, waypoints and the combatant-facing tail. It is also the
+        /// lever this tree already proves: NavWalkAudit's probe overrides exactly this, and the
+        /// three measured variants are tabulated in Navigation/README.md.
+        ///
+        /// Beyond the tolerance it returns FALSE rather than base, so the walk-back is immediate and
+        /// certain: base would enter a 15-25 second pause one call in twenty and leave a shoved
+        /// sitter standing where it was shoved to, which upstream's unconditional walk-back does not.
+        /// The walk back itself is still the engine's - Home with RangeHome 0 is the pin idiom
+        /// (BaseAI.cs:2573-2578) - so nothing here re-implements movement.
+        /// </summary>
+        public override bool CheckIdle()
+        {
+            if (Home == Point3D.Zero)
+            {
+                return true;
+            }
+
+            int off = Math.Max(Math.Abs(X - Home.X), Math.Abs(Y - Home.Y));
+
+            return off <= IdleTolerance;
+        }
+
         /// <summary>The paperdoll title is the class and tier; a click-title would double it up.</summary>
         public override bool ClickTitle
         {
@@ -651,6 +708,7 @@ namespace Server.Custom
             // place that can undo it, because it is the only hook that runs after both.
             Home = Point3D.Zero;
             RangeHome = 0;
+            IdleTolerance = 0;
         }
 
         // ---- applying a spawner's seed ----
