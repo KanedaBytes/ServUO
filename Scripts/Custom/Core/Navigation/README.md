@@ -706,7 +706,9 @@ per-minute figure incomparable with A–D by construction.
 - **The unshovable column fell 6 → 1**, which is the shove symmetry: a daily-life actor can now
   step through a bot as a bot steps through it.
 - **The tick cost says the population dial has room and is not the binding constraint.**
-  `0.5 ms mean / 11 ms max of 2000 ms over 1144 passes at 60 bots`. The profile asked for 120 and
+  `0.5 ms mean / 11 ms max of 2000 ms over 1144 passes at 60 bots` - a pass count taken while the
+behaviour ticker ran two timers, so it is twice the passes that interval should have produced (see
+the Bots README). The cost per pass is the measurement; the rate is not. The profile asked for 120 and
   got 60 — `target 120 now (peak 60)` — because the population is a *file*: the recipe is derived
   from `population.target` and `[GG_Reimport` turns it into 60 spawner slots, so doubling the
   session ceiling fills the slots that exist and stops. E's walks were bought by the visit divisor

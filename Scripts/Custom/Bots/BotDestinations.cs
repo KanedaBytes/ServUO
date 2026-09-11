@@ -240,7 +240,17 @@ namespace Server.Custom
             {
                 if (hauling)
                 {
-                    if (weights[i] <= 0.0)
+                    // A DELIVERY POINT THAT SCORED ZERO IS THE MOST INTERESTING ROW HERE, and the
+                    // first cut of this filter threw it away. A laden miner rolled a forge 257
+                    // tiles off and the line did not contain 'brit-forge' at all - it had been
+                    // zeroed, by an exclusion or by DistanceFactor's route check failing, and the
+                    // `why` that says which was dropped with it. So delivery points are listed
+                    // whatever they weigh; only the non-delivery remainder, which is all zeros by
+                    // construction now, is left out to keep the line to one line.
+                    bool delivery = BotWorkSites.IsWorkType(candidates[i].Type)
+                        || Insensitive.Equals(candidates[i].Type, "bank");
+
+                    if (!delivery && weights[i] <= 0.0)
                     {
                         continue;
                     }

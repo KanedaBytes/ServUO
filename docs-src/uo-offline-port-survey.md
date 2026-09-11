@@ -440,7 +440,7 @@ spawner needs the attribute, and the editor's type vocabulary now filters on it.
 
 The **population sizing question** §4 left open is answered and instrumented rather than guessed:
 the shipped target is **60**, not 1600, and `BotTickManager` times its own pass so `Bots.Recipe`
-reports the cost beside the live count (60 bots: 0.4 ms mean of a 2,000 ms budget). Raising it is
+reports the cost beside the live count (51 bots: 0.7 ms mean of a 2,000 ms budget). Raising it is
 arithmetic now.
 
 ### Re-survey these four before porting them

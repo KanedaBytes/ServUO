@@ -96,6 +96,10 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Work", BuildWorkHealthResult);
             HealthCheck.Register("Bots.Recipe", BotPopulationProbe.BuildHealthResult);
 
+            // Called here for ordering AND called again by reflection, because ScriptCompiler
+            // invokes every public static Initialize it can find. That is why BotTickManager's is
+            // idempotent - see the note there; it ran two timers and the whole bot layer at double
+            // cadence until it was. Do not "tidy" either half without reading that note.
             BotTickManager.Initialize();
 
             BotSession.Enabled = Config.Get("Custom.BotSessionsEnabled", true);

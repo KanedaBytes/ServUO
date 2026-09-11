@@ -66,8 +66,35 @@ namespace Server.Custom
             get { return Config.Get("Custom.BotPlansPerTick", 8); }
         }
 
+        /// <summary>
+        /// IDEMPOTENT, BECAUSE IT IS CALLED TWICE AND RAN THE WHOLE BOT LAYER AT DOUBLE SPEED.
+        ///
+        /// `ScriptCompiler.Invoke("Initialize")` reflects over every type in every loaded assembly
+        /// and calls every public static parameterless `Initialize` (ScriptCompiler.cs:87), so this
+        /// one is called automatically - and `BotSystem.Initialize` ALSO calls it by name. The old
+        /// body assigned `_timer` unconditionally, which overwrites the handle and leaves the first
+        /// timer running: two repeating timers, both calling OnTick, for the life of the process.
+        ///
+        /// Measured on the shipped build before the guard: **60 passes in 60 seconds against a
+        /// `Custom.BotTickSeconds` of 2.0**, where one timer gives 30. Corroborated independently
+        /// by a [CoreSmoke reading "over 124 pass(es)" about 126 seconds after boot, where 63 was
+        /// expected. Neither ordering rescues it - whichever call lands first, the second makes a
+        /// second timer - so the guard has to be here rather than in the caller.
+        ///
+        /// What it cost is not the CPU, which is two hundredths of the budget either way. It is
+        /// that EVERY cadence this layer measures in passes was doubled: the planning allowance is
+        /// reset per pass, so `Custom.BotPlansPerTick` was really twice what it said, and any
+        /// figure quoted "per pass" or per tick was against half the wall-clock interval it named.
+        /// Elapsed-time deadlines - visit windows, phase clocks, sessions - are unaffected, because
+        /// they compare CustomTime rather than counting passes.
+        /// </summary>
         public static void Initialize()
         {
+            if (_timer != null)
+            {
+                return;
+            }
+
             _timer = Timer.DelayCall(Interval, Interval, OnTick);
         }
 

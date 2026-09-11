@@ -359,6 +359,12 @@ Measured with `[BotSteps`, idle steps per bot-minute, two full 15-minute windows
 settings, `MeasurementProfile` off - and the "before" column is also the argument for the fix,
 because one phase already had it:
 
+> **Every figure in this table was measured at DOUBLE the intended tick cadence**, because the
+> behaviour ticker ran two timers until it was found and fixed - see *The behaviour ticker started
+> twice* below. The idle residual is rolled per pass, so column C's 0.16 reads **0.036** at the
+> corrected cadence and the window's 37 idle steps read **7**. The columns are still the right
+> comparison with each other, which is what they are for; only their absolute scale moved.
+
 | phase | A: before | B: idle fix | C: and mounts | |
 | --- | --- | --- | --- | --- |
 | Crafter | **0.00** | **0.00** | **0.00** | already pinned with `RangeHome 0` - the shape the others now copy, and unchanged by any of this |
@@ -872,8 +878,83 @@ these tables out into `Data/Custom/` rather than to edit 2,000 lines of C# in pl
 
 ## The behaviour tick
 
-One `Timer` at `Custom.BotTickSeconds` (2s), started from `BotSystem.Initialize`. It is the first
-caller `PlayerBotBehavior.Tick` has ever had.
+### The behaviour ticker started twice, and every per-pass number was against half its interval
+
+**Two repeating timers, both calling `OnTick`, for the life of the process.** `ScriptCompiler.Invoke`
+reflects over every type in every loaded assembly and calls every `public static void Initialize()`
+it finds (`ScriptCompiler.cs:87`), so `BotTickManager.Initialize` was called automatically — and
+`BotSystem.Initialize` called it by name as well, for ordering. The body assigned `_timer`
+unconditionally, so the handle was replaced while the first timer went on running. **Neither
+ordering rescues it**: whichever call lands first, the second makes a second timer. That is why the
+guard is in `BotTickManager` rather than in the caller, and why the explicit call is kept — it still
+says what it meant about ordering, and it is now a no-op when it loses the race.
+
+Measured on the shipped build, the pass counter over a timed minute:
+
+| | passes in ~60 s | passes/s | `Custom.BotTickSeconds` |
+| --- | --- | --- | --- |
+| before | **60** | 1.00 | 2.0 |
+| after | **30** | 0.49 | 2.0 |
+
+Corroborated independently by a `[CoreSmoke` reading *"over 124 pass(es)"* about 126 seconds after
+boot, where 63 was expected.
+
+**What it cost was not CPU.** A pass is two hundredths of the budget either way. It is that every
+cadence this layer measures **in passes** was doubled:
+
+- `Custom.BotPlansPerTick` is a budget reset per pass, so the real planning rate was **twice** the
+  eight per tick it names.
+- Anything rolled per behaviour tick happened twice as often — including the idle beat
+  (`life.idle.beatChance`) and a gatherer's swings, which is why a failing work-probe run showed 63
+  swings where a passing one showed 16.
+- Any figure quoted "per pass" or "per tick" was against **half** the wall-clock interval it named.
+
+**Elapsed-time deadlines are unaffected** and did not need re-measuring: visit windows, phase clocks
+and sessions all compare `CustomTime` rather than counting passes.
+
+#### What the corrected cadence does to the numbers above
+
+A fresh 15-minute window at single cadence, 51 bots, `MeasurementProfile` off:
+
+| | window C, double cadence, ~61 bots | single cadence, 51 bots |
+| --- | --- | --- |
+| idle steps, whole window | 37 | **7** |
+| BankSitter, idle steps per bot-minute | 0.16 | **0.036** |
+| Crafter / Shopper / Traveler | 0.00 | **0.00** |
+| behaviour tick | 0.4 ms mean / 13 ms max of 2000 ms | **0.7 ms mean / 15 ms max of 2000 ms** |
+
+The idle residual was always the drift-back beat, rolled per pass — halve the passes and it falls,
+which is what happened. **The tick mean went up rather than down**, on a smaller population, and the
+likely reason is selection rather than cost: at double cadence roughly half the passes arrived with
+nothing accumulated since the pass a second earlier and were cheap, which dragged the mean down. The
+figure to carry forward is the one on the right, because it is the shipped configuration.
+
+**It was not the unexplained remainder in the haul defect above, and that needs no further
+experiment.** Every measurement in that section — the three failures in five *and* the six passes in
+six after the weight fix — ran at double cadence, because this guard was written after that fix was
+committed. A constant across both arms cannot be what distinguished them.
+Five more work-probe runs at the corrected cadence read **4 passed, 1 failed**, so the residual is
+real and is not timing either. The haul log names it, which is the whole reason it exists:
+
+```
+Morwen Highmoor is hauling to 'brit-forge-south-2', 257 tile(s) away: brit-bank w0.05,
+brit-forge-south w0.29 330t, *brit-forge-south-2 w0.30 317t, trinsic-bank w0.02, ...
+```
+
+**`brit-forge` is not in that list at all.** It scored zero and was dropped, by an exclusion or by
+`DistanceFactor`'s route check failing, which `Nav.TryRouteFrom` distinguishes and this line did not
+carry. The probe puts *two* smiths at that one forge, and `brit-forge` authors four arrivals of which
+two are exclusive, so "the staffed bench is temporarily unroutable because its own crafters are
+standing on it" is the obvious candidate and is **not yet established**. The filter now lists a
+delivery point whatever it weighs, with its no-route reason, so the next failure says which.
+
+**This is the next thing to chase, and it is a different defect from the weights.** A laden miner
+whose target bench drops out of the roll does not need better weights; it needs the bench not to drop
+out, or to wait rather than take its ore 257 tiles somewhere else.
+
+One `Timer` at `Custom.BotTickSeconds` (2s) - one, now, and see above for how long it was
+two - started from whichever of `BotSystem.Initialize` and `ScriptCompiler`'s reflection gets there
+first. It is the first caller `PlayerBotBehavior.Tick` has ever had.
 
 **It does not move anything.** `NavWalker` has driven movement on its own shared timer since step
 4a and still does. The tick makes decisions and watches for stranded walkers.
@@ -1992,10 +2073,10 @@ the lifecycle pass and the session pass, which together are the entire per-tick 
 layer — and `Bots.Recipe` and `Bots.Population` both report it beside the live count:
 
 ```
-tick 0.4 ms mean / 13 ms max of 2000 ms over 200 pass(es) at 60 bot(s)
+tick 0.7 ms mean / 15 ms max of 2000 ms over 495 pass(es) at 51 bot(s)
 ```
 
-Sixty bots cost two hundredths of one percent of the tick budget. **Raising the target is now an
+Sixty bots cost a few hundredths of one percent of the tick budget. **Raising the target is now an
 arithmetic question rather than a nerve one**, which is the whole reason the measurement exists.
 Upstream measures nothing and ships 1600 behind a comment reading *"with <500 bots this is
 trivially cheap"* — two numbers that cannot both be opinions about the same code.
@@ -2729,8 +2810,9 @@ simply does not model a bot whose job is to stay put.
 
   `bots.json` ships `target: 60` against a graph with 115 arrival points, chosen as *"a fraction of
   upstream's 1600, and measure"* — and the measurement was never taken. `BotTickManager` reports
-  **0.4 ms mean / 13 ms max against a 2000 ms budget at 60 bots**, two hundredths of one percent, so
-  the headroom is large and unquantified.
+  **0.7 ms mean / 15 ms max against a 2000 ms budget at 51 bots**, a few hundredths of one percent,
+  so the headroom is large and unquantified. (Re-measured at the corrected tick cadence; the earlier
+  0.4 / 13 was taken while the ticker ran two timers.)
 
   **`Custom.MeasurementProfile` stays OFF throughout.** It changes crowding, and crowding is part of
   what is being measured.
@@ -2761,7 +2843,7 @@ simply does not model a bot whose job is to stay put.
 
   | | |
   | --- | --- |
-  | behaviour tick | 0.4 ms mean / 13 ms max of 2000 ms |
+  | behaviour tick | 0.7 ms mean / 15 ms max of 2000 ms, at 51 bots and the corrected cadence |
   | world save | **0.26 s** |
   | memory | 385 MB managed, 529 MB working set |
   | cycles per second | 80.7 mean |
