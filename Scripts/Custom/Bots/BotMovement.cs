@@ -302,14 +302,21 @@ namespace Server.Custom
         /// only because the horse waits: with the old destructive dismount the same number was an
         /// attrition rate and converged the whole fleet onto its feet.
         ///
-        /// EXCEPT FOR A FIXTURE, WHICH GETS NO SUCH ROLL, and that is a correction rather than a
-        /// special case. `Remount` fires on departure, and a fixed-role bot never departs: it is
-        /// furniture, it holds one bench or one counter for the life of the shard. So for a fixture
-        /// the "small per-arrival chance" is not small and not per-arrival - it is a single coin
-        /// flip whose result is permanent, and measured over 351 bot-samples it had put all nine of
-        /// Britain's and Trinsic's staffed crafters on foot at once. The roll belongs to a VISIT,
-        /// and a fixture does not have visits; its disposition alone decides, which is the whole
+        /// EXCEPT FOR A FIXTURE, WHICH GETS NO SUCH ROLL. `Remount` fires on departure, and a
+        /// fixed-role bot never departs: it is furniture, it holds one bench or one counter for the
+        /// life of the shard. So for a fixture the "small per-arrival chance" is neither small nor
+        /// per-arrival - it is a single coin flip whose result is permanent, and the roll belongs to
+        /// a VISIT. A fixture has no visits, so its disposition alone decides, which is the whole
         /// point of the disposition being drawn at birth and persisted.
+        ///
+        /// IT IS NOT, HOWEVER, WHY THE STAFFED BENCHES READ 0% MOUNTED, which is what this guard was
+        /// written to explain and what measuring it then disproved. `[BotInfo` on all ten crafters
+        /// says eight rolled `Dismounts` outright and the one Expert that `rides` never owned a
+        /// horse - the 30% who do not - so nine of the ten were correctly on foot and the tenth had
+        /// its horse waiting beside it, which is this file working. The real cause is that the
+        /// staffed benches are a small population skewed to low tiers (four Novices of ten), and a
+        /// Novice rides 10% of the time by design. Kept anyway, because the reasoning above stands
+        /// on its own and a permanent coin flip is a bad shape whether or not it has bitten yet.
         /// </summary>
         private static bool ShouldDismountOnArrival(PlayerBot bot)
         {

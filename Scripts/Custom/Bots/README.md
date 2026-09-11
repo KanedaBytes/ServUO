@@ -304,14 +304,17 @@ Measured with `[BotSteps`, idle steps per bot-minute, two full 15-minute windows
 settings, `MeasurementProfile` off - and the "before" column is also the argument for the fix,
 because one phase already had it:
 
-| phase | before | after | |
-| --- | --- | --- | --- |
-| Crafter | **0.00** | **0.00** | already pinned with `RangeHome 0` - the shape the others now copy, and unchanged by any of this |
-| Shopper | 20.35 | **0.00** | no `Home` at all, so the untethered `WalkRandom` branch (`BaseAI.cs:2516, :2542`) |
-| BankSitter | 25.97 | **0.41** | `RangeHome 2`, which is a licence to wander inside 2, not a tolerance |
-| Traveler (lingering) | 24.16 | **0.00** | also untethered, and the worst of the three |
+| phase | A: before | B: idle fix | C: and mounts | |
+| --- | --- | --- | --- | --- |
+| Crafter | **0.00** | **0.00** | **0.00** | already pinned with `RangeHome 0` - the shape the others now copy, and unchanged by any of this |
+| Shopper | 20.35 | **0.00** | **0.00** | no `Home` at all, so the untethered `WalkRandom` branch (`BaseAI.cs:2516, :2542`) |
+| BankSitter | 25.97 | **0.41** | **0.16** | `RangeHome 2`, which is a licence to wander inside 2, not a tolerance |
+| Traveler (lingering) | 24.16 | **0.00** | **0.00** | also untethered, and the worst of the three |
 
-**11,925 idle steps become 108** - a 99.1% cut. Before: 101,546 steps total, of which 89,096 were a
+**11,925 idle steps become 108, and then 37** - and window C is the one to quote, because it is the
+shipped configuration. Mounts did not cost the idle fix anything, which was not a given: a mounted
+bot steps at 200ms rather than 400, so its AI thinks twice as often and every rate above would have
+doubled had the wander still been running. Before: 101,546 steps total, of which 89,096 were a
 Traveler walking a route and the rest were 3,167 BankSitter wander, 2,711 BankSitter drift-back,
 4,838 Shopper and 1,209 lingering Traveler. After: 62 and 46.
 
@@ -329,6 +332,22 @@ way:
 - **Walk failures fell and walks rose.** 1.11 per 100 walks over 452 walks became **0.18 over 562** -
   more walking done, less of it failing, with no change to the graph or the walker. A bot shuffling
   off its arrival tile is a bot standing where the next arrival is aiming.
+
+**And the cost of the same thing, which `[WalkAudit` found and the live numbers did not.** A bot that
+holds its ground also holds a tile a probe wants. The full sweep went from 2509 walks with zero
+failures to **2508 with two**, both `short-of-goal`, both Trinsic shop arrivals, and both because a
+**fixture was standing on the arrival tile**: `trinsic-shop-tailor-2` had its staffed Tailor within
+three tiles in **446 of 446 samples**, and `trinsic-shop-provisioner-6` a seeded Shopper. `[TileProbe`
+clears the tiles themselves - `CanFit True`, all eight neighbour steps ALLOWED, nothing on them - and
+the paths are `ratio 1.0`, so this is occupancy and nothing else. Before the fix those bots shuffled
+continuously and a probe eventually slipped in; the wander was accidentally clearing doorways.
+
+**This is the AUDIT failing, not the bots.** A live walker has two things the audit probe deliberately
+does not: `NavArrivals.TryPick` prefers a free arrival, and `NavWalker.TryShiftWithinArrival` shifts
+once to a free tile inside the arrival's own range. The live population in the same window took **one**
+terminal failure in 474 walks. Worth knowing before reading a sweep as a regression - and worth
+fixing at the arrival rather than by putting the fidget back, because two probe failures is a cheaper
+price than 11,925 idle steps.
 - **The bank crowds filled up.** `brit-bank` went from 0.91 bots standing to **1.94**, `brit-bank-east`
   from 0.45 to **1.63**, and the share of samples under the floor of 3 from 98% to 39%. Which means
   the standing-crowd shortfall was partly a SYMPTOM of the fidget rather than a weighting problem -
@@ -1009,6 +1028,29 @@ Selected upstream at `CustomBots/Behaviors/TravelerBehavior.cs:3228-3238`, and h
   mounted check anywhere in stock, so a forge full of bots on foot was ours and not theirs. The
   **Gatherer always dismounts**, and passes `mustDismount: true` to say so: `Mining.cs:500-502`
   refuses a mounted digger outright, which is not a matter of taste.
+
+  **Measured, window C, 15 minutes of 61 bots.** Share mounted *at arrival*, which is the number the
+  disposition is about:
+
+  | tier | mounted at arrival | | phase | mounted |
+  | --- | --- | --- | --- | --- |
+  | Novice | 0.0% | | Traveler (on the road) | **57.9%** |
+  | Apprentice | 0.0% | | BankSitter | **35.1%** |
+  | Journeyman | 11.1% | | Shopper | **32.3%** |
+  | Adept | 30.2% | | Crafter | 1.8% |
+  | Expert | 49.5% | | | |
+  | Master | **66.5%** | | **all arrived** | **24.8%** |
+  | Grandmaster | 0.0% | | *before all of this* | **0.0%** |
+
+  The curve is the design working: low tier walks, high tier rides. **Two zeros need reading rather
+  than believing.** Novice and Apprentice are 10% and 22.5% dispositions times 70% ownership, so 7%
+  and 16% expected over a handful of distinct bots - a plausible zero, not a broken one. Grandmaster
+  is **one bot** in the whole window (the tier bell curve makes it 2% of the population), and it
+  either did not own a horse or rolled the small chance; a single sample cannot say which. Crafter's
+  1.8% is the staffed benches, which are a small, static, low-tier-skewed population - four Novices
+  of ten - and a fixture's disposition is drawn once and never revisited. `57.9%` on the road against
+  a 70% ownership roll is the honest ceiling: the missing tenth is bots arrived and dismounted at the
+  moment of the sample.
 
   Two consequences worth knowing. A parked mount **reaches the save file**, where a deleted one never
   could, so `BotMovement.SweepStrayMounts` clears them at `Initialize` - by condition (a `BaseMount`
@@ -2509,6 +2551,57 @@ simply does not model a bot whose job is to stay put.
    skipped rather than translated.
 
 ### Later
+
+- **THE BANK FLOOR IS NOT SHORT; `BotCrowds` CANNOT SEE ITS OWN GARRISON. Measured, not suspected,
+  and PROPOSED RATHER THAN APPLIED** because the fix changes the destination roll facet-wide.
+
+  The Britain rebase grew the roamer pool 26-49% per class and the suspicion was that the crowd of 3
+  now ran one short. It does not. Every bank has **exactly three fixed-role sitters standing in it at
+  every one of 449 samples across a fifteen-minute window** - `MaxCount 3` and
+  `Role/Fixed/Seed/BankSitter` on a spawner per bank - and the total standing crowd is *above* the
+  floor:
+
+  | bank | fixed | visitors | total standing | min | what `BotCrowds` sees | under floor |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | `brit-bank` | 3.00 | 1.94 | **4.94** | 3 | 2.88 | 39% |
+  | `brit-bank-east` | 3.00 | 1.63 | **4.63** | 3 | 2.75 | 46% |
+  | `trinsic-bank` | 3.00 | 0.47 | **3.47** | 3 | 1.41 | **100%** |
+  | `trinsic-bank-2` | 3.00 | 1.12 | **4.12** | 3 | 2.38 | 59% |
+
+  **The cause is two lines, and neither is in `BotCrowds`.** `BotCrowds.CountFor` matches
+  `BankSitterBehavior.DestinationId`, and a seeded fixture never has one: `PlayerBot.ApplySeed`
+  forwards `_seedStation` to a `CrafterBehavior` and a `GathererBehavior` and **to nothing else**,
+  and `BotPopulation` does not put a `SeedStation` token on a bank spawner in the first place - the
+  `station` string reads `.../SeedStation/brit-forge/Seed/Crafter` while the bank string reads
+  `.../SeedHome/britain/Seed/BankSitter`. So twelve permanent sitters - four banks, three each -
+  count toward **no destination's floor at all**. Confirmed by id: the same twelve serials, three per
+  bank, 4 to 11 tiles from each bank's centre tile, for the whole window, every one of them with an
+  empty `dest` in the live snapshot.
+
+  **What it costs is not a thin bank.** The shortfall multiplies a destination's weight by up to
+  four (`BotCrowds.Shortfall`), so every bank on the facet has been pulling at up to 4x for ever,
+  against shops, taverns and inns that are not. That is a standing distortion of `BotDestinations`'
+  whole roll - and **raising `life.crowds.bank` would make it worse, not better**, which is exactly
+  the wrong conclusion the measurement was heading toward before the garrison was found.
+
+  **Proposed, both halves, not applied:**
+
+  1. `PlayerBot.ApplySeed` forwards `_seedStation` to a `BankSitterBehavior` as it already does for
+     the other two. Three lines.
+  2. `BotPopulation` emits `SeedStation/<destination id>` on a bank spawner. It already knows the id
+     - the spawner is *named* after it (`GG_BotPop_britain_bank_brit-bank`) - so this is the token,
+     not the lookup. Needs `[BotPopulationGen` and `[GG_Reimport` after, and it rewrites tracked
+     spawner XML, which is why it is a decision rather than a tidy-up.
+
+  Then the floor reads 4.94 against 3 at `brit-bank`, the 4x pull switches off, and bank traffic
+  falls back to its weighted share. **Expect the visitor counts above to drop when it does** - that
+  is the pull being removed, not a regression. `trinsic-bank` is the one to watch either way: 0.47
+  visitors against Britain's 1.94, because Trinsic still has no `plaza`, `wander` or `gate`
+  destination and no work sites, so its roamers fall back to the bank (see the note below).
+
+  A third option was considered and rejected: leaving the count alone and lowering
+  `life.crowds.bank` to compensate. It gets the same traffic by writing down a number that is not
+  the crowd anybody wants, and the next person to read `crowds` would be misled by it.
 
 - **The name census drifts DOWN under a real population, and the cause is not fully found.**
   With sixty bots and the logout/refill cycle running, `NamePool.InUseCount` falls behind the live

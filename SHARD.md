@@ -506,6 +506,10 @@ at once and the audit cannot see why - and a bot standing still can be failing a
   wall time, so two windows with different populations are comparable; `bot-steps clear` opens a
   fresh one. It exists because neither obvious source can answer the question: `botlog.json` has no
   step event at all, and `entities.json` is a 2-second snapshot against a 400ms step.
+
+  **A short window over-reports the BankSitter.** Its only residual is the once-per-visit walk to the
+  scattered spot `PickScatteredHome` chose, so a two-minute window - in which every bot has just
+  arrived - read 2.97 where the full fifteen read 0.41. Give it the whole window.
 - **`Custom.MeasurementProfile=True`** buys walks instead of wall time: population target doubled
   (clamped back to x1 while a tick pass costs more than half its budget), visit windows divided by
   3, session curve flattened. A loud yellow banner prints once a minute and `[CoreSmoke` reports it
