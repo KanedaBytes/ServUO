@@ -647,11 +647,20 @@ namespace Server.Custom
                 return;
             }
 
-            // Only ask for a step when the creature is due one. MoveTo runs a MovementPath, which
-            // is the expensive half of this tick, and driving at 100ms rather than 250ms would
-            // otherwise run it two and a half times as often for every walker on the shard. The
-            // creature's own NextMove is exactly the right clock: it is what DoMoveImpl would
-            // check anyway, one subtraction earlier.
+            // Only ask for a step when the creature is due one. The creature's own NextMove is
+            // exactly the right clock: it is what DoMoveImpl would check anyway, one subtraction
+            // earlier, so driving at 100ms rather than 250ms would run everything below two and a
+            // half times as often for every walker on the shard and get no extra steps for it.
+            //
+            // What that saves is NOT simply a MovementPath per call, which is what this comment
+            // used to claim (REVIEW.md section 11). BaseAI.MoveTo tries a DIRECT STEP first -
+            // DoMove(GetDirectionTo(p)) at BaseAI.cs:2651 - and only builds a PathFollower when
+            // that step is refused; a call whose goal matches the cached one re-follows the
+            // existing path without searching either. On open road the common case is therefore one
+            // DoMove and no search at all, and the expensive case is the one that matters here: a
+            // step into something, which is exactly when a jammed walker would otherwise retry the
+            // search at every gated tick. Gate it on NextMove and a blocked walker pays for the
+            // search at its own pace rather than at ours.
             //
             // Wraparound-safe: compare by subtraction, never a < b.
             if (Core.TickCount - ai.NextMove < 0)
