@@ -586,6 +586,23 @@ namespace Server.Custom
             return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
         }
 
+        /// <summary>
+        /// Every tile this bot moves, whatever moved it - the step census's only caller.
+        ///
+        /// DOWNSTREAM OF EVERYTHING. Four different things move a bot (the walker's MoveTo, the
+        /// ladder's NudgeAway and its rescue teleport, a gatherer's own bot.Move, and
+        /// BaseAI.DoMoveImpl's wander) and this is the one place all four pass through, so the
+        /// census needs no hook in NavWalker - which is Core and is not allowed to know that bots
+        /// exist. The cause is read off Commuting and Home rather than passed in; see
+        /// BotStepCensus for how each of the four buckets is decided.
+        /// </summary>
+        protected override void OnLocationChange(Point3D oldLocation)
+        {
+            base.OnLocationChange(oldLocation);
+
+            BotStepCensus.Note(this, oldLocation);
+        }
+
         /// <summary>The paperdoll title is the class and tier; a click-title would double it up.</summary>
         public override bool ClickTitle
         {

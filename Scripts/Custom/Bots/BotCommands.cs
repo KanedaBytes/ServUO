@@ -22,6 +22,38 @@ namespace Server.Custom
             CommandSystem.Register("BotSmoke", AccessLevel.Administrator, BotSmoke_OnCommand);
             CommandSystem.Register("BotTrace", AccessLevel.GameMaster, BotTrace_OnCommand);
             CommandSystem.Register("BotPace", AccessLevel.GameMaster, BotPace_OnCommand);
+            CommandSystem.Register("BotSteps", AccessLevel.GameMaster, BotSteps_OnCommand);
+        }
+
+        /// <summary>
+        /// What bots did with their feet, per phase, with the denominator.
+        ///
+        /// [BotPace answers "how fast is that bot stepping" and REFUSES a bot that is not walking,
+        /// which is every idle bot. This is the other half: how OFTEN a bot that has arrived takes
+        /// a step at all, and what moved it. See BotStepCensus for the four causes.
+        /// </summary>
+        [Usage("BotSteps [clear]")]
+        [Description("Steps per bot-minute in each phase and what moved them. `clear` opens a fresh window.")]
+        private static void BotSteps_OnCommand(CommandEventArgs e)
+        {
+            Mobile from = e.Mobile;
+
+            if (e.Length > 0 && Insensitive.Equals(e.GetString(0), "clear"))
+            {
+                BotStepCensus.Clear();
+                from.SendMessage(0x35, "Step census cleared; a fresh window is open.");
+                return;
+            }
+
+            string message;
+
+            if (!BotStepCensus.TryWrite(out message))
+            {
+                from.SendMessage(0x22, "Could not write bot-steps.json: " + message);
+                return;
+            }
+
+            CommandReport.Send(from, "[BotSteps", BotStepCensus.Describe());
         }
 
         [Usage("BotPace [seconds]")]

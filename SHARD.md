@@ -251,6 +251,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotLifecycle [on\|off]` | GameMaster | Report the phase roller, or pause it for testing |
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given |
+| `[BotSteps [clear]` | GameMaster | Steps per bot-minute in each phase and what moved them - wander, drift-back, walk, teleport. `clear` opens a fresh window (token: `bot-steps`) |
 | `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
 | `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
@@ -487,8 +488,8 @@ See `Scripts/Custom/DailyLife/README.md`.
 
 ## Measuring the walker
 
-Two instruments and a switch, because a clean `[NavAudit` and bots that fail walks are both true at
-once and the audit cannot see why.
+Three instruments and a switch, because a clean `[NavAudit` and bots that fail walks are both true
+at once and the audit cannot see why - and a bot standing still can be failing at that too.
 
 - **`[WalkAudit`** walks the whole graph with real probe walkers - every edge both ways, every
   arrival from each approach - in about three minutes, and reports the engine's route length
@@ -498,6 +499,13 @@ once and the audit cannot see why.
   rate no longer depends on how long the window was. Both numbers are on `Bots.Population` and in
   `Data/Live/walk-failures.json`; the `walk-failures` token with body `clear` opens a fresh window
   without a restart.
+- **Steps per bot-minute, by cause.** `[BotSteps` counts every tile a bot moves at
+  `PlayerBot.OnLocationChange` - which is downstream of the walker, the recovery ladder, a
+  gatherer's own `Move` and `BaseAI`'s wander alike - and attributes each to one of four causes
+  from the state at the moment of the step. The denominator is **bot-seconds in that phase**, not
+  wall time, so two windows with different populations are comparable; `bot-steps clear` opens a
+  fresh one. It exists because neither obvious source can answer the question: `botlog.json` has no
+  step event at all, and `entities.json` is a 2-second snapshot against a 400ms step.
 - **`Custom.MeasurementProfile=True`** buys walks instead of wall time: population target doubled
   (clamped back to x1 while a tick pass costs more than half its budget), visit windows divided by
   3, session curve flattened. A loud yellow banner prints once a minute and `[CoreSmoke` reports it

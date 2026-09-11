@@ -144,6 +144,20 @@ namespace Server.Custom
 
             int live = _scratch.Count;
 
+            // The step census's denominator, taken BEFORE the brains run: the seconds just elapsed
+            // belong to the phase each bot was holding during them, and a behaviour swapped by the
+            // loop below would otherwise be credited with the interval it did not live through.
+            // Rides this pass for BotLifecycle's reason - one scan of a registry that also holds
+            // every daily-life actor, at another cadence.
+            try
+            {
+                BotStepCensus.Observe(_scratch);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "The step census pass faulted.");
+            }
+
             for (int i = 0; i < _scratch.Count; i++)
             {
                 PlayerBot bot = _scratch[i];

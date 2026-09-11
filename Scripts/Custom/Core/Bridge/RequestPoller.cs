@@ -293,6 +293,29 @@ namespace Server.Custom
                 // Walks that climbed the whole ladder and were teleported, with the goal tile and
                 // who was standing near it. Body "clear" starts the ledger again, which is how a
                 // measurement run gets a clean window without a restart.
+                // How much bots move while idle, and what moved them. `clear` opens a window.
+                //
+                // Its own token rather than a field on `health`, for walk-failures' reason: the
+                // value is in the LINES, and a rate reported as a count is no answer.
+                case "bot-steps":
+                {
+                    if (Insensitive.Equals(FirstWord(body), "clear"))
+                    {
+                        BotStepCensus.Clear();
+                        message = "step census cleared";
+                        return true;
+                    }
+
+                    if (!BotStepCensus.TryWrite(out message))
+                    {
+                        return false;
+                    }
+
+                    warnings = BotStepCensus.Describe();
+
+                    return true;
+                }
+
                 case "walk-failures":
                 {
                     if (Insensitive.Equals(FirstWord(body), "clear"))
