@@ -38,6 +38,7 @@ namespace Server.Custom
             HealthCheck.Register("Bots.Speech", BotChatProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Shift", BotWorkProbe.BuildHealthResult);
             HealthCheck.Register("Bots.Shove", BotShoveProbe.BuildHealthResult);
+            HealthCheck.Register("Bots.Death", BotDeathProbe.BuildHealthResult);
         }
 
         public static HealthResult BuildPartyHealthResult()
@@ -413,6 +414,11 @@ namespace Server.Custom
             // Synchronous, and run before the chain rather than in it: it spawns five mobiles,
             // asks them about each other and deletes them, all inside one call. Nothing waits.
             BotShoveProbe.Run(map, location);
+
+            // Also synchronous, and it is a REPRODUCTION rather than an assertion: a reportable
+            // bot death still throws inside the murder report, and the expected outcome reports
+            // Ok so the chain stays green while the defect stays on the record. See the file.
+            BotDeathProbe.Run(map, location);
 
             // Asynchronous by nature - a bot answers an invitation on a delay, on purpose - so it
             // reports separately through Bots.Party rather than holding this result open.
