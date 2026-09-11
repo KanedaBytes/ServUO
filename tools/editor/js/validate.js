@@ -33,6 +33,37 @@
 /** Must match Custom.NavHopMaxTiles. coverage.test.js asserts it against Config/Custom.cfg. */
 export const HOP_CAP = 12;
 
+/**
+ * Which of a record's CURRENTLY listed waypoints are too far to be its last hop.
+ *
+ * Lives here rather than in `repoint.js` so the dependency runs one way - `repoint.js` imports
+ * `HOP_CAP` from this file, and a cycle would leave one of the two half-initialised in the
+ * browser. It is exported because the drag handler needs the same answer without running a whole
+ * validation pass.
+ *
+ * A waypoint naming nothing, or naming another facet, is skipped: both are already their own
+ * findings above, and reporting them twice under two names is what the Problems panel dedupes for.
+ */
+export function farListed(record, map, byId, cap = HOP_CAP) {
+    const far = [];
+
+    for (const id of String(record.waypoints || '').split(/\s+/).filter(Boolean)) {
+        const waypoint = byId.get(id);
+
+        if (!waypoint || waypoint.map !== map) {
+            continue;
+        }
+
+        const distance = chebyshev(waypoint, record);
+
+        if (distance > cap) {
+            far.push({ id, tiles: distance });
+        }
+    }
+
+    return far;
+}
+
 export const SCHEMA_VERSION = 1;
 
 export const FACETS = ['Felucca', 'Trammel', 'Ilshenar', 'Malas', 'Tokuno', 'TerMur'];
@@ -475,6 +506,41 @@ export function validateNavigation(nav, options, report) {
             out.warn(
                 `destination '${dest.id}' has ${exclusive} exclusive arrival point(s) but only `
                 + `${shared} shared one(s)`, `dest:${dest.id}`);
+        }
+
+        // THE WAYPOINTS THE RECORD ITSELF NAMES, WHICH NOTHING USED TO ASK ABOUT.
+        //
+        // The check below asks whether SOME waypoint on the facet is within the cap. That is the
+        // stranding question, and it is the one the shard's Nav.Data asks too - so when
+        // brit-home-jeweler was dragged across town and its destination and both arrivals went on
+        // naming uo-britain-bank 223 to 236 tiles back, uo-rec-7-1-s2 sat nine tiles from the new
+        // position, satisfied it, and the shard booted with zero nav warnings over a house no bot
+        // could reach (commit 83107aa0). It matters because `Nav.TryResolve` takes the FIRST listed
+        // waypoint that exists, with no distance test at all, and falls back to the nearest only
+        // when the list names nothing real (`Nav.cs:262`) - so the listed ones decide the last hop.
+        //
+        // A NOTE RATHER THAN A WARNING, AND THAT IS A MEASUREMENT RATHER THAN A PREFERENCE. On its
+        // first run this found 23 shipped records in Trinsic naming an approach 13 to 23 tiles off,
+        // trinsic-forge's arrivals among them at 20 to 22. Every one of them was probed with the
+        // `nav-hop` token, before and after the repoint this rule implies: the engine walks 21 of
+        // the 23 as they stand, and NOT ONE of the proposed replacements is an improvement. The cap
+        // is calibrated conservatively against `FastAStarAlgorithm`'s 38x38 box, so an over-cap
+        // approach is a real risk and not a real failure - and a warning that fires 23 times on
+        // data that measures clean is exactly how a panel teaches people to skim.
+        //
+        // So this is listed and counted, not shouted. What it is genuinely for is the record that
+        // has just MOVED, where `app.js` acts on it directly at the drag rather than waiting for
+        // somebody to read a list.
+        for (const record of [dest, ...arrivals]) {
+            const isDest = record === dest;
+            const at = isDest ? `destination '${dest.id}'` : `arrival '${dest.id}' ${record.x},${record.y}`;
+
+            for (const far of farListed(record, dest.map, byId, cap)) {
+                out.note(
+                    `${at} names waypoint '${far.id}' ${far.tiles} tiles away, past the `
+                    + `${cap}-tile hop cap - it decides the last hop`,
+                    `dest:${dest.id}`);
+            }
         }
 
         const reachable = arrivals.some((arrival) =>

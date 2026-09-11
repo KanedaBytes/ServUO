@@ -396,6 +396,11 @@ an `exclusive`/`exact`/`range` flag. Reachability is flooded from the home waypo
 assumed: a nearer waypoint on an island trades a long last hop for no route at all. `--tag` scopes it
 to a town, because a town is the unit somebody re-bases.
 
+**The rule lives in `js/repoint.js` and the editor calls it too** — see *Dragging a destination or
+an arrival* below. The script is the CLI around it: the flags, the scoping and the save. It used to
+be the whole thing, which is why the editor never ran it, and why `HOP_CAP` sat here as a third
+independent copy of the number with nothing pinning it to `Config/Custom.cfg`.
+
 **Then check what a sweep cannot see.** `[WalkAudit` starts every walk at a waypoint, so it never
 asks whether a bot standing at a *place* can route away from it. Flood the graph from the home
 waypoint and cap-test every destination and arrival — that is the check that caught
@@ -417,6 +422,63 @@ To send a bot along a newly adopted road and watch it arrive:
 ```
 
 The editor's **Bots** panel shows the same thing live, with a per-bot event log.
+
+### Dragging a destination or an arrival re-points it
+
+**Dragging a waypoint re-verified its hops; dragging a destination did nothing at all.** The drag
+handler's commit branch was `if (shape.layer === 'nav')` — a waypoint — and everything else fell
+past it, so a destination or an arrival moved across town kept naming whatever it named before.
+
+`brit-home-jeweler` is what that cost. It was relocated to the east-side residential block and its
+destination and **both** arrivals went on naming `uo-britain-bank`, **223 to 236 tiles back**, and
+nothing said so: `Nav.Data` and `validate.js` both only ask whether *some* waypoint is within the
+cap, and `uo-rec-7-1-s2` sat nine tiles from the new position and satisfied both. The shard booted
+with zero nav warnings over a house no bot could reach. It matters because `Nav.TryResolve`
+(`Nav.cs:262`) takes the **first listed waypoint that exists, with no distance test at all**, and
+falls back to the nearest only when the list names nothing real.
+
+So a dragged destination or arrival now re-points itself on drop, by `repoint-arrivals.js`'s own
+rule in `js/repoint.js`: nearest reachable first, then every listed one still inside the cap. The
+rewrite and the move go into **one** undo entry, so a single Ctrl-Z puts both back. Then it asks the
+shard, with the `nav-hop` token the waypoint branch already uses, whether the engine will walk each
+approach — which is the check that actually caught the jeweler, when both of its listed hops answered
+`ok:false` and nothing else disagreed.
+
+Two answers that are not a re-point, and both say so rather than guessing:
+
+- **Stranded** — nothing reachable within the cap. The field is left **exactly** as it was, because
+  a re-point onto something unreachable trades a long last hop for no route at all. This is a road
+  somebody has to author.
+- **The flood origin is missing** — `uo-britain-bank` is not in the graph. Every record on the facet
+  would otherwise answer "nothing reachable", which is a sentence about the flood dressed up as a
+  sentence about the data.
+
+#### What the validator says about it, and why it is a note
+
+`validate.js` gained the invariant that was actually missing: **every waypoint a record names must
+be within the cap of it**, as opposed to the old question of whether any waypoint anywhere is. It
+runs in `validatePreview()`, which fires on *every* edit, so it catches a properties-panel edit and
+a paste as well as a drag.
+
+It is a **note**, not a warning, and that is a measurement rather than a preference. On its first run
+it found **23 shipped records in Trinsic** naming an approach 13 to 23 tiles off — `trinsic-forge`'s
+arrivals among them at 20, 21 and 22. Every one was probed with `nav-hop`, before and after the
+re-point the rule implies:
+
+> **The engine walks 21 of the 23 as they stand, and not one of the proposed replacements is an
+> improvement.** (The two that read worse are the adjacency artefact — `MovementPath` returns no
+> path to a goal one tile away.)
+
+The cap is calibrated conservatively against `FastAStarAlgorithm`'s 38×38 box, so an over-cap
+approach is a real *risk* and not a real failure. A warning that fires 23 times on data that measures
+clean is exactly how a panel teaches people to skim — which is the reason the third tier exists.
+**Trinsic was deliberately not rewritten**: a whole-town `--tag trinsic` pass proposes 32 changes,
+twenty of them to records already inside the cap, and commit `118be12f` records that nearest-first
+can make the walked route worse (`brit-shop-tanner` went from 1 walked tile to 20 that way, with no
+instrument reading wrong).
+
+`trinsic-shop-tailor-2`'s destination is the one genuinely stranded record: nearest reachable is
+`uo-wp-173` at 14 tiles, so no re-point can help it and it is left listed.
 
 ### Editing a proposal
 

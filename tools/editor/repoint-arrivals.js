@@ -55,48 +55,21 @@ const http = require('http');
 
 const { REPO_ROOT, FILES } = require('./whitelist.js');
 
-const HOP_CAP = 12;
+// THE RULE MOVED TO js/repoint.js AND THIS CALLS IT. It used to live here, which meant the editor
+// could not run it - a record dragged in the browser kept naming whatever it named before, and
+// brit-home-jeweler is what that cost. The flood, the nearest-first rebuild and the hop cap are all
+// that module's now; this file keeps the CLI, the scoping flags and the save.
+//
+// `HOP_CAP` in particular used to be a third independent copy of the number, untested: the
+// validate.js one is pinned to Config/Custom.cfg by coverage.test.js and this one was not.
+//
+// Imported dynamically because js/repoint.js is an ES module the browser loads and this file is
+// CommonJS. `main()` is already async, so there is nothing to restructure.
+let repoint;
 
 function fail(message) {
     console.error(`repoint-arrivals: ${message}`);
     process.exit(1);
-}
-
-/** Tile distance, which is what the hop cap is measured in. */
-function tiles(a, b) {
-    return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-}
-
-/**
- * Every waypoint the home waypoint can reach along walk edges.
- *
- * FLOODED, NOT ASSUMED. A nearer waypoint on a component nothing reaches is worse than the far one
- * an arrival already names: the last hop gets shorter and the route stops existing.
- */
-function reachable(nav, home) {
-    const links = new Map();
-
-    for (const edge of nav.edges) {
-        if (!links.has(edge.from)) links.set(edge.from, []);
-        if (!links.has(edge.to)) links.set(edge.to, []);
-
-        links.get(edge.from).push(edge.to);
-        links.get(edge.to).push(edge.from);
-    }
-
-    const seen = new Set([home]);
-    const queue = [home];
-
-    while (queue.length > 0) {
-        for (const next of links.get(queue.pop()) || []) {
-            if (!seen.has(next)) {
-                seen.add(next);
-                queue.push(next);
-            }
-        }
-    }
-
-    return seen;
 }
 
 function request(options, body) {
@@ -121,6 +94,9 @@ function request(options, body) {
 }
 
 async function main() {
+    repoint = await import('./js/repoint.js');
+
+    const { HOP_CAP, reachableFrom, repointFor } = repoint;
     const args = process.argv.slice(2);
     const write = args.includes('--write');
     const tagAt = args.indexOf('--tag');
@@ -140,7 +116,7 @@ async function main() {
         fail(`the home waypoint '${home}' is not in navigation.json - pass --home.`);
     }
 
-    const canReach = reachable(nav, home);
+    const canReach = reachableFrom(nav, home);
 
     console.log(`repoint-arrivals: ${nav.waypoints.length} waypoint(s),`
         + ` ${canReach.size} reachable from ${home}.`);
@@ -150,27 +126,7 @@ async function main() {
     const index = new Map();
     const updates = [];
     const stranded = [];
-
-    /** The nearest reachable waypoint to a record, and how far. */
-    function closest(record, map) {
-        let nearest = null;
-        let best = Infinity;
-
-        for (const waypoint of nav.waypoints) {
-            if (!canReach.has(waypoint.id) || waypoint.map !== map) {
-                continue;
-            }
-
-            const distance = tiles(waypoint, record);
-
-            if (distance < best) {
-                best = distance;
-                nearest = waypoint.id;
-            }
-        }
-
-        return { nearest, best };
-    }
+    const options = { canReach, byId, cap: HOP_CAP };
 
     // A DESTINATION HAS THE SAME FIELD AND THE SAME FAULT. A route ends at the first of its
     // `waypoints` that exists and then appends the arrival, so a destination naming a far waypoint
@@ -187,30 +143,22 @@ async function main() {
             continue;
         }
 
-        const listed = (destination.waypoints || '').split(/\s+/).filter(Boolean);
-        const { nearest, best } = closest(destination, destination.map);
+        const result = repointFor(nav, destination, { ...options, map: destination.map });
 
-        if (nearest === null || best > HOP_CAP) {
+        if (result.stranded) {
             stranded.push(`${destination.id} (destination, ${destination.x},${destination.y})`
-                + ` - nearest reachable is ${nearest || 'nothing'} at ${best === Infinity ? '-' : best} tiles`);
+                + ` - nearest reachable is ${result.nearest || 'nothing'} at `
+                + `${result.tiles === Infinity ? '-' : result.tiles} tiles`);
             continue;
         }
 
-        const kept = listed.filter((id) => {
-            const waypoint = byId.get(id);
-
-            return id !== nearest && waypoint && canReach.has(id) && tiles(waypoint, destination) <= HOP_CAP;
-        });
-
-        const next = [nearest, ...kept].join(' ');
-
-        if (next !== destination.waypoints) {
+        if (result.changed) {
             updates.push({
                 id: `dest:${destination.id}`,
-                props: { waypoints: next },
+                props: { waypoints: result.waypoints },
                 was: destination.waypoints,
-                now: next,
-                tiles: best
+                now: result.waypoints,
+                tiles: result.tiles
             });
         }
     }
@@ -233,37 +181,28 @@ async function main() {
             continue;
         }
 
-        const listed = (arrival.waypoints || '').split(/\s+/).filter(Boolean);
-        const { nearest, best } = closest(arrival, destination.map);
+        // An arrival carries no facet of its own; its destination's is the one that counts.
+        const result = repointFor(nav, arrival, { ...options, map: destination.map });
 
-        if (nearest === null || best > HOP_CAP) {
+        if (result.stranded) {
             // Nothing reachable is close enough. Left exactly as it is and reported: this is a
             // road that has to be authored, not a field that can be corrected.
             stranded.push(`${arrival.destination} (${arrival.x},${arrival.y}) - nearest reachable`
-                + ` is ${nearest || 'nothing'} at ${best === Infinity ? '-' : best} tiles`);
+                + ` is ${result.nearest || 'nothing'} at `
+                + `${result.tiles === Infinity ? '-' : result.tiles} tiles`);
             continue;
         }
 
-        // The nearest first, then every listed one that is still inside the cap. A shop fronting
-        // two streets keeps both approaches; one whose waypoint has moved away loses only that.
-        const kept = listed.filter((id) => {
-            const waypoint = byId.get(id);
-
-            return id !== nearest && waypoint && canReach.has(id) && tiles(waypoint, arrival) <= HOP_CAP;
-        });
-
-        const next = [nearest, ...kept].join(' ');
-
-        if (next === arrival.waypoints) {
+        if (!result.changed) {
             continue;
         }
 
         updates.push({
             id: `arr:${arrival.destination}#${at}`,
-            props: { waypoints: next },
+            props: { waypoints: result.waypoints },
             was: arrival.waypoints,
-            now: next,
-            tiles: best
+            now: result.waypoints,
+            tiles: result.tiles
         });
     }
 

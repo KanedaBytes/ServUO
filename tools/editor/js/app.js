@@ -34,7 +34,8 @@ import * as coverage from './coverage.js';
 import * as worksites from './worksites.js';
 import { auditLine, hasBlocked } from './audit.js';
 import { problemRows, problemSummary, walkAuditSummary, walkAuditFor } from './problems.js';
-import { HOP_CAP, validate, plainFromShapes } from './validate.js';
+import { HOP_CAP, validate, plainFromShapes, farListed } from './validate.js';
+import { repointFor, reachableFrom } from './repoint.js';
 import { TOOLS, initTools, askFor, fillLists } from './tools.js';
 import { nextId, insertedId, insertedName } from './ids.js';
 import { buildShape } from './build.js';
@@ -1673,6 +1674,144 @@ function insertOnHop(edge, worldX, worldY) {
  * probe drives the same real BaseCreature the proposal was built with, so a hop that passes here
  * passes for the same reason the original ones did.
  */
+/**
+ * A destination or an arrival that has just been dragged re-points its approach list.
+ *
+ * WHY THIS IS ON THE DRAG AND NOT ONLY IN THE VALIDATOR. A record's `waypoints` field decides its
+ * LAST HOP, and nothing kept it honest when the record moved: `brit-home-jeweler` was dragged
+ * across town and its destination and both arrivals went on naming `uo-britain-bank` 223 to 236
+ * tiles back, with every instrument reading clean, because `Nav.Data` and `validate.js` both only
+ * ask whether SOME waypoint is near - and one was, nine tiles away, doing nothing for the record
+ * that named a different one (commit 83107aa0).
+ *
+ * The waypoint half of this drag already re-verifies its hops, and this is the other half. The
+ * rule is `repoint.js`'s, which is `repoint-arrivals.js`'s rule: nearest reachable first, then
+ * every listed one still inside the cap, so a shop fronting two streets keeps both approaches.
+ *
+ * STRANDED IS LEFT ALONE, LOUDLY. When nothing reachable is within the cap the field keeps saying
+ * what it said: a repoint onto something unreachable trades a long last hop for no route at all,
+ * and this is a road somebody has to author. The banner says so and `validate.js`'s own check
+ * lists it, so it cannot pass quietly.
+ */
+function repointDragged(shape) {
+    const nav = plainFromShapes('navigation', state.shapes);
+    const record = navRecordFor(nav, shape.id);
+
+    if (!record) {
+        return;
+    }
+
+    const map = record.map || destinationOf(nav, record).map;
+    const before = { ...shape.props };
+    const result = repointFor(nav, record, { map });
+
+    if (result.homeMissing) {
+        // Not a fact about this record. Saying "nothing reachable" here would blame the drag for
+        // a graph that has lost its flood origin, and every drag after it would say the same.
+        setStatus(
+            `Cannot re-point: '${result.homeMissing}' is not in the graph, so nothing floods from`
+            + ` it. The approach list was left alone.`, 'error');
+        return;
+    }
+
+    if (result.stranded) {
+        setStatus(
+            `Nothing reachable within ${HOP_CAP} tiles of there - ${shape.props.id || shape.label}`
+            + ` still names ${shape.props.waypoints || 'nothing'}. A road has to be authored.`,
+            'warn');
+        validatePreview();
+        return;
+    }
+
+    if (result.changed) {
+        shape.props.waypoints = result.waypoints;
+        pushOp({ op: 'props', shapeId: shape.id, before, after: { ...shape.props } });
+        markDirty(shape);
+        setStatus(
+            `Re-pointed to ${result.nearest} (${result.tiles} tiles): ${result.waypoints}`, 'ok');
+        showProperties(shape);
+    }
+
+    // The engine's opinion of the last hop, which is the one that caught the jeweler: both of its
+    // listed hops answered ok:false while nothing else disagreed. Asked after the rewrite, about
+    // the list the record now carries, and never blocking - the shard may be down.
+    verifyLastHops(record, result.waypoints, nav);
+    validatePreview();
+}
+
+/** The plain nav record a shape id addresses, or null. Arrivals are the nth of their destination. */
+function navRecordFor(nav, shapeId) {
+    if (shapeId.startsWith('dest:')) {
+        return (nav.destinations || []).find((d) => d.id === shapeId.slice(5)) || null;
+    }
+
+    if (shapeId.startsWith('arr:')) {
+        const hash = shapeId.lastIndexOf('#');
+
+        if (hash < 0) {
+            return null;
+        }
+
+        const destination = shapeId.slice(4, hash);
+        const wanted = Number(shapeId.slice(hash + 1));
+        let at = 0;
+
+        for (const arrival of nav.arrivals || []) {
+            if (arrival.destination !== destination) {
+                continue;
+            }
+
+            if (at === wanted) {
+                return arrival;
+            }
+
+            at++;
+        }
+    }
+
+    return null;
+}
+
+/** An arrival carries no facet of its own; its destination's is the one that counts. */
+function destinationOf(nav, record) {
+    return (nav.destinations || []).find((d) => d.id === record.destination) || {};
+}
+
+/** Ask the shard whether each listed waypoint can actually reach the record's tile. */
+async function verifyLastHops(record, waypoints, nav) {
+    const byId = new Map((nav.waypoints || []).map((w) => [w.id, w]));
+    const pairs = [];
+
+    for (const id of String(waypoints || '').split(/\s+/).filter(Boolean)) {
+        const waypoint = byId.get(id);
+
+        if (waypoint) {
+            pairs.push(`${waypoint.x},${waypoint.y},${waypoint.z}`);
+            pairs.push(`${record.x},${record.y},${record.z}`);
+        }
+    }
+
+    if (pairs.length === 0) {
+        return;
+    }
+
+    try {
+        const dropped = await api.request('nav-hop', `verify ${pairs.join(' ')}`);
+
+        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+
+        const answer = await api.hops();
+        const bad = (answer.hops || []).filter((hop) => !hop.ok).length;
+
+        if (bad > 0) {
+            setStatus(
+                `${bad} of ${pairs.length / 2} approach hop(s) the engine will not walk.`, 'error');
+        }
+    } catch (error) {
+        setStatus(`Could not verify the approach: ${error.message}`, 'warn');
+    }
+}
+
 async function verifyHops(edges) {
     const pairs = [];
 
@@ -3682,6 +3821,9 @@ function wireInput() {
             snapToRoad(drag.shape);
         } else if (drag.shape.layer === 'nav') {
             verifyHops(hopsTouching(drag.shape.props.id));
+        } else if (drag.shape.layer === 'nav-destinations' || drag.shape.layer === 'nav-arrivals') {
+            // A moved record's approach list is stale the instant it lands. See repointDragged.
+            repointDragged(drag.shape);
         }
 
         // Moving a waypoint changes the coverage field and every edge length that touches it.
