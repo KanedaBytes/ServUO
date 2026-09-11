@@ -155,9 +155,13 @@ Where a fresh session should start, in order:
    any design question is uo-offline's answer first, deviate only at a named seam.
 3. **`docs-src/uo-offline-port-survey.md`** for what has been ported and what the September 2026
    upstream release changed under files not yet reached.
-4. **Run `[BotSmoke`** and read `[CoreSmoke`. The chain is walk → life → chat → work; each probe's
-   result line says what it measured and, for the life probe, the window it derived and the route
-   that set it.
+4. **Run `[BotSmoke`** and read `[CoreSmoke`. Two synchronous probes run first - `Bots.Shove`,
+   which asserts the collision diagnostic against the engine's own `OnMoveOver` for every ordered
+   pair of actors, and `Bots.Death`, which REPRODUCES the murder-report cast failure on purpose and
+   reports Ok saying so (REVIEW.md F2; it is expected until the class decision) - and then the chain
+   is walk → life → chat → work. Each probe's result line says what it measured and, for the life
+   probe, the window it derived and the route that set it. `Bots.Cadence` on `[CoreSmoke` is the
+   guard on the behaviour ticker: one timer, at the rate `Custom.BotTickSeconds` names.
 
 What a bot is, in one paragraph: a `BaseCreature` flagged `Player`, with a class, tier, personality
 and a **home town** rolled at creation. It picks destinations from `navigation.json` weighted by
