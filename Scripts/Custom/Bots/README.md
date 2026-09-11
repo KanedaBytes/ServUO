@@ -285,6 +285,14 @@ Consequence still worth knowing: the *pull* is a tendency, not a guarantee - `Bo
 reports `banks below floor` rather than asserting it. The *garrison* is a guarantee, and is the half
 that actually keeps a bank looking busy.
 
+**`BotCrowds.CountFor` now has a `Shopper` branch too**, which changes nothing measurable today
+because `bots.json`'s `life.crowds` holds only `bank: 3`, so `FloorFor("shop")` is 0 and no shop
+has a floor to be below. It is there because without it the count goes wrong *at the moment a bot
+arrives*: the `Traveler` branch counts a bot routing to a shop and stops counting it the instant
+the visit behaviour takes over, so a shop with a floor would have read "nobody there" about a bot
+standing in its doorway. That is the same shape as the bank defect, and finding it the same way
+would have cost another window.
+
 ### The Shopper walks
 
 Upstream's is rotation-only, by explicit design - *"No movement = no wall-grinding"* - because it
@@ -296,6 +304,36 @@ Ours walks between the shop's arrival points, because the hops are two or three 
 through `NavWalker` like every other walk here, and a shopper wedged behind a counter gets the
 recovery ladder for free. What made movement dangerous for them is what steps 4a and 7b already
 solved here.
+
+**Except that for a long time it did not, for all 27 seeded ones — the other half of the
+`SeedStation` defect.** `PlayerBot.ApplySeed` forwarded `_seedStation` to a `Crafter`, a `Gatherer`
+and (since `701e7332`) a `BankSitter` and to nothing else, and `BotPopulation.cs:389` passed `null`
+where the shop slot's station goes, so the spawn string carried no `SeedStation` token to forward.
+`MoveToAnotherSpot` tests `DestinationId` first, so a seeded shopper paused and re-paused for its
+whole visit on the arrival tile `SpawnPoint` chose — arrival #0 exactly, the shop slot's `Spread`
+being 0. It is the same shape as the bank defect and the same two halves: a branch in `ApplySeed`,
+and a token on the spawner.
+
+**And wiring the seed alone would have fixed eleven shops of twenty-seven.** *Sixteen of the
+thirty-two shop destinations have exactly one arrival*, and the browse gate was
+`arrivals.Count < 2` — so those bots would have gone straight back to standing still, the same
+symptom arrived at one step later. The gate is now `< 1`, because `Nav.TryPickArrival` **scatters**:
+`NavArrivals.Scatter` offsets by `Custom.NavArrivalScatter` (2) around the chosen arrival and
+validates the candidate for standing, so a one-arrival shop browses a 5×5 box. None of the sixteen
+is `exact` or `exclusive` — the two flags that suppress the scatter — and `Eligible` drops an
+arrival only when it is *both* exclusive and occupied, so a pick can never fall through to the
+destination **centre**, which for a shop is as likely to be a counter as a floor.
+
+Measured over two fifteen-minute windows: **Shopper walk steps per bot-minute 1.597 → 2.437**, idle
+steps `0.00` in both — which is the right pair of answers, since a browse hop goes through
+`NavWalker` and is booked as `walk`, so the fidget figure must *not* move. All 34 live shoppers
+report `shopping at <id>` with zero null destinations, where every seeded one used to read a bare
+`shopping`.
+
+**One honest limit the measurement found.** At a *cramped* single-arrival shop the scatter can
+still pin a bot: it validates with `CanSpawnMobile`, deliberately refuses a doorway, and falls back
+to the exact tile after six attempts. Two bots at `trinsic-shop-alchemist` sat on `1847,2711` for a
+whole window. The fix for those is a second authored arrival, not a wider scatter.
 
 ### The stock wander is off, and it WAS the fidget
 
