@@ -12,17 +12,27 @@ Written before step 6 (the bot-mobile layer), as the survey `nav-format-comparis
 
 | | |
 | --- | --- |
-| **Surveyed** | `Klein187/uo-offline` @ `91848d8`, installed 2026-09-05, then at `E:\dev\UO\uo-offline-server` |
-| **Current reference** | `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` — @ `fe18a469`, installed 2026-09-06, on ModernUO `0.15.6.145-4-ge7f85d404` |
+| **Surveyed at** | `Klein187/uo-offline` @ `91848d8`, installed 2026-09-05, then at `E:\dev\UO\uo-offline-server` — **that path is stale; do not read it** |
+| **Current reference** | `E:\dev\UO\uo-offline` @ `7f38c7c` — the git clone, which has the history and the per-file dates. `playerbots/source/CustomBots/` for source, `playerbots/data/` for data |
+| **Also on disk** | `C:\Users\sean.GEKKOSTATE\uo-modernuo\ModernUO` @ `fe18a469`, installed 2026-09-06 — an *installed* copy, with the bot source deployed under `Projects/UOContent/CustomBots/`. Cite it only where a Deviations row already does. See the table at the top of `CLAUDE.md`, which is authoritative for all four trees |
 | **Ported so far** | sessions 1–6 (shard steps 6–11): identity, movement, lifecycle, speech, work, **population** |
 | **Stale below** | four modules rewritten by their September 2026 release — see §5 |
 
 **Every line count and file count in §1 was taken at `91848d8` and has not been re-taken.** The
 relative paths in the table below are still correct under the new root; only the root moved.
 
-Source read: `C:\Users\sean.GEKKOSTATE\uo-modernuo` (was `E:\dev\UO\uo-offline-server`),
-installed from `Klein187/uo-offline` (`uo-offline-version.json`). The brief's folder names do not
-match the tree; they resolve as:
+> **This header named the wrong tree as the current reference until 11 September 2026**, and it is
+> item 4 of `SHARD.md`'s cold-pickup list - so a session following those instructions was sent to
+> the installed snapshot rather than to the clone. The snapshot's bot content is untracked in that
+> repository, so it has no git history and no per-file dates, which is exactly why the clone is the
+> reference now. The navigation data is identical at both pins - 3952 waypoints, 8554 `Connects`,
+> 488 destinations, record for record - and differs only in line endings, so nothing surveyed here
+> changes because of the correction.
+
+Source read for this survey: `C:\Users\sean.GEKKOSTATE\uo-modernuo` (was
+`E:\dev\UO\uo-offline-server`), installed from `Klein187/uo-offline` (`uo-offline-version.json`).
+**That is where the counts below were taken, not where new work should read** - see the Status
+table. The brief's folder names do not match the tree; they resolve as:
 
 | Brief | Actual |
 | --- | --- |
