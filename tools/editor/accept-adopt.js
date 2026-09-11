@@ -51,6 +51,24 @@ function fail(message) {
     process.exit(1);
 }
 
+/**
+ * The secret a non-browser caller needs for a mutating request, from the environment.
+ *
+ * The bridge prints it on its startup line and accepts it in X-GG-Auth; a browser is authorised by
+ * being same-origin instead, which a script cannot be. Set GG_BRIDGE_SECRET for both processes, or
+ * copy the printed value into this one's environment:
+ *
+ *     $env:GG_BRIDGE_SECRET = '<the value from the bridge Auth: line>'
+ *
+ * Missing is not a failure here: it produces a 403 with the reason, which is a better message than
+ * anything this file could invent about a value it cannot see.
+ */
+function authHeaders() {
+    const secret = process.env.GG_BRIDGE_SECRET;
+
+    return secret ? { 'X-GG-Auth': secret } : {};
+}
+
 function request(options, body) {
     return new Promise((resolve, reject) => {
         const req = http.request(options, (response) => {
@@ -129,10 +147,10 @@ async function main() {
 
         return request({
             host: '127.0.0.1', port, path: '/api/save/navigation', method: 'POST',
-            headers: {
+            headers: Object.assign({
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(body)
-            }
+            }, authHeaders())
         }, body);
     }
 

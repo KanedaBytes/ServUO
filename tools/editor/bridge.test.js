@@ -74,6 +74,10 @@ function nthIndex(text, needle, n) {
 process.env.GG_EDITOR_ROOT = root;
 process.env.GG_ACK_TIMEOUT_MS = '600';
 
+// The per-session secret is generated at require time, so it has to be pinned before then. A real
+// run generates one and prints it; here the tests need to know it to send it.
+process.env.GG_BRIDGE_SECRET = 'test-secret-0123456789';
+
 const whitelist = require('./whitelist.js');
 const bridge = require('./bridge.js');
 const { handleRequest, hashOf } = bridge;
@@ -127,10 +131,19 @@ function runShard(respond) {
     return shard;
 }
 
+/**
+ * A request as a scripted caller makes one: the secret, because node's fetch sends no
+ * Sec-Fetch-Site and a mutating request without either is now refused. Pass a header explicitly to
+ * override - the gate's own tests do exactly that.
+ */
 async function call(method, url, body, headers) {
     const response = await fetch(origin + url, {
         method,
-        headers: { 'Content-Type': 'application/json', ...(headers || {}) },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-GG-Auth': bridge.SESSION_SECRET,
+            ...(headers || {})
+        },
         body: body === undefined ? undefined : JSON.stringify(body)
     });
 
@@ -429,11 +442,11 @@ test('a cross-site save is refused before the file name is even looked at', asyn
 test('an oversized body is answered rather than dropped', async () => {
     const response = await fetch(origin + '/api/save/navigation', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-GG-Auth': bridge.SESSION_SECRET },
         body: JSON.stringify({ baseHash: 'x', filler: 'a'.repeat(2 * 1024 * 1024) })
     });
 
-    assert.strictEqual(response.status, 413);
+    assert.strictEqual(response.status, 413, 'the size answer, not the authorisation one');
 });
 
 // ---- spawners -----------------------------------------------------------------------------------
@@ -1013,4 +1026,136 @@ test('the fake shard dispatches before it deletes, as RequestPoller does', async
     assert.strictEqual(body.reloaded, true);
     assert.strictEqual(tokenDuringDispatch, true,
         'the token is still on disk while the request runs - that window is F3');
+});
+
+// ---- the security gate (REVIEW.md section 2) ----------------------------------------------------
+
+test('a cross-port same-site write is refused, secret or no secret', async () => {
+    // 127.0.0.1:9999 and this bridge are the SAME SITE and different ORIGINS, and the old check
+    // accepted same-site outright. Any other local service - or anything a page can get you to
+    // open - counted as friendly. The secret does not rescue it either: metadata that says the
+    // request came from elsewhere is refused whatever else it carries.
+    const { status, body } = await call(
+        'POST', '/api/request/shutdown', undefined,
+        { 'Sec-Fetch-Site': 'same-site', 'Origin': 'http://127.0.0.1:9999' });
+
+    assert.strictEqual(status, 403);
+    assert.match(body.error, /cross-site/);
+    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'shutdown.token')), false);
+});
+
+test("Sec-Fetch-Site: none is refused too - a bookmark is not the editor", async () => {
+    const { status } = await call(
+        'POST', '/api/request/shutdown', undefined, { 'Sec-Fetch-Site': 'none' });
+
+    assert.strictEqual(status, 403);
+});
+
+test('a same-origin request whose Origin is somebody else is refused', async () => {
+    const { status, body } = await call(
+        'POST', '/api/request/nav-reload', undefined,
+        { 'Sec-Fetch-Site': 'same-origin', 'Origin': 'http://evil.example' });
+
+    assert.strictEqual(status, 403);
+    assert.match(body.error, /Origin/);
+});
+
+test('the editor itself - same-origin with its own Origin - is allowed', async () => {
+    const { status } = await fetch(origin + '/api/request/nav-reload', {
+        method: 'POST',
+        headers: { 'Sec-Fetch-Site': 'same-origin', 'Origin': origin }
+    });
+
+    assert.strictEqual(status, 202, 'no secret needed: the browser proves it by being same-origin');
+});
+
+test('a mutating request with no metadata and no secret is refused', async () => {
+    // Node's fetch sends no Sec-Fetch-Site, which is what every non-browser caller looks like. This
+    // was allowed unconditionally until now - which is how curl could ask the bridge to stop the
+    // shard, with no header at all.
+    const response = await fetch(origin + '/api/request/shutdown', { method: 'POST' });
+
+    assert.strictEqual(response.status, 403);
+    assert.match((await response.json()).error, /X-GG-Auth/);
+    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'shutdown.token')), false);
+});
+
+test('the same request with the session secret is accepted', async () => {
+    const response = await fetch(origin + '/api/request/nav-reload', {
+        method: 'POST',
+        headers: { 'X-GG-Auth': bridge.SESSION_SECRET }
+    });
+
+    assert.strictEqual(response.status, 202);
+});
+
+test('a wrong secret is refused', async () => {
+    const response = await fetch(origin + '/api/request/nav-reload', {
+        method: 'POST',
+        headers: { 'X-GG-Auth': 'not-the-secret' }
+    });
+
+    assert.strictEqual(response.status, 403);
+});
+
+test('a request addressed to a hostname that is not loopback is refused, read or write', async () => {
+    // DNS rebinding: the browser is told evil.example resolves to 127.0.0.1 and connects to this
+    // socket, which cannot tell the difference. The Host it sends can.
+    //
+    // Through http.request rather than fetch, because Host is a forbidden header name for fetch -
+    // it silently sends the real one, and the test would pass by not testing anything.
+    for (const target of [{ path: '/api/shapes', method: 'GET' },
+                          { path: '/api/request/nav-reload', method: 'POST' }]) {
+        const answer = await rawRequest({
+            host: '127.0.0.1',
+            port: server.address().port,
+            path: target.path,
+            method: target.method,
+            headers: { 'Host': 'evil.example:1234', 'X-GG-Auth': bridge.SESSION_SECRET }
+        });
+
+        assert.strictEqual(answer.status, 403, target.path);
+        assert.match(answer.text, /127\.0\.0\.1/);
+    }
+
+    // And the same read, addressed properly, still answers - so the refusal is about the Host.
+    const proper = await rawRequest({
+        host: '127.0.0.1', port: server.address().port, path: '/api/shapes', method: 'GET',
+        headers: { 'Host': `localhost:${server.address().port}` }
+    });
+
+    assert.strictEqual(proper.status, 200, 'localhost is a loopback name too');
+});
+
+/** A request with headers fetch will not let a caller set - Host, here. */
+function rawRequest(options) {
+    return new Promise((resolve, reject) => {
+        const req = http.request(options, (response) => {
+            const chunks = [];
+
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => resolve({
+                status: response.statusCode,
+                text: Buffer.concat(chunks).toString('utf8')
+            }));
+        });
+
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+test('a read needs no metadata and no secret, exactly as before', async () => {
+    const response = await fetch(origin + '/api/shapes');
+
+    assert.strictEqual(response.status, 200);
+    assert.ok((await response.json()).files.navigation.hash, 'and it answers with the real thing');
+});
+
+test('the host check reads the port off the socket, not off a constant', () => {
+    // The tests listen on an ephemeral port and a --port run does not use 8081 either, so a
+    // hardcoded port here would either break those or quietly pass everything.
+    const source = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
+
+    assert.ok(/String\(request\.socket\.localPort\)/.test(source));
 });

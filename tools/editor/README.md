@@ -86,11 +86,65 @@ so a section would stop collapsing rather than merely stop being remembered.
 
 ## Security
 
-The bridge binds `127.0.0.1` and nothing else, so nothing off this machine can reach it. That
-alone is not sufficient — a page you visit in another tab can still POST to localhost — so every
-mutating request is checked for a same-origin `Sec-Fetch-Site`, falling back to `Origin`. Reads
-are unchecked because they are harmless. The check sits before the POST dispatch rather than inside
-each handler, so a new endpoint cannot forget it.
+Three layers, and each one is for a different attack.
+
+**The bind.** `127.0.0.1` and nothing else, so nothing off this machine can reach the socket.
+
+**The `Host`.** Every request — read or write — must address the bridge by a loopback name
+(`127.0.0.1`, `localhost`, `[::1]`) on the port this process is listening on. The bind alone does
+not cover DNS rebinding: a browser told that `evil.example` resolves to `127.0.0.1` connects to
+this socket quite happily, and the socket cannot tell the difference. The `Host` header can, and a
+rebound page reading the world snapshot is a real loss even though it writes nothing.
+
+**The gate on writes.** A request that mutates or invokes — a token drop, a save, a restore, a
+restart — must either be same-origin by fetch metadata, with an `Origin` that matches this bridge
+exactly when one is present, or carry this session's secret. `Sec-Fetch-Site` is set by the browser
+and cannot be written by page script, so a page on another origin cannot claim `same-origin`; and
+metadata that says otherwise is refused whatever else the request carries. The check sits before
+the POST dispatch rather than inside each handler, so a new endpoint cannot forget it.
+
+`same-site` and `none` are **not** accepted, which they used to be. Two different ports on one host
+are same-*site* while being different *origins*, so `http://127.0.0.1:9999` — any other local
+service, or anything a page can get you to open — counted as friendly; `none` is a typed-in
+address or a bookmark. A request carrying neither header was also allowed outright, which is how
+`curl` could ask this process to shut the shard down with no header at all. Do not read a CORS
+failure as protection either: CORS decides whether the attacker may *read* the answer, which is no
+comfort when the side effect is a restart.
+
+### Driving the bridge from a script
+
+The browser needs nothing: it is same-origin, which is what the gate asks of it. A script is not,
+so it sends the secret the bridge prints at startup:
+
+```
+Shard editor bridge on http://127.0.0.1:8081/
+Repo:  E:\dev\UO\ServUO-shard
+Auth:  X-GG-Auth: 8f14e45fceea167a5a36dedd4bea2543   (mutating requests from non-browsers)
+```
+
+```bash
+curl -X POST -H "X-GG-Auth: 8f14e45fceea167a5a36dedd4bea2543" http://127.0.0.1:8081/api/request/nav-reload
+```
+
+Reads need neither the secret nor any metadata, exactly as before:
+
+```bash
+curl http://127.0.0.1:8081/api/shapes
+```
+
+A new secret is generated on every run — the right lifetime for a value whose only job is to say
+"the caller is on this machine and meant it". `GG_BRIDGE_SECRET` pins it instead, which is how the
+two scripted callers in this tree authenticate: `accept-adopt.js` and `repoint-arrivals.js` read
+that variable and send the header, so `$env:GG_BRIDGE_SECRET = '...'` set for both processes makes
+them work unchanged. Set for the bridge alone, copy the printed line's value across.
+
+This defends against a **page**, not against a person at this keyboard: anything with a terminal
+here can read the startup line. That is the boundary a local tool can actually hold.
+
+One nuance worth stating rather than discovering: reads are not entirely free of side effects.
+`/api/vocabulary` asks the shard for a fresh type list when `Scripts.dll` is newer than the last
+snapshot, and the tile endpoints start and drive the art renderer. Neither writes shard data; both
+consume resources, so "reads are harmless" is a claim about *data*, not about *work*.
 
 The data endpoints take **no path from the caller at all**. Every file they read is a constant in
 `whitelist.js`. That is the real sandbox: there is nothing to traverse because there is nothing to

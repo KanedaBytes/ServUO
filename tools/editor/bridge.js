@@ -9,10 +9,25 @@
 // whole job is reading JSON, reshaping it, and serving static files, which is what Node's
 // standard library is for. No package.json, no node_modules, nothing to audit.
 //
-// SECURITY. It binds 127.0.0.1 only, so nothing off this machine can reach it. That alone is not
-// enough - a page you visit in another tab can still POST to localhost - so every mutating
-// request is checked for a same-origin Sec-Fetch-Site or a matching Origin. Reads are harmless
-// and unchecked; the only writes are request tokens, and those run reload commands.
+// SECURITY, and what each layer is actually for.
+//
+//   the bind    127.0.0.1 only, so nothing off this machine can reach the socket.
+//   the Host    every request, read or write, must address a loopback name on the port this
+//               process is listening on. That is the DNS-rebinding defence: the bind does not help
+//               when the browser is told that evil.example resolves to 127.0.0.1, and a rebound
+//               page reading the world snapshot is a real loss even though it writes nothing.
+//   the gate    a request that MUTATES or INVOKES - a token drop, a save, a restore, a restart -
+//               must be same-origin by fetch metadata with an exactly-matching Origin, or carry
+//               this session's secret. Sec-Fetch-Site is forbidden to page script, so a page in
+//               another tab cannot forge it.
+//
+// WHAT CHANGED AND WHY (REVIEW.md section 2). The old check accepted `same-site` and `none` as
+// well as `same-origin`, never looked at Origin when the metadata was present, and allowed a
+// request carrying neither header at all. Two different ports on one host are same-SITE while
+// being different origins, so http://127.0.0.1:9999 - any other local service, or anything a
+// page can get you to open - counted as friendly; and "neither header" is every non-browser
+// caller in the world, which is how curl was allowed to ask this process to shut the shard down.
+// Reads stay unchecked past the Host: they are the ones that have to answer from a bookmark.
 
 const http = require('http');
 const fs = require('fs');
@@ -29,6 +44,22 @@ const { ArtRenderer, parseTilePath, EMPTY_PNG } = require('./artrenderer.js');
 
 const DEFAULT_PORT = 8081;
 const HOST = '127.0.0.1';
+
+// The hostnames a loopback request may arrive under. Anything else is a name that resolved here
+// from outside - the rebinding case - and is refused before any handler sees it.
+const LOCAL_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
+/**
+ * This run's secret, for callers that are not a browser.
+ *
+ * Printed on the startup line, because that is where somebody scripting against this bridge is
+ * already looking, and regenerated every run so a secret pasted into a script stops working when
+ * the bridge restarts - which is the correct lifetime for a thing whose only job is to prove the
+ * caller is on this machine and meant it. The env override exists so the tests can know it.
+ *
+ * The editor page never needs it: it is same-origin, and that is what the gate below asks of it.
+ */
+const SESSION_SECRET = process.env.GG_BRIDGE_SECRET || crypto.randomBytes(16).toString('hex');
 
 // A save body is the shapes that changed, not the file, but a big multi-select could still be a
 // few hundred KB. Over the limit is an answer, not a dropped connection.
@@ -255,27 +286,100 @@ function sendError(response, status, message) {
 }
 
 /**
- * Refuses a cross-site write.
+ * Whether this request addressed the bridge by a loopback name on the port it is listening on.
  *
- * Sec-Fetch-Site is sent by every current browser and is the reliable signal; Origin is the
- * fallback. A request with neither is allowed, because that is curl and the command line is not
- * the threat being defended against here.
+ * Asked of EVERY request, including reads. A browser told that some hostname resolves to
+ * 127.0.0.1 will happily connect to this socket and send that hostname as the Host - the bind
+ * cannot see the difference, and the page then reads whatever the read endpoints serve. Comparing
+ * the Host is what makes the connection's own name part of the check.
+ *
+ * The port comes from the socket rather than from a constant, so the tests' ephemeral port and a
+ * `--port 9000` run are both covered without a special case.
  */
-function isSameSite(request) {
+function hostIsLocal(request) {
+    const host = request.headers.host;
+
+    if (!host) {
+        // HTTP/1.1 requires one. No Host is a hand-built request, and there is nothing to check.
+        return false;
+    }
+
+    const at = host.lastIndexOf(':');
+    const bracketed = host.startsWith('[');
+    const hasPort = at > (bracketed ? host.lastIndexOf(']') : -1);
+
+    const hostname = hasPort ? host.slice(0, at) : host;
+    const port = hasPort ? host.slice(at + 1) : '';
+
+    if (!LOCAL_HOSTNAMES.has(hostname.toLowerCase())) {
+        return false;
+    }
+
+    // A bare host with no port means port 80, which this never binds.
+    return port === String(request.socket.localPort);
+}
+
+/** The two spellings of this bridge's own origin. A browser sends one of these or nothing. */
+function allowedOrigins(request) {
+    return [
+        `http://127.0.0.1:${request.socket.localPort}`,
+        `http://localhost:${request.socket.localPort}`
+    ];
+}
+
+/**
+ * Why a MUTATING or INVOKING request - a token drop, a save, a restore, a restart - is refused,
+ * or null when it may proceed.
+ *
+ * Two ways in, and they are for two different callers.
+ *
+ * A BROWSER proves it by being same-origin. `Sec-Fetch-Site` is set by the browser and cannot be
+ * written by page script, so a page on another origin cannot claim `same-origin`; `same-site` and
+ * `none` are NOT accepted, because a different port on this host is same-site while being a
+ * different origin, and `none` is a typed-in address or a bookmark. When an `Origin` is present it
+ * must match this bridge exactly - CORS decides whether the attacker may READ the answer, which is
+ * no comfort at all when the side effect is "shut the shard down".
+ *
+ * A SCRIPT proves it with the secret from the startup line, in X-GG-Auth. Nothing in a browser can
+ * read that line, so a page cannot obtain it; anything with a terminal on this machine already can.
+ * That is the honest boundary: this defends against a PAGE, not against a person at this keyboard.
+ *
+ * A request with no metadata and no secret is refused. That is a behaviour change for curl, and it
+ * is the point: until now any process, and any page able to reach a form post at this port, could
+ * ask for a save, a shutdown or a restart with no header at all. tools/editor/accept-adopt.js and
+ * repoint-arrivals.js are the two scripted callers in this tree; both read GG_BRIDGE_SECRET.
+ */
+function refusalFor(request) {
     const site = request.headers['sec-fetch-site'];
 
-    if (site) {
-        return site === 'same-origin' || site === 'same-site' || site === 'none';
+    // A BROWSER. The metadata decides, and the secret cannot override it: a request that says it
+    // came from elsewhere is refused whatever else it carries, which costs a legitimate caller
+    // nothing (a script sends no such header) and removes the question of whether a page could
+    // ever obtain the secret from mattering.
+    if (site !== undefined) {
+        if (site !== 'same-origin') {
+            return `Refused: cross-site request (Sec-Fetch-Site: ${site}).`;
+        }
+
+        const origin = request.headers.origin;
+
+        if (origin && !allowedOrigins(request).includes(origin)) {
+            return `Refused: Origin ${origin} is not this bridge.`;
+        }
+
+        return null;
     }
 
-    const origin = request.headers.origin;
+    // A SCRIPT. No fetch metadata at all, which is every non-browser caller - and until now was
+    // accepted unconditionally, which is how curl could ask this process to shut the shard down.
+    const offered = request.headers['x-gg-auth'];
 
-    if (!origin) {
-        return true;
+    if (typeof offered === 'string' && offered.length > 0 && offered === SESSION_SECRET) {
+        return null;
     }
 
-    return origin === `http://${HOST}:${request.socket.localPort}`
-        || origin === `http://localhost:${request.socket.localPort}`;
+    return "Refused: this request mutates, so it needs X-GG-Auth with the secret from the bridge's "
+        + 'startup line (or a same-origin browser request).';
 }
 
 function serveStatic(urlPath, response) {
@@ -678,13 +782,21 @@ function handleRequest(request, response) {
     const url = new URL(request.url, `http://${HOST}`);
     const pathname = url.pathname;
 
+    // Before anything, and before reads too: see hostIsLocal.
+    if (!hostIsLocal(request)) {
+        sendError(response, 403, 'Refused: this bridge answers 127.0.0.1 only.');
+        return;
+    }
+
     if (request.method === 'POST') {
-        if (!isSameSite(request)) {
-            sendError(response, 403, 'Refused: cross-site request.');
+        const refusal = refusalFor(request);
+
+        if (refusal) {
+            sendError(response, 403, refusal);
             return;
         }
 
-        // Every POST is gated by the same-origin check above, before any of these are reached.
+        // Every POST is gated by the check above, before any of these are reached.
         const posts = [
             ['/api/request/', dropToken],
             ['/api/save/', handleSave],
@@ -1406,6 +1518,11 @@ function main() {
         console.log(`Shard editor bridge on http://${HOST}:${port}/`);
         console.log(`Repo:  ${whitelist.REPO_ROOT}`);
 
+        // The line a scripted caller needs, and the only place this secret is ever shown. The
+        // browser does not need it - it is same-origin - so this is here for curl and for
+        // anything else driving the bridge from a terminal. See the editor README.
+        console.log(`Auth:  X-GG-Auth: ${SESSION_SECRET}   (mutating requests from non-browsers)`);
+
         if (!fs.existsSync(path.join(__dirname, 'tiles'))) {
             console.log('No tiles yet - run tools/editor/export-tiles.ps1');
         }
@@ -1430,4 +1547,6 @@ if (require.main === module) {
     main();
 }
 
-module.exports = { handleRequest, isSameSite, hashOf, ACK_TIMEOUT_MS, art };
+module.exports = {
+    handleRequest, hostIsLocal, refusalFor, hashOf, ACK_TIMEOUT_MS, SESSION_SECRET, art
+};
