@@ -287,7 +287,7 @@ namespace Server.Custom
 
             if (_walker == null)
             {
-                _walker = new NavWalker(bot);
+                _walker = new NavWalker(NavActor.For(bot));
                 _walker.Arrived = OnArrived;
                 LogWalker(bot, _walker);
             }

@@ -125,7 +125,18 @@ namespace Server.Custom
         private static readonly List<NavWalker> _active = new List<NavWalker>();
         private static Timer _timer;
 
-        private readonly BaseCreature _mobile;
+        /// <summary>
+        /// What actually moves. See INavActor: everything that differs between the classes this
+        /// walker can drive goes through here, and nothing else does.
+        /// </summary>
+        private readonly INavActor _actor;
+
+        /// <summary>
+        /// The actor's mobile, held directly because sixty of this file's seventy touchpoints are
+        /// plain Mobile members with the same answer whichever class is underneath. Always
+        /// _actor.Mobile; never assigned anywhere else.
+        /// </summary>
+        private readonly Mobile _mobile;
 
         private NavRoute _route;
         private int _index;
@@ -213,15 +224,32 @@ namespace Server.Custom
         /// <summary>How many waypoints this route has skipped rather than walked. See Follow.</summary>
         private int _skips;
 
-        public NavWalker(BaseCreature mobile)
+        public NavWalker(INavActor actor)
         {
-            _mobile = mobile;
+            if (actor == null)
+            {
+                throw new ArgumentNullException("actor");
+            }
+
+            _actor = actor;
+            _mobile = actor.Mobile;
             Ledger = true;
         }
 
-        public BaseCreature Mobile
+        /// <summary>
+        /// The mobile being walked. Consumers that want their own type test it - the four bot
+        /// behaviours all read `walker.Mobile as PlayerBot`, which a widening from BaseCreature
+        /// to Mobile leaves working unchanged.
+        /// </summary>
+        public Mobile Mobile
         {
             get { return _mobile; }
+        }
+
+        /// <summary>The actor driving it, for a consumer that needs the seam rather than the mobile.</summary>
+        public INavActor Actor
+        {
+            get { return _actor; }
         }
 
         public NavRoute Route
@@ -322,7 +350,7 @@ namespace Server.Custom
 
             // ForceStayHome refuses to path outside Home +/- min(10, RangeHome) 97.5% of the
             // time (BaseAI.cs:2628-2636), which silently pins a walker to its spawn point.
-            if (_mobile.ForceStayHome)
+            if (_actor.RefusesDistantGoals)
             {
                 Log.Warn(
                     "{0} has ForceStayHome set; its route will not be walked past its home range.",
@@ -364,6 +392,11 @@ namespace Server.Custom
             _watchedCycles = 0;
             _frozenAnchor = _mobile.Location;
             _frozenAt = Core.TickCount;
+
+            // A no-op for a BaseCreature - BaseAI owns its PathFollower and a replaced NavGoal is
+            // what forces its repath. It is here for an actor that owns its own follower and would
+            // otherwise resume a stopped walk's path on the next route. See INavActor.
+            _actor.DropCachedPath();
 
             Unregister(this);
         }
@@ -640,9 +673,17 @@ namespace Server.Custom
 
             EnsureGoal(step);
 
-            BaseAI ai = _mobile.AIObject;
-
-            if (ai == null)
+            // BELOW THE LADDER AND ABOVE THE GATE, and both halves are load-bearing.
+            //
+            // Below, so an actor with no mover still recovers: it never steps, so it never gets
+            // closer, so the hop deadline above has already fired and climbed the rungs -
+            // Sidestep is Mobile.Move and needs no AI, and the top rung rescues it.
+            //
+            // Above, so nothing past this point is reached without a mover. NextStepTick and
+            // TransformedStepDelaySeconds below both dereference the AI, and the sampler branch is
+            // the one place that would throw on the game thread for a reason no audit or smoke run
+            // could see - none of them attach a sampler. See INavActor.HasMover.
+            if (!_actor.HasMover)
             {
                 return;
             }
@@ -663,7 +704,7 @@ namespace Server.Custom
             // search at its own pace rather than at ours.
             //
             // Wraparound-safe: compare by subtraction, never a < b.
-            if (Core.TickCount - ai.NextMove < 0)
+            if (Core.TickCount - _actor.NextStepTick < 0)
             {
                 if (sampler != null)
                 {
@@ -675,23 +716,23 @@ namespace Server.Custom
 
             if (sampler == null)
             {
-                ai.MoveTo(_goal, Run, range);
+                _actor.MoveTowards(_goal, Run, range);
                 return;
             }
 
             // Measured, not inferred: did the mobile move, does its direction carry the running
-            // bit afterwards, and which delay did the engine step on - CurrentSpeed (the pace it
-            // was given) or TransformMoveDelay(CurrentSpeed) (what DoMoveImpl advances NextMove by).
+            // bit afterwards, and which delay did the engine step on - StepDelaySeconds (the pace
+            // it was given) or TransformedStepDelaySeconds (what the step clock advances by).
             Point3D before = _mobile.Location;
 
-            ai.MoveTo(_goal, Run, range);
+            _actor.MoveTowards(_goal, Run, range);
 
             sampler.Attempted(
                 _mobile.Location != before,
                 (_mobile.Direction & Direction.Running) != 0,
-                ai.NextMove - Core.TickCount,
-                (int)Math.Round(ai.TransformMoveDelay(_mobile.CurrentSpeed) * 1000.0),
-                (int)Math.Round(_mobile.CurrentSpeed * 1000.0));
+                _actor.NextStepTick - Core.TickCount,
+                (int)Math.Round(_actor.TransformedStepDelaySeconds * 1000.0),
+                (int)Math.Round(_actor.StepDelaySeconds * 1000.0));
         }
 
         private void Advance()
@@ -1655,7 +1696,7 @@ namespace Server.Custom
             {
                 Point3D before = _mobile.Location;
 
-                if (_mobile.Move(directions[i]))
+                if (_actor.Step(directions[i]))
                 {
                     taken = directions[i];
                     moved = true;
@@ -1679,7 +1720,7 @@ namespace Server.Custom
             {
                 Point3D before = _mobile.Location;
 
-                if (!_mobile.Move(taken))
+                if (!_actor.Step(taken))
                 {
                     break;
                 }
@@ -1962,7 +2003,7 @@ namespace Server.Custom
                     step.Point.Y);
             }
 
-            _mobile.MoveToWorld(landing, map);
+            _actor.PlaceAt(landing, map);
         }
 
         /// <summary>
@@ -2066,7 +2107,7 @@ namespace Server.Custom
                     MaxRescueRing);
             }
 
-            _mobile.MoveToWorld(landing, map);
+            _actor.PlaceAt(landing, map);
         }
 
         private int ArrivalRangeFor(NavStep step)
@@ -2204,7 +2245,7 @@ namespace Server.Custom
 
             if (KeepHomeAligned)
             {
-                _mobile.Home = new Point3D(step.Point.X, step.Point.Y, z);
+                _actor.AlignHome(new Point3D(step.Point.X, step.Point.Y, z));
             }
         }
 

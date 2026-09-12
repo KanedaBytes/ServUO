@@ -562,7 +562,7 @@ namespace Server.Custom
 
             if (_walker == null)
             {
-                _walker = new NavWalker(bot);
+                _walker = new NavWalker(NavActor.For(bot));
                 _walker.Arrived = OnWalkedIn;
                 LogWalker(bot, _walker);
             }

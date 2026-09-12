@@ -975,7 +975,7 @@ namespace Server.Custom
             {
                 runner.Probe = new WalkAuditProbe();
 
-                runner.Walker = new NavWalker(runner.Probe);
+                runner.Walker = new NavWalker(NavActor.For(runner.Probe));
 
                 // The whole reason this property exists. See NavWalker.Ledger.
                 runner.Walker.Ledger = false;

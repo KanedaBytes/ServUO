@@ -141,7 +141,7 @@ namespace Server.Custom
 
             if (_walker == null)
             {
-                _walker = new NavWalker(this);
+                _walker = new NavWalker(NavActor.For(this));
                 _walker.Arrived = OnLapFinished;
             }
 

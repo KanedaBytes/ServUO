@@ -90,8 +90,16 @@ namespace Server.Custom
         /// learn to ignore. This one is in statics0.mul and can only change if the client data
         /// does. Its neighbour at 1842,2711 is the shop's wooden floor at the same Z.
         /// </summary>
-        private static readonly Point3D SolidTile = new Point3D(1843, 2711, 10);
-        private static readonly Point3D SolidFrom = new Point3D(1842, 2711, 10);
+        /// <remarks>
+        /// PUBLIC because Nav.Actor asks the same tile the same question through the locomotion
+        /// adapter, and a second "known wall" declared next to it would be a second definition of
+        /// the one fact both checks rest on - which is exactly how the two would drift apart the
+        /// day somebody re-decorated Trinsic.
+        /// </remarks>
+        public static readonly Point3D SolidTile = new Point3D(1843, 2711, 10);
+
+        /// <remarks>See <see cref="SolidTile"/>.</remarks>
+        public static readonly Point3D SolidFrom = new Point3D(1842, 2711, 10);
 
         /// <summary>
         /// Whether the engine still refuses a step onto a known-impassable static.

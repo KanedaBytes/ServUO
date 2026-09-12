@@ -344,7 +344,7 @@ namespace Server.Custom
                 Config = entry,
                 Vendor = vendor,
                 GoingHome = goingHome,
-                Walker = new NavWalker(vendor)
+                Walker = new NavWalker(NavActor.For(vendor))
             };
 
             // Point the vendor's own wander at each hop as it is taken, so WalkRandomInHome pulls
