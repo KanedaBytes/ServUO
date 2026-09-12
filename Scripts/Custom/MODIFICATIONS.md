@@ -205,7 +205,142 @@ wrote them, with a `CUSTOM SHARD EDIT` comment naming this entry. An upstream ch
 `OnMoveOver` will conflict loudly. If it does, the guard goes back at the top of whatever the new
 body is.
 
-*(Entry 5 is the only `.cs` edit; entries 1 to 4 are project,
+### 6. `Scripts/Services/Pathing/FastAStarAlgorithm.cs` — a `PlayerBot`'s route plans through closed doors
+
+```diff
+         BaseCreature bc = p as BaseCreature;
+
++        // CUSTOM SHARD EDIT - Scripts/Custom/MODIFICATIONS.md entry 6.
++        // A PlayerBot is a PlayerMobile and misses the cast above, so its routes were never
++        // planned through a closed door. Hoisted out of the loop below so the per-iteration
++        // cost is unchanged; null means "not ours", and the BaseCreature branch keeps priority.
++        bool? botDoors = Server.Custom.BotPathPolicy.IgnoreDoors(p);
++
+         int pathCount, parent;
+```
+
+```diff
+                 if (bc != null)
+                 {
+                     MoveImpl.AlwaysIgnoreDoors = bc.CanOpenDoors;
+                     MoveImpl.IgnoreMovableImpassables = bc.CanMoveOverObstacles;
+                 }
++                else if (botDoors.HasValue)
++                {
++                    // CUSTOM SHARD EDIT - Scripts/Custom/MODIFICATIONS.md entry 6.
++                    // IgnoreMovableImpassables is deliberately not granted; see BotPathPolicy.
++                    MoveImpl.AlwaysIgnoreDoors = botDoors.Value;
++                }
+
+                 MoveImpl.Goal = goal;
+```
+
+**The second `.cs` edit in this tree.** Written against ServUO `pub57` (assembly 57.4).
+
+**Why.** `:77` casts the pathing subject to `BaseCreature` and `:93` sets
+`MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors` only then. On 12 September 2026 `PlayerBot`
+became a `PlayerMobile`, missed that cast, and **a bot's route stopped being planned through a
+closed door**. Measured over one window on a fleet of 61: terminal walk failures went from roughly
+**0.5 to 5.23 per 100 walks**. Of 68 failures, **67 were bots** and one a daily-life `BaseCreature`;
+**47 had nobody standing anywhere near**, which is what rules out a crowding explanation; and the
+edges at the top of the list are interior shop arrivals — `brit-inn-1`,
+`uo-britain-between-inn-and-alchemist`, `uo-britain-tailor-se-corner -> brit-tail-1`. Two probes,
+`Bots.Life` and `Bots.Shift`, failed on this one cause, both at the rescue teleport.
+
+`PlayerBot.Move` already recovers the *step* once a route has aimed at a door, through
+`Core/DoorHelper.cs` — upstream's own answer. It cannot help when no route ever aims at one.
+
+**Why no `Custom/`-side approach works.** The flag is global and it is reset **inside the search
+loop**. `FastAStarAlgorithm.Find` runs the whole A* synchronously inside `MovementPath`'s
+constructor (`MovementPath.cs:36-50`), and each iteration sets the flag at `:93`, calls
+`GetSuccessors` at `:100`, then resets it unconditionally at `:102`. So a `Custom/`-side
+`MoveImpl.AlwaysIgnoreDoors = true` set immediately before constructing the path survives **exactly
+one node expansion** — the start node's, since `m_OpenList` begins as `fromNode` (`:65`) — and is
+false for every node after it. That admits a door adjacent to the bot's current tile and nothing
+else, which is precisely the case that does not matter: the failing edges are shop *arrivals*, where
+the door is at the far end of a street-length route.
+
+**And the leak would be worse than the non-fix.** `MovementPath`'s constructor returns before `Find`
+on three paths — `map == null || map == Map.Internal` (`:30`), `Utility.InRange(start, goal, 1)`
+(`:33`), and `!alg.CheckCondition(...)`, i.e. outside the 38-tile box (`:47`). On any of those the
+reset at `:102` never runs, so a `Custom/`-side `true` stays set **globally**:
+`MoveImpl.AlwaysIgnoreDoors` is one static `bool` (`Movement.cs:15,20-29`) read by
+`FastMovementImpl.CheckMovement` (`FastMovement.cs:123`) for every mobile on the shard.
+
+`MovementPath.OverrideAlgorithm` (`MovementPath.cs:56-66`) is not a door fix either: every piece of
+state `FastAStarAlgorithm` uses is `private static` on that class (`:19-31`), so a subclass inherits
+nothing usable and a replacement algorithm is a ~200-line hand-maintained fork. It is also global
+mutable state shared with the stock `[Path` GM command (`MovementPath.cs:145,164`). Evaluating a
+different pathfinder is its own roadmap item and is not this.
+
+**Why this file and only this file.** `SlowAStarAlgorithm.cs:156,209` carries the identical gate and
+is **dead code**: `MovementPath.cs:41-44` hard-codes `FastAStarAlgorithm.Instance` with the Slow
+branch commented out as broken. It is deliberately not edited. `FastMovement.cs` would be the
+*second* edit and is also not taken — see the known limit below.
+
+**Why a `Custom/` static rather than naming `PlayerBot` in the engine.** This is entry 5's shape:
+the engine asks, `Custom/` answers, and `null` means "not ours, carry on". Upstream took the other
+road — their patch writes `m is Server.CustomBots.PlayerBot` into the engine file at two sites
+(`BitmapAStarAlgorithm.cs:161,169` in an installed tree). The difference matters here and not there:
+with the test in the engine, every future change to *which* mobiles route through doors is another
+upstream edit. `FastAStarAlgorithm.cs` is under `Scripts/`, the same assembly as `Scripts/Custom/`,
+so the call costs no reference and no plumbing.
+
+**What it deliberately does not change.**
+
+- **Not all `PlayerMobile`s.** `BotPathPolicy.IgnoreDoors` answers `null` for anything that is not an
+  `IBotActor`, so a real player's routes are byte-identical to before this edit.
+- **Not `IgnoreMovableImpassables`.** The `BaseCreature` branch sets it from
+  `bc.CanMoveOverObstacles`; upstream does not grant it to bots either.
+- **Not one upstream line.** No existing line is changed or deleted. `bc` keeps its reader, so this
+  tree does not inherit the orphaned local upstream's patch B left at `BitmapAStarAlgorithm.cs:193`,
+  and every `BaseCreature` route is unchanged — which is what a green `[WalkAudit` checks, its probes
+  being `BaseCreature`s.
+
+**The known limit, inherited rather than invented — and counted.** ServUO's `AlwaysIgnoreDoors` has
+no "unlocked only" notion, so a bot can now plan through a **locked non-house** door and then fail to
+open it at step time. That is exactly upstream's own documented limit on their slow path
+(`INTEGRATION-NOTES.txt:245-250`); their cache path closes it with a second flag and a per-cell
+guard, which here would mean a second upstream edit, in `FastMovement.cs:39-52`. **House doors need
+no such guard and never did**: `FastMovementImpl.IsOk` (`FastMovement.cs:50-52`) ends its door branch
+with `return !(item is BaseHouseDoor) || m == null || ((BaseHouseDoor)item).CheckAccess(m);`, so a
+bot never plans through a house door it may not open — a better position than upstream's on that
+case and no worse on the rest.
+
+Sean's call was to take one edit and **measure** the locked case rather than pay for a second one up
+front. The instrument is the existing walk-failure ledger, not a new tool:
+`NavWalkFailures.CauseFor` gained a fourth cause, `locked-door`, asked before `goal-unstandable`
+because a closed door is an `Impassable` item and a goal on a door tile already reads unstandable.
+**Measured over the acceptance window of this session: TBD.**
+
+**This edit depends on the shard's movement implementation, as entry 5 does.** The flag reaches a
+door only through `FastMovementImpl.IsOk` (`FastMovement.cs:50-52`). `Nav.Movement` reports the
+installed implementation on every `[CoreSmoke` and currently reads `FastMovementImpl`. If a merge
+ever flips that to `MovementImpl`, re-check `Movement.cs:173` before assuming this still works.
+
+**How to reapply on a fresh upstream.** Two hunks in one method, `FastAStarAlgorithm.Find`:
+
+1. Find `BaseCreature bc = p as BaseCreature;`. Add the `bool? botDoors = ...` line beneath it,
+   outside the `while` loop.
+2. Find the `if (bc != null)` block **inside** the loop, the one that sets
+   `MoveImpl.AlwaysIgnoreDoors` and `MoveImpl.IgnoreMovableImpassables`. Append the
+   `else if (botDoors.HasValue)` branch to it.
+
+If upstream has restructured the method so `bc` is gone, the rule to preserve is: the bot branch
+never overrides the `BaseCreature` branch, and it sets only `AlwaysIgnoreDoors`.
+
+**Which contract test guards it.** `Nav.Doors`, on `[CoreSmoke`. Both halves assert: a route
+requested for a real `PlayerBot` from outside a closed door to a tile inside succeeds **and its tile
+list contains the door tile**; the same request for a plain accountless `PlayerMobile` fails or
+routes around. The second half is what catches a reverted patch *and* an over-widened one. It also
+asserts that the step-time half meets the route, and that `MoveImpl.AlwaysIgnoreDoors` is false after
+both requests — the leak named above.
+
+**Merge note.** Additive only: one line after an existing declaration, and one `else if` appended to
+an existing `if`, both carrying a `CUSTOM SHARD EDIT` comment naming this entry. An upstream change
+to `Find` will conflict loudly.
+
+*(Entries 5 and 6 are the only `.cs` edits; entries 1 to 4 are project,
 config or ignore files. Each future entry follows the format above.)*
 
 ---
