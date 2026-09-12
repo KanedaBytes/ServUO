@@ -131,11 +131,32 @@ read when it was. **Where the two disagree, this section is the one that has bee
   cached route with it and a mismatch clears the whole cache. `Custom.NavRouteCacheTtlSeconds` is
   the backstop for anything that changes a cost without touching edge health. Before this, a struck
   edge kept carrying traffic for as long as somebody kept the entry warm (REVIEW.md F4).
+- **The tile pathfinder is stock, and `Nav.Pathfinder` is what says so.** `Custom.NavPathfinder`
+  (default `Off`) selects an instrument installed behind `MovementPath.OverrideAlgorithm`; with it
+  `Off` the check asserts on every `[CoreSmoke` and every sixty seconds that the override is
+  **null**, and Fails if it is not, because every number this shard has ever recorded assumes
+  stock. With a mode selected it asserts the override is ours, and — because
+  `MovementPath.Path_OnTarget` clears the override at `MovementPath.cs:126` — it **reinstalls and
+  counts** rather than letting a GM's `[Path` silently revert the shard to stock. So the exposure
+  is bounded at one health interval and is visible in the health line; it is never Ok while a
+  runtime override from the `nav-pathfinder` token is in force. **What the instrument measured, and
+  the decision it feeds, is `PATHFINDER-DECISION.md`.**
 - **The heuristic is admissible against one discounting tag, and no more.** An edge multiplies all
   of its tags while the heuristic takes the cheapest one, and a gate edge is a flat cost for which
   geographic distance is no lower bound at all. Neither case arises in the current data - **gate
   routing is not active and no gate edge has ever been authored** - and both must be settled before
   it is.
+- **`Nav.Planner` checks that claim against the live data every sixty seconds**, from 12 September
+  2026, rather than leaving it as prose. It builds tiny graphs in memory and compares `NavGraph`'s
+  A* against a plain Dijkstra, and **the overshoot REVIEW.md:91 names is real and reproducible**:
+  two stacked 0.5 tags over 200 tiles make A* return 100.00 where the optimum is 53.75. The same
+  shape over 20 tiles agrees, so the fault scales with distance rather than with stacking as such.
+  It **cannot fire on the data as authored** - five cost tags of which exactly one discounts
+  (`road`, 0.9), and the only edge carrying two tags multiplies out to 1.17, a net penalty - and the
+  check is Ok while that holds and Warns the moment a second discounting tag appears or an edge's
+  product drops below the cheapest single one. Both gate cases agree, including one where the gate
+  hangs two hops in; that is reported as *no disagreement found* rather than as *gates are safe*,
+  because there is no gate edge in the data to test against.
 - **The mainland is the ANCHOR's component**, `Custom.NavHomeWaypoint` (Britain's bank plaza), with
   largest-component only as a fallback for a graph that has named no anchor. Largest was wrong, and
   one adopt proved it by bringing in 481 waypoints against it.
@@ -450,6 +471,8 @@ and no `Warn` at all — on exactly the edges the audit had flagged as occupied.
 | `[NavRoute <from> <to>` | GameMaster | Print the computed hops and cost |
 | `[NavAudit` | Administrator | Pathfind every walk edge against real map data |
 | `[WalkAudit [probes\|selftest]` | Administrator | **Walk** every edge in both directions and every arrival from each approach, with real probe walkers |
+| `[NavHopProbe gen\|validate\|<pairs>` | Administrator | Plan hops **three ways** - stock, a `Custom/` copy of stock, and that copy with `FastAStarAlgorithm.cs:118`'s dead-end `break` changed to `continue` - reporting success, route length and **node expansions** for each. `gen` builds a controlled set from real waypoint pairs at 9/12/16/20/24 tiles across flat, climbing and door-crossing terrain; `validate` asserts the copy returns byte-identical routes to stock; `budget <n>` runs both copies at a raised node budget. Token `nav-hop-probe` |
+| `[NavPlannerCheck` | Administrator | `NavGraph`'s A* against a plain Dijkstra on hand-built graphs - the admissibility test REVIEW.md:91 asked for. Token `nav-planner` |
 
 **`[NavMark` links only to your previous mark, never by proximity.** Linking by nearness would
 silently connect two waypoints through a building — which is exactly the class of bug the
@@ -586,6 +609,18 @@ sake of a report. It re-walks `MovementPath.Directions` and matches the engine's
 is exempt — so it does not invent obstructions the walker would not meet.
 
 ## The pathfinder is greedy, and it has a budget
+
+> **Measured properly on 12 September 2026 - see `PATHFINDER-DECISION.md`. Two corrections.**
+> The mechanism named below is right and the emphasis is wrong. `MaxDepth` is what binds: of the
+> 32 failures in a controlled set of 586 hops, **18 were budget exhaustion and 14 were an open
+> list that genuinely drained**. And the box binds never - not one search in the whole evaluation
+> returned out-of-box, at any length up to 24 tiles.
+>
+> What the budget is worth, measured rather than argued: raising it from 300 to 600 changes
+> **one row in 2,514** on a full bot walk audit, and 1,000 or 8,000 change nothing beyond that.
+> The related suspicion - that `FastAStarAlgorithm.cs:118`'s dead-end `break` throws away live
+> searches - is real in principle and worth **zero** here: it fired on none of 2,904 measured
+> hops.
 
 Measured this session, and it explains more walk failures than the graph does.
 
@@ -1381,6 +1416,20 @@ The cost is that a walker takes one more step at four waypoints.
 
 ### The evidence for a pathfinder evaluation at a higher cap
 
+> **Superseded, 12 September 2026, and the headline hypothesis is FALSIFIED.** The evaluation was
+> done; `PATHFINDER-DECISION.md` is its memo. Measured on the fleet's own class, the 566 edges
+> authored at exactly 12 tiles are the **cleanest on the graph** - 1,132 rows at mean ratio 1.022
+> with zero unroutable, against 1.0388 across all 2,310 and 1.114 at eight tiles. *Every* authored
+> length from five to eleven is worse than twelve. So "authoring at the cap costs the fleet" is not
+> true and the roadmap should stop carrying it; the section below is kept as the record of how the
+> question was framed, and the paragraph beginning *"The premise this session started with"* already
+> half-saw it.
+>
+> What replaced it: **the box has never been the binding constraint** - not one search in the whole
+> evaluation returned `OutOfBox` - and the cap question is terrain-dependent rather than a single
+> number. Flat ground plans reliably to 24 tiles (39/40); climbing breaks between 16 and 20 (32/40
+> at twenty). See the memo, *Could the hop cap move to 16 or 24?*
+
 Kept deliberately, because the fixes above erase most of the traces and this is the one question the
 findings were expected to answer.
 
@@ -1438,6 +1487,55 @@ seam and a loaded gun in the same object.
 
 **This is a note, not a plan. Nothing here assigns it**, and a session that wants to should price
 the blast radius first: every creature in the world paths through it.
+
+**Priced, 12 September 2026.** `Custom.NavPathfinder` assigns it and `Nav.Pathfinder` polices it,
+both off by default. The blast radius was answered by construction rather than by argument: the two
+modes that run a different algorithm run it **for bot subjects only** - the same
+`BotPathPolicy.IgnoreDoors` predicate MODIFICATIONS entry 6 asks - and delegate verbatim to
+`FastAStarAlgorithm.Instance` for everything else, so a full `[WalkAudit` with the instrument
+installed came back **row-identical on all 2,514 creature rows** as well as all 2,514 bot rows.
+The `[Path` hazard is handled rather than documented away; see *Current contract*.
+
+## `LoopCost` - the whole game loop, and the only place it is measured
+
+*Standing instrument, added 12 September 2026 with the pathfinder evaluation. It is not about
+navigation, and it lives here because navigation is what asked for it first.*
+
+REVIEW.md:114 asks for **whole-game-loop p95/p99/max delay** and says in the same breath that the
+`BotTick` stopwatch cannot supply it - that stopwatch times one callback and excludes the walker,
+every other timer, the packet handlers and the delta queues. `Core.CyclesPerSecond` and
+`Core.AverageCPS` (`Main.cs:274-278`) are the only whole-loop numbers the engine keeps, and a mean
+rate hides exactly what a scale test is looking for.
+
+`Scripts/Custom/Core/LoopCost.cs` is that number. `Server/Main.cs:586-588` ends every loop iteration
+with `if (Slice != null) Slice();`, and **nothing else in the tree subscribes** - so `Core.Slice +=`
+is a free per-cycle hook on the game thread with no upstream edit and nothing to displace. It is
+`+=` rather than `=` deliberately, so a later system can have the same hook.
+
+Off by default: `Custom.LoopCostSampler=False`. The `loop-cost` token takes `on`, `off` and `reset`,
+because a measurement window has to be opened against a shard that is already warm - a restart to
+turn a sampler on measures the boot as much as the thing under test. It reports through
+`Core.Process` rather than taking a check of its own, beside the mean rate it is the tail of.
+
+**What it measures, stated honestly.** The gap between two `Slice` callbacks is the whole cycle
+PERIOD - the `AutoResetEvent` wait plus the body - and one hook per cycle cannot split them. On a
+busy shard the wait collapses and the period is the work; on an idle one a large p99 means nothing,
+and the p50 sits at the Windows timer granularity of 15.6 ms because that is how often the loop is
+woken, not how long a cycle takes. **The max is meaningful in both regimes**: it is the longest the
+shard went without completing a cycle.
+
+Measured on its first outing, 12 September 2026:
+
+| | live fleet, 60 bots, 667 s | under a 12-probe `[WalkAudit`, 226 s |
+| --- | --- | --- |
+| cycles | 42,411 - 63.6/s | 13,282 - 58.8/s |
+| p50 / p95 / p99 | 15.59 / 17.52 / 21.83 ms | 15.62 / 23.08 / 47.42 ms |
+| max | 185 ms | **8,532 ms** |
+
+**That 8.5-second maximum is `[WalkAudit`'s own approach-tile cliff scan** - 22,386 tiles, 76,984
+engine paths, `cliffSeconds` 8.49 - which runs synchronously on the game thread. It is admin-only so
+it is not a live-shard hazard, but it is the shard's longest freeze outside a world save, and until
+this instrument existed nothing in the tree could have said so.
 
 ## Adopting uo-offline's data
 
