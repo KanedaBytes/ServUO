@@ -467,102 +467,214 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// THE FORWARD QUESTION: may a bot step onto the tile this mobile is standing on?
+        /// THE FORWARD QUESTION: may this mover step onto the tile this occupant stands on?
         ///
-        /// A pure reading of what the engine will actually answer, for the instruments - the rung
-        /// log, the walk audit's BUSY and FRAGILE rows - which have to describe the rule rather
-        /// than a rule of their own. Mobile.Move asks the OCCUPANT (Mobile.cs:3216), and there are
-        /// exactly three answers:
+        /// A faithful mirror of what the engine will actually answer, for the instruments - the
+        /// rung log, the walk audit's BUSY and FRAGILE rows - which have to describe the rule
+        /// rather than carry one of their own. Mobile.Move asks the OCCUPANT (Mobile.cs:3216,
+        /// :3243), so the shape below is the engine's own dispatch: which OnMoveOver override the
+        /// occupant carries, and then what that override asks about the mover.
         ///
-        ///   BaseCreature  - BaseCreature.OnMoveOver routes a bot mover into BotShove.OnMoveOver
-        ///                   (BaseCreature.cs:4546, MODIFICATIONS entry 5), whose mover branch
-        ///                   returns CheckShove, which for every IBotMover is true. A stock
-        ///                   vendor, a guard, a llama and another bot are all the same answer.
-        ///   PlayerMobile  - refuses an uncontrolled creature outright unless somebody is dead or
-        ///                   a hidden staff member (PlayerMobile.cs:3487-3491). THIS USED TO BE
-        ///                   "THE ONE REFUSAL" and it no longer catches a bot at all: a bot is not
-        ///                   an uncontrolled BaseCreature any more, so it falls to base.
-        ///   anything else - Mobile.OnMoveOver defers to the mover's CheckShove (Mobile.cs:3506),
-        ///                   which is true.
+        ///   WalkAuditProbe   - an unconditional true with no base call (NavWalkAudit.cs:362).
+        ///                      Transparent to everything, which is a deliberate divergence from a
+        ///                      real bot and is why it is asked about first.
+        ///   PlayerBot        - BotShove first (PlayerBot.cs:777), then PlayerMobile's.
+        ///   IDailyLifeActor  - BotShove first (eight overrides), then BaseCreature's.
+        ///   BaseCreature     - BotShove first (BaseCreature.cs:4557, MODIFICATIONS entry 5), then
+        ///                      the uncontrolled-mover refusal (:4564).
+        ///   PlayerMobile     - NO BotShove at all. The uncontrolled-mover refusal (:3488), then
+        ///                      base. That exclusion is the whole reason entry 5 exists.
+        ///   anything else    - Mobile.OnMoveOver defers to the mover's CheckShove (:3506).
         ///
-        /// WHICH IS WHY IT TAKES THE MOVER. That branch turns on the mover's class, so an answer
-        /// computed from the occupant alone is wrong for one of the two movers whatever it says: a
-        /// bot passes a live player and the walk audit's probe, which IS an uncontrolled
-        /// BaseCreature, does not. It was right to omit while both movers were creatures; the
-        /// class swap made the two disagree. Bots.Shove asserts both, because it asks the real
-        /// OnMoveOver for every ordered PAIR rather than for every occupant.
+        /// WHICH IS WHY IT TAKES THE MOVER. Two of those five rows turn on the mover's class, so
+        /// an answer computed from the occupant alone is wrong for one of the two movers whatever
+        /// it says. It was right to omit while both movers were creatures; the class swap of 12
+        /// September 2026 made them disagree.
         ///
-        /// Mirrored rather than measured by calling OnMoveOver: that call is side-effect-free for
-        /// a bot mover today, in all three branches, and the day it is not, an instrument that
-        /// deducted a player's stamina to draw a log line would be a genuinely nasty bug. The
-        /// contract probe (BotShoveProbe, reported as Bots.Shove) asserts this against the real
-        /// OnMoveOver for every ordered pair, which is where the two are held together.
+        /// RE-DERIVED against ConsentsToBotPass, which the previous version's own comment deferred
+        /// to "the vocabulary session". What that fixes is an occupant-only early return which
+        /// used to stand at the top of this method - "occupant is IBotActor, return true" -
+        /// answered BEFORE the mover was looked at. It said a stock uncontrolled vendor may step
+        /// onto a bot, where the engine refuses it: PlayerBot.OnMoveOver reaches PlayerMobile's
+        /// branch for exactly that mover. The deviation the engine is expressing there is a named
+        /// one, held open on purpose - a stock vendor still jams against a bot - and it is now
+        /// MODELLED rather than contradicted.
+        ///
+        /// WHAT IS DELIBERATELY NOT MODELLED, because a pure predicate cannot be:
+        /// Mobile.m_Pushing (Mobile.cs:3180, :3529) makes the engine's answer stateful WITHIN one
+        /// step - the second occupant of a single move is free whatever the rule says. Every
+        /// answer here is the answer for the first occupant of a step, which is the only one a
+        /// walker ever asks about.
+        ///
+        /// Mirrored rather than measured by calling OnMoveOver. That call is side-effect-free for
+        /// a bot mover, but for a player mover on a facet without FreeMovement it deducts ten
+        /// stamina (Mobile.cs:3544) - and an instrument that cost a player stamina to draw a log
+        /// line would be a genuinely nasty bug. BotShoveProbe (reported as Bots.Shove) asserts
+        /// this against the real OnMoveOver for every ordered pair on both facets, which is where
+        /// the two are held together.
         /// </summary>
         public static bool MayBotPass(Mobile mover, Mobile occupant)
         {
+            if (mover == null)
+            {
+                return true;
+            }
+
+            // Mobile.OnMoveOver's own first branch (Mobile.cs:3508): a mobile that is gone or
+            // off-map blocks nothing. Every override in the table above reaches it through base.
             if (occupant == null || occupant.Deleted || occupant.Map == null)
             {
                 return true;
             }
 
-            // A BOT IS ASKED ABOUT BEFORE IT IS ASKED WHAT CLASS IT IS, and from the day bots
-            // became PlayerMobiles that ordering is the whole correctness of this method. The
-            // PlayerMobile branch below is "THE ONE REFUSAL", written when the only PlayerMobile
-            // on the shard was a real player. A bot now satisfies that cast too, so without this
-            // line the answer inverts: every bot would be reported as a mobile no bot may walk
-            // through, which is the exact opposite of CheckShove => true and of what the engine
-            // actually does.
-            //
-            // This is not cosmetic. NavWalker reads MayBotPass to decide whether a blocker is
-            // shovable, so the inverted answer would make the walker treat a crowd of its own
-            // fleet as a wall and climb the recovery ladder against it.
-            //
-            // IBotActor rather than PlayerBot: this is Core, and Core does not name bot classes.
-            if (occupant is IBotActor)
+            // THE PROBE IS TRANSPARENT TO EVERYBODY, and is asked about before anything else
+            // because it is an IBotMover as well and a later branch would answer it for the wrong
+            // reason. NavWalkAudit.cs:362 is an unconditional true with no base call.
+            if (occupant is IBotMover && !(occupant is IBotActor))
             {
                 return true;
             }
 
-            var player = occupant as PlayerMobile;
-
-            if (player == null)
-            {
-                return true;
-            }
-
-            // A BOT PASSES A REAL PLAYER. Sean's decision, 12 September 2026, to match upstream.
+            // A BOT MOVER IS NEVER REFUSED BY ANY OCCUPANT, and that is one fact rather than five
+            // coincidences. Both refusals the engine has - PlayerMobile.cs:3488 and
+            // BaseCreature.cs:4564 - are keyed on the MOVER being an uncontrolled BaseCreature,
+            // which a PlayerMobile bot is not. So every occupant falls through to the mover's own
+            // CheckShove, which PlayerBot answers with an unconditional true (PlayerBot.cs:765).
             //
-            // PlayerMobile.OnMoveOver (PlayerMobile.cs:3487-3491) refuses a mover only at
-            // `m is BaseCreature && !Controlled`. A bot stopped satisfying that cast on 12
-            // September 2026, so it falls through to Mobile.OnMoveOver (Mobile.cs:3506-3514),
-            // which asks the MOVER's CheckShove - and PlayerBot answers an unconditional true.
-            // Bots.Shove failed on exactly this one pair and named it, which is the argument for
-            // that probe made better than any of its own comments make it.
+            // A BOT PASSES A REAL PLAYER. Sean's decision, 12 September 2026, to match upstream,
+            // whose PlayerBot.CheckShove is the same unconditional true (uo-offline
+            // CustomBots/PlayerBot.cs:595) for the reason their comment gives: the engine's
+            // full-stamina rule jammed their bank plazas. The deviation that spends was deliberate
+            // and documented; this line is the diagnostic agreeing with the engine rather than a
+            // rule of its own.
             //
-            // The deviation this spends was deliberate and documented - a README bullet and a
-            // MODIFICATIONS entry-5 paragraph both said "a bot still yields to a real player".
-            // Upstream never held it: their PlayerBot.CheckShove is an unconditional true
-            // (uo-offline CustomBots/PlayerBot.cs:595), and their reason was that the engine's
-            // full-stamina rule jammed their plazas. Matching them is the decision; this line is
-            // the diagnostic catching up with the engine, not a rule of its own.
+            // AND NOTE WHAT IT DOES NOT REST ON: the FreeMovement short-circuit. On Trammel
+            // Mobile.CheckShove returns true for every mover before reading anything at all
+            // (Mobile.cs:3518, Map.cs:128), so the bot override is not what carries this cell
+            // there - it is what carries it on Felucca. The answer is the same either way, and
+            // Bots.Shove asks both facets so the override cannot be deleted unnoticed.
             if (mover is IBotActor)
             {
                 return true;
             }
 
-            // AND THE OTHER MOVER IS NOT A BOT. The walk audit's probe is an uncontrolled
-            // BaseCreature, so a real player refuses it exactly as before - which is the branch
-            // below, PlayerMobile.OnMoveOver's own condition in its own terms, unchanged. Its full
-            // condition also passes when the mover itself is dead.
+            // FROM HERE THE MOVER IS NOT A BOT: the walk audit's BaseCreature probe, a real
+            // player, a daily-life actor, a stock creature, or a controlled pet.
+
+            // Every occupant that consults BotShove answers an IBotMover mover with that mover's
+            // own CheckShove, which both implementers make true (BotShove.cs:100). A real
+            // PlayerMobile is the one occupant that does not consult it, so it is excluded here
+            // and falls to the refusal below - which is exactly the asymmetry MODIFICATIONS entry
+            // 5 was written to close for stock creatures and deliberately did not close for
+            // players.
+            if (mover is IBotMover && !IsRealPlayer(occupant))
+            {
+                return true;
+            }
+
+            // A BOT OCCUPANT ALSO CONSENTS TO THE TOWN'S OWN TRAFFIC - BotShove's second branch
+            // (BotShove.cs:123-126), which is ConsentsToBotPass and is narrower than this question
+            // by design. Asked after the branch above, which already covers the overlap between
+            // the two.
+            if (occupant is IBotActor && ConsentsToBotPass(mover))
+            {
+                return true;
+            }
+
+            // WHAT IS LEFT IS THE UNCONTROLLED-CREATURE REFUSAL, which PlayerMobile.OnMoveOver
+            // (:3488-3490) and BaseCreature.OnMoveOver (:4564-4567) carry in identical words, and
+            // which every occupant still standing here carries one of.
             //
-            // IBotActor rather than a BaseCreature test on the mover, for two reasons: this is
-            // Core, which does not name bot classes, and Nav.Actor's ledger allows this file
-            // exactly one BaseCreature type test, which the factory already spends.
-            //
-            // NOT DONE HERE, ON PURPOSE: re-deriving this against ConsentsToBotPass now that the
-            // two have stopped mirroring each other, and the probe rewrite that would go with it.
-            // Those are the vocabulary session's.
-            return !player.Alive || player.IsDeadBondedPet || (player.Hidden && player.IsStaff());
+            // RESTATED WHOLE, including the two MOVER-side clauses the previous version omitted
+            // and whose own comment admitted to omitting: a dead mover, or a dead bonded pet,
+            // passes a live player. Unreachable for a live walker, and the point of writing it out
+            // is that a cell nobody can reach is still a cell that must not be wrong.
+            if (IsUncontrolledCreature(mover))
+            {
+                return (!occupant.Alive || !mover.Alive
+                        || occupant.IsDeadBondedPet || mover.IsDeadBondedPet)
+                    || (occupant.Hidden && occupant.IsStaff());
+            }
+
+            // Mobile.OnMoveOver (:3513) hands the question to the mover's CheckShove.
+            return MoverShoves(mover, occupant);
+        }
+
+        /// <summary>
+        /// A real person's character, connected or not - never a bot, and never the walk probe.
+        ///
+        /// The one occupant class whose OnMoveOver does not consult BotShove, because
+        /// PlayerMobile.cs is an upstream file and is left alone. A LINK-DEAD PLAYER IS A PLAYER:
+        /// the test is the type and nothing else, for the reason Describe records - the Player
+        /// flag cannot tell a bot from a person, and a null NetState cannot either.
+        /// </summary>
+        private static bool IsRealPlayer(Mobile mobile)
+        {
+            return mobile is PlayerMobile && !(mobile is IBotActor);
+        }
+
+        /// <summary>
+        /// The engine's own uncontrolled-creature test, in one place.
+        ///
+        /// THE SECOND BaseCreature TYPE TEST IN THIS FILE, and it is deliberate rather than
+        /// creeping: Nav.Actor's ledger (NavActorCheck.cs:253-261) allowed this file exactly one,
+        /// spent by Describe's animal-and-monster branch, and that ledger's own comment calls
+        /// itself "a LEDGER, not a ban - what stops the two becoming three". This is the two, and
+        /// the reason is that the condition being mirrored is literally this. Writing it as
+        /// anything else would be a paraphrase, and paraphrasing this exact condition is the fault
+        /// the whole re-derivation exists to clear up.
+        /// </summary>
+        private static bool IsUncontrolledCreature(Mobile mobile)
+        {
+            var creature = mobile as BaseCreature;
+
+            return creature != null && !creature.Controlled;
+        }
+
+        /// <summary>
+        /// The mover's CheckShove, mirrored: Mobile.cs:3516-3558.
+        ///
+        /// THE WHOLE GUARDED BODY IS SKIPPED ON A FreeMovement FACET, and that is not a detail.
+        /// MapRules.TrammelRules includes FreeMovement (Map.cs:128) and MapDefinitions.cs:27-32
+        /// gives TrammelRules to Trammel, Ilshenar, Malas, Tokuno and TerMur - so on this shard's
+        /// own facet every mover's CheckShove is an unconditional true and the full-stamina rule
+        /// never runs at all. Only Felucca pays it, and Mobile.cs:3518 is the only reader of that
+        /// flag in the whole Server tree.
+        ///
+        /// Which is why the sentence this layer's documentation carried for a year - "a real
+        /// player shoving a bot still pays the engine's full-stamina rule, full stamina, minus
+        /// ten" - was true of Felucca and false of the facet the bots actually live on.
+        ///
+        /// NOT MODELLED, deliberately: m_Pushing (:3529), which makes the second occupant of a
+        /// single step free; and PlayerMobile.CheckShove's WraithForm branch
+        /// (PlayerMobile.cs:3498), which turns on a spell state rather than on a class. Both are
+        /// named in the ordered-pair table beside the cells they touch.
+        /// </summary>
+        private static bool MoverShoves(Mobile mover, Mobile occupant)
+        {
+            if (mover.Map == null || mover.IgnoreMobiles
+                || (mover.Map.Rules & MapRules.FreeMovement) != 0)
+            {
+                return true;
+            }
+
+            if (!occupant.Alive || !mover.Alive
+                || occupant.IsDeadBondedPet || mover.IsDeadBondedPet)
+            {
+                return true;
+            }
+
+            if (occupant.Hidden && occupant.IsStaff())
+            {
+                return true;
+            }
+
+            if (mover.IsStaff())
+            {
+                return true;
+            }
+
+            return mover.Stam == mover.StamMax;
         }
 
         /// <summary>

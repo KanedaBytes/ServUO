@@ -249,6 +249,18 @@ namespace Server.Custom
         ///
         /// So this is a LEDGER, not a ban. It is what stops the two becoming three between now and
         /// then, which a blanket rule nobody could satisfy would not.
+        ///
+        /// AND IT WENT TO THREE ON PURPOSE, 12 September 2026, with the collision vocabulary.
+        /// NavWalkFailures.cs holds two now rather than one. The second is IsUncontrolledCreature,
+        /// and the reason is that MayBotPass had to stop paraphrasing the engine and start
+        /// mirroring it: the condition both PlayerMobile.OnMoveOver (:3488) and
+        /// BaseCreature.OnMoveOver (:4564) actually test is whether the mover is an uncontrolled
+        /// BaseCreature, and the previous version expressed it as "the occupant is a PlayerMobile
+        /// and the mover is not a bot" - which is a different claim, and was wrong for a stock
+        /// creature mover onto a bot. A mirror of a type test is a type test.
+        ///
+        /// This is the ledger doing the job it describes: the number moved with a reason attached,
+        /// rather than a third test appearing quietly.
         /// </summary>
         private static readonly Dictionary<string, int> AllowedTypeTests =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
@@ -257,7 +269,11 @@ namespace Server.Custom
                 // job; this is the seam, not a leak through it.
                 { "NavActor.cs", 1 },
                 { "NavWalker.cs", 1 },
-                { "NavWalkFailures.cs", 1 },
+
+                // TWO: Describe's animal-and-monster branch, and IsUncontrolledCreature - the
+                // engine's own uncontrolled-mover condition, which MayBotPass mirrors rather than
+                // paraphrases. See the note above for why the number moved.
+                { "NavWalkFailures.cs", 2 },
             };
 
         /// <summary>
