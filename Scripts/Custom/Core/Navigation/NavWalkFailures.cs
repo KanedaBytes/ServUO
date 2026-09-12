@@ -479,9 +479,18 @@ namespace Server.Custom
         ///                   returns CheckShove, which for every IBotMover is true. A stock
         ///                   vendor, a guard, a llama and another bot are all the same answer.
         ///   PlayerMobile  - refuses an uncontrolled creature outright unless somebody is dead or
-        ///                   a hidden staff member (PlayerMobile.cs:3486). THE ONE REFUSAL.
+        ///                   a hidden staff member (PlayerMobile.cs:3487-3491). THIS USED TO BE
+        ///                   "THE ONE REFUSAL" and it no longer catches a bot at all: a bot is not
+        ///                   an uncontrolled BaseCreature any more, so it falls to base.
         ///   anything else - Mobile.OnMoveOver defers to the mover's CheckShove (Mobile.cs:3506),
         ///                   which is true.
+        ///
+        /// WHICH IS WHY IT TAKES THE MOVER. That branch turns on the mover's class, so an answer
+        /// computed from the occupant alone is wrong for one of the two movers whatever it says: a
+        /// bot passes a live player and the walk audit's probe, which IS an uncontrolled
+        /// BaseCreature, does not. It was right to omit while both movers were creatures; the
+        /// class swap made the two disagree. Bots.Shove asserts both, because it asks the real
+        /// OnMoveOver for every ordered PAIR rather than for every occupant.
         ///
         /// Mirrored rather than measured by calling OnMoveOver: that call is side-effect-free for
         /// a bot mover today, in all three branches, and the day it is not, an instrument that
@@ -489,7 +498,7 @@ namespace Server.Custom
         /// contract probe (BotShoveProbe, reported as Bots.Shove) asserts this against the real
         /// OnMoveOver for every ordered pair, which is where the two are held together.
         /// </summary>
-        public static bool MayBotPass(Mobile occupant)
+        public static bool MayBotPass(Mobile mover, Mobile occupant)
         {
             if (occupant == null || occupant.Deleted || occupant.Map == null)
             {
@@ -521,9 +530,38 @@ namespace Server.Custom
                 return true;
             }
 
-            // PlayerMobile.OnMoveOver's own branch, in its own terms, for a LIVE bot mover - the
-            // only mover anything asks this about. Its full condition also passes when the mover
-            // itself is dead, which for a bot is a one-second window before it deletes itself.
+            // A BOT PASSES A REAL PLAYER. Sean's decision, 12 September 2026, to match upstream.
+            //
+            // PlayerMobile.OnMoveOver (PlayerMobile.cs:3487-3491) refuses a mover only at
+            // `m is BaseCreature && !Controlled`. A bot stopped satisfying that cast on 12
+            // September 2026, so it falls through to Mobile.OnMoveOver (Mobile.cs:3506-3514),
+            // which asks the MOVER's CheckShove - and PlayerBot answers an unconditional true.
+            // Bots.Shove failed on exactly this one pair and named it, which is the argument for
+            // that probe made better than any of its own comments make it.
+            //
+            // The deviation this spends was deliberate and documented - a README bullet and a
+            // MODIFICATIONS entry-5 paragraph both said "a bot still yields to a real player".
+            // Upstream never held it: their PlayerBot.CheckShove is an unconditional true
+            // (uo-offline CustomBots/PlayerBot.cs:595), and their reason was that the engine's
+            // full-stamina rule jammed their plazas. Matching them is the decision; this line is
+            // the diagnostic catching up with the engine, not a rule of its own.
+            if (mover is IBotActor)
+            {
+                return true;
+            }
+
+            // AND THE OTHER MOVER IS NOT A BOT. The walk audit's probe is an uncontrolled
+            // BaseCreature, so a real player refuses it exactly as before - which is the branch
+            // below, PlayerMobile.OnMoveOver's own condition in its own terms, unchanged. Its full
+            // condition also passes when the mover itself is dead.
+            //
+            // IBotActor rather than a BaseCreature test on the mover, for two reasons: this is
+            // Core, which does not name bot classes, and Nav.Actor's ledger allows this file
+            // exactly one BaseCreature type test, which the factory already spends.
+            //
+            // NOT DONE HERE, ON PURPOSE: re-deriving this against ConsentsToBotPass now that the
+            // two have stopped mirroring each other, and the probe rewrite that would go with it.
+            // Those are the vocabulary session's.
             return !player.Alive || player.IsDeadBondedPet || (player.Hidden && player.IsStaff());
         }
 

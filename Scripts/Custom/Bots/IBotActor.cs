@@ -13,9 +13,12 @@
 // It is the one handle Core/Navigation has on a bot:
 //
 //   NavWalkFailures.Describe        labels a mobile in a failure record
-//   NavWalkFailures.MayBotPass      answers "may a bot walk through this?" - and asks IBotActor
-//                                   FIRST, because since the swap a bot also satisfies the
-//                                   PlayerMobile test that method calls THE ONE REFUSAL
+//   NavWalkFailures.MayBotPass      answers "may this mover walk through this occupant?" - and
+//                                   asks IBotActor of BOTH. Of the occupant first, because since
+//                                   the swap a bot also satisfies the PlayerMobile test that
+//                                   method used to call THE ONE REFUSAL; and of the mover, because
+//                                   from 12 September 2026 a bot passes a live real player and the
+//                                   walk audit's BaseCreature probe still does not
 //   NavWalker.DescribeMobiles       labels the occupants in a wedge log, same ordering, same reason
 //   NavActor.NavPlayerActor         reads the step pace off it
 //

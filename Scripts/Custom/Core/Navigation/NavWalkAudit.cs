@@ -1151,7 +1151,11 @@ namespace Server.Custom
 
                 if (blocker != null)
                 {
-                    row.OccupiedUnshovable = !NavWalkFailures.MayBotPass(blocker);
+                    // The walker's own mobile is the mover, and it matters here: the probe is an
+                    // uncontrolled BaseCreature, so a real player refuses it where a bot would
+                    // walk through. An answer asked of the blocker alone would book that as a
+                    // fault in the road.
+                    row.OccupiedUnshovable = !NavWalkFailures.MayBotPass(walker.Mobile, blocker);
                     row.Occupied = String.Format(
                         "{0} ({1}) at {2},{3}",
                         blocker.Name ?? "?",

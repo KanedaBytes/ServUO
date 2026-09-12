@@ -1440,7 +1440,7 @@ namespace Server.Custom
 
             if (blocker != null)
             {
-                bool shovable = NavWalkFailures.MayBotPass(blocker);
+                bool shovable = NavWalkFailures.MayBotPass(_mobile, blocker);
 
                 if (Ledger)
                 {

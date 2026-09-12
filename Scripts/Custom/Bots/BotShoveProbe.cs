@@ -27,6 +27,19 @@
 // an accountless PlayerMobile standing in for a disconnected player - the case whose
 // misclassification the review found, and which needs no client to reproduce.
 //
+// A BOT PASSES A REAL PLAYER, from 12 September 2026. Sean's decision, taken to match upstream,
+// and the reason this probe exists at all. The class swap of that morning made a bot a
+// PlayerMobile; PlayerMobile.OnMoveOver refuses a mover only at `m is BaseCreature && !Controlled`,
+// so a bot mover stopped being refused and fell through to its own CheckShove, which is an
+// unconditional true (upstream's rule - uo-offline CustomBots/PlayerBot.cs:595 - and their reason
+// was that the engine's full-stamina rule jammed their plazas). That spent a DELIBERATE deviation
+// with a README bullet and a MODIFICATIONS entry-5 paragraph behind it, silently, and the only
+// reason anybody noticed is that this probe asserts the diagnostic against the engine for every
+// ordered pair. NavWalkFailures.MayBotPass now says so too, and takes the MOVER to say it: a bot
+// passes a live player and the walk probe, being an uncontrolled BaseCreature, still does not.
+// Both pairs are asserted here. The probe rewrite and the re-derivation of MayBotPass against
+// ConsentsToBotPass are the vocabulary session's and are deliberately not done.
+//
 // WHAT IT DOES NOT DO: call bot.OnMoveOver(player). A player mover falls through BotShove to the
 // engine's own stamina rule, which DEDUCTS TEN STAMINA on the way past (Mobile.cs:3516-3550). The
 // contract on that path is "we do not answer, the engine decides", so that is what is asserted -
@@ -197,7 +210,7 @@ namespace Server.Custom
         private static int Forward(List<string> problems, Mobile mover, Mobile occupant)
         {
             bool engine = occupant.OnMoveOver(mover);
-            bool diagnostic = NavWalkFailures.MayBotPass(occupant);
+            bool diagnostic = NavWalkFailures.MayBotPass(mover, occupant);
 
             if (engine != diagnostic)
             {
