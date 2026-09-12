@@ -15,13 +15,15 @@
 //     takes an INavActor (Core/Navigation/NavActor.cs) with two implementations, and this class
 //     gets NavPlayerActor.
 //
-//  2. STILL OWED - doors, in the PATHFINDER. FastAStarAlgorithm.cs:77,93 sets
-//     MoveImpl.AlwaysIgnoreDoors from bc.CanOpenDoors and only for a BaseCreature, and resets it
-//     after every GetSuccessors call (:102), so no Custom/-side assignment survives one loop
-//     iteration. A route therefore still will not PLAN through a closed door. Move() below
-//     recovers the step once a route has aimed at one, which is upstream's own answer
-//     (PlayerBot.cs:611-620) and is all a Custom/-side change can do; the pathfinder half is an
-//     upstream edit and belongs to its own session.
+//  2. SPENT, 12 September 2026, and it is the one that cost an upstream edit. Doors, in the
+//     PATHFINDER: FastAStarAlgorithm.cs:77,93 set MoveImpl.AlwaysIgnoreDoors from bc.CanOpenDoors
+//     and only for a BaseCreature, resetting it after every GetSuccessors call (:102), so no
+//     Custom/-side assignment survived one loop iteration and a route would not PLAN through a
+//     closed door. Move() below recovered the step once a route had aimed at one - upstream's own
+//     answer, and all a Custom/-side change could do - but no route ever aimed at one. It is now
+//     MODIFICATIONS entry 6: an IBotActor branch beside the BaseCreature one, answered by
+//     Bots/BotPathPolicy.cs, guarded by Nav.Doors on [CoreSmoke. The known limit it inherits from
+//     upstream is locked doors, counted as the walk ledger's `locked-door` cause.
 //
 //  3. SPENT. The PlayerMobile dependency was shallow - about sixteen overrides upstream, most of
 //     them virtual on Mobile anyway. It was, and the ledger of which we adopted is in the Bots
@@ -714,12 +716,13 @@ namespace Server.Custom
         /// Mobile.Move only returns false for a genuinely blocked STEP - a turn always succeeds -
         /// so by the time we get here the bot already faces d, and d is the tile to look at.
         ///
-        /// THIS IS HALF THE DOOR PROBLEM AND SAYS SO. It recovers a step a route has already aimed
-        /// at a door; it does not make the PATHFINDER willing to plan through one, because
-        /// FastAStarAlgorithm.cs:77,93 sets MoveImpl.AlwaysIgnoreDoors only for a BaseCreature and
-        /// resets it after every GetSuccessors call (:102), so nothing on this side of the seam
-        /// survives a single loop iteration. Reason 2 in the header; an upstream edit, in its own
-        /// session. Upstream hit exactly this and needed two engine patches for it.
+        /// THIS IS HALF THE DOOR PROBLEM, and for one day it was the half that never fired. It
+        /// recovers a step a route has already aimed at a door, and until 12 September 2026 no
+        /// route did: FastAStarAlgorithm.cs:77,93 set MoveImpl.AlwaysIgnoreDoors only for a
+        /// BaseCreature and reset it after every GetSuccessors call (:102), so nothing on this side
+        /// of the seam survived a single loop iteration. The other half is MODIFICATIONS entry 6,
+        /// and Nav.Doors asserts that the two meet - route through the door tile, then this step
+        /// onto it, on a real bot at a real Britain doorway.
         ///
         /// The scan itself is Core/DoorHelper.cs, shared with NavWalker's Door rung, which has
         /// asked the same question since before bots were PlayerMobiles.

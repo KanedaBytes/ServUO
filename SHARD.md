@@ -202,10 +202,22 @@ Rules in force for bots and occupied tiles, each with its row in the README's De
   uo-offline's `CheckShove => true`, with the reason recorded (the engine's full-stamina rule jammed
   their plazas). The *shoved* side consents through `BotShove`, and `BaseCreature.OnMoveOver` routes
   every stock creature - a vendor, a guard, an animal - through it too (MODIFICATIONS entry 5), which
-  is still what carries the walk-audit probe. **The "a bot still yields to a real player" half is
-  gone, and nobody chose to spend it**: `PlayerMobile.OnMoveOver` refuses a mover only when it is an
-  uncontrolled `BaseCreature`, and a bot is no longer one, so it falls through to the mover's own
-  `CheckShove`. `Bots.Shove` fails on exactly that pair and names it. Session 3 owns the decision.
+  is still what carries the walk-audit probe. The "a bot still yields to a real player" half is gone:
+  `PlayerMobile.OnMoveOver` refuses a mover only when it is an uncontrolled `BaseCreature`, and a bot
+  is no longer one, so it falls through to the mover's own `CheckShove`. **The class swap spent that
+  deviation without anybody choosing to, and `Bots.Shove` is what caught it** - one failing pair out
+  of twenty. Sean's decision of 12 September 2026 was to keep upstream's rule, so `NavWalkFailures.MayBotPass`
+  now says so too and takes the **mover** to say it: a bot passes a live player, and the walk audit's
+  probe, being an uncontrolled `BaseCreature`, still does not. Re-deriving that predicate against
+  `ConsentsToBotPass` is the vocabulary session's.
+- **A bot's route plans through a closed door, and its step opens one.** MODIFICATIONS entry 6 - the
+  second `.cs` edit in the tree - puts an `IBotActor` branch beside `FastAStarAlgorithm`'s
+  `BaseCreature` one, because `MoveImpl.AlwaysIgnoreDoors` is reset inside the search loop and no
+  `Custom/`-side assignment survives a single iteration. The step-time half, `PlayerBot.Move` through
+  `Core/DoorHelper.cs`, was already there and was firing on routes that never aimed at a door.
+  `Nav.Doors` on `[CoreSmoke` asserts both, plus the half that matters for a merge: a plain
+  `PlayerMobile` must **not** get the same route. The known limit is locked doors, counted as the
+  ledger's `locked-door` cause rather than guessed at.
 - **The reverse pass is narrower, on purpose**: a bot lets through another bot, the walk probe and a
   daily-life actor, and a stock vendor still jams against it. `BotShove.MayBotPass` answers the
   forward question and `ConsentsToBotPass` the reverse one; they were one predicate until 7e, which

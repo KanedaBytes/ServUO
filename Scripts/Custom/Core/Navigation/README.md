@@ -70,6 +70,21 @@ read when it was. **Where the two disagree, this section is the one that has bee
   `NavPlayerActor` deliberately has no `SpeedInfo` in the path - it would clamp toward
   `MaxDelayWild` the moment a bot took damage - so the two are the same number. `[BotPace` exists to
   tell them apart and, for a bot, no longer can.
+- **A route plans through a closed door for a `BaseCreature` with `CanOpenDoors`, and for an
+  `IBotActor`. For nothing else.** `FastAStarAlgorithm` sets `MoveImpl.AlwaysIgnoreDoors` per node
+  expansion and resets it after every `GetSuccessors` call, so this cannot be done from outside the
+  algorithm at all - it is **MODIFICATIONS entry 6**, one of two `.cs` edits in the tree, and
+  `BotPathPolicy.IgnoreDoors` is the `Custom/`-side predicate it asks. A plain `PlayerMobile` is
+  refused, which is deliberate and is half of what `Nav.Doors` asserts: a real player still opens
+  doors by hand. **The known limit is locked doors** - `AlwaysIgnoreDoors` has no unlocked-only
+  notion, so a bot's route can plan through a locked non-house door and fail at it; house doors are
+  safe because `FastMovementImpl.IsOk` runs `BaseHouseDoor.CheckAccess` in its door branch. That
+  limit is measured rather than assumed: `NavWalkFailures.CauseFor`'s fourth cause is `locked-door`.
+- **`Nav.Doors`** asserts the gate from both sides on `[CoreSmoke` - a real `PlayerBot` routes from
+  a street waypoint to a shop arrival *through* the door tile, a plain `PlayerMobile` does not, the
+  bot's step onto that tile opens the door and lands, and `AlwaysIgnoreDoors` is false afterwards.
+  Cached rather than live, because `HealthCheck.RunAll` runs every sixty seconds and the subject is
+  a real bot; it runs at `ServerStarted` and with `[BotSmoke`.
 - **`Nav.Actor`** holds the adapter's verdict on a step against the engine's, and guards that
   `AIObject` appears in the adapter and nowhere else under this folder. It passed the class swap
   **unedited**: the new branch is an `as PlayerMobile`, which its `BaseCreature` regex does not
@@ -320,7 +335,7 @@ from uo-offline-server's leg recovery, which escalates repath → nudge-and-repa
 | --- | --- | --- |
 | 1 `Repath` | Drop the cached goal so A\* runs again from here | Most obstructions are a mobile that has since moved. The cheapest thing that works, and in practice it is the one that fires |
 | 2 `Sidestep` | Step off the tile in a random direction, up to `SidestepTiles`, then repath | Breaks a wedge against scenery or a crowd, and gives the repath a different starting tile — which matters, because the audit only ever validated the canonical one |
-| 3 `Door` | Open the closed door in the way, through `BaseDoor.Use` | Their bots get this free inside `Move` because a `PlayerBot` overrides it; a `BaseCreature` does not, so it has to be a deliberate rung |
+| 3 `Door` | Open the closed door in the way, through `BaseDoor.Use` | A `BaseCreature` has no `Move` override, so it has to be a deliberate rung. A bot reaches the same scan from inside `PlayerBot.Move`, as upstream's does - both go through `Core/DoorHelper.cs`. Since MODIFICATIONS entry 6 a bot's route *plans* through the door as well, so for a bot this rung is now the recovery it was always meant to be rather than the only door handling there was |
 | 4 `SkipWaypoint` | Give up on this waypoint and aim at the next one in the route | The cheap "route via a different waypoint". Two hops is at most twice the cap, still inside the engine's 38-tile box. Refused on the last step, where skipping would mean arriving somewhere the caller did not ask for |
 | 5 `Teleport` | Move the mobile onto the waypoint | Visibly wrong, so it goes last and prefers nobody watching |
 

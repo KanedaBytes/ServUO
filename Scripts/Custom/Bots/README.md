@@ -111,15 +111,20 @@ premise that no longer holds. The four reasons it rested on, and where each of t
    implementations - `NavCreatureActor` and `NavPlayerActor` - chosen in the one place,
    `NavActor.For`. See the Deviations row *Locomotion is an interface, not a per-behaviour step
    timer*.
-2. **Doors — STILL OWED, and now a debt rather than a saving.** `FastAStarAlgorithm.cs:77,93` sets
-   `MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors` and only for a `BaseCreature`, resetting it
-   after every `GetSuccessors` call (`:102`), so nothing on the `Custom/` side survives one loop
-   iteration. A bot's routes therefore no longer **plan** through a closed door. `PlayerBot.Move`
-   recovers the step once a route has already aimed at one - upstream's own answer
-   (`PlayerBot.cs:611-620`), through the shared `Core/DoorHelper.cs` - but that is half the problem.
-   **It is measured**: terminal walk failures went from ~0.5 to **6.6 per 100 walks**, and the edges
-   that fail are interior shop arrivals - the inn, the alchemist, the tailor. The pathfinder half is
-   an upstream edit and belongs to its own session. Upstream needed two engine patches for it.
+2. ~~**Doors, in the pathfinder**~~ — **spent, 12 September 2026, and it cost an upstream edit.**
+   `FastAStarAlgorithm.cs:77,93` set `MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors` and only
+   for a `BaseCreature`, resetting it after every `GetSuccessors` call (`:102`), so nothing on the
+   `Custom/` side survived one loop iteration and a bot's routes no longer **planned** through a
+   closed door. `PlayerBot.Move` recovered the step once a route had already aimed at one -
+   upstream's own answer (`PlayerBot.cs:611-620`), through the shared `Core/DoorHelper.cs` - but
+   that was half the problem, and the half that never fired because no route aimed anywhere near a
+   door. **It was measured**: terminal walk failures went from ~0.5 to **5.23 per 100 walks**, 67 of
+   68 of them bots, 47 with nobody standing anywhere near, the top edges interior shop arrivals -
+   the inn, the alchemist, the tailor. This was the one reason of the four that could not be paid
+   from `Custom/`, and it is now **MODIFICATIONS entry 6**: two hunks, seven added lines, no
+   upstream line changed, guarded by **`Nav.Doors`** on `[CoreSmoke`. Upstream needed two engine
+   patches; we needed one, and inherited their known limit on locked doors rather than their fix
+   for it - see the Deviations row *The door gate is one call, not two type tests*.
 3. ~~**The `PlayerMobile` dependency was shallow**~~ — **spent, and it was.** About sixteen
    overrides upstream, most of them virtual on `Mobile` anyway. The ledger of which we adopted, which
    we already had, which we did not need and which are deferred is in *What we took from upstream's
@@ -353,6 +358,43 @@ an override reaches without the walker knowing. The only real door asymmetry is 
 *pathfinder* - `FastAStarAlgorithm.cs:77,93` sets `MoveImpl.AlwaysIgnoreDoors` only for a
 `BaseCreature` - and that is an upstream patch the class swap needs, not an adapter member. Reason 2
 in *The constraint everything else follows from* is therefore still live.
+
+> **Settled, 12 September 2026.** That last sentence is spent: the patch is MODIFICATIONS entry 6
+> and reason 2 is struck through. Everything above it held - door policy is still not an adapter
+> member, and the asymmetry was still only in the pathfinder.
+
+### The door gate is one call, not two type tests
+
+*Added 12 September 2026, with MODIFICATIONS entry 6.*
+
+Both trees had to teach their A* that a bot may route through a closed door, because both made their
+bots `PlayerMobile`s and both pathfinders gate that on `BaseCreature`. The difference is what the
+engine file ends up saying.
+
+**Upstream names the class, twice.** `patches/0006-bitmapastar-bots-path-through-unlocked-doors.patch`
+writes `m is Server.CustomBots.PlayerBot` into `BitmapAStarAlgorithm.cs` at two sites
+(`:161`, `:169` as applied), and their patch B replaces the `if (bc != null)` block outright - which
+leaves `var bc = m as BaseCreature;` (`:193`) with no reader at all, dead code their own patch
+introduced. Their install applies it with `git apply` from `install.ps1:463-490`.
+
+**We call one `Custom/` static and keep the vocabulary on our side.** `BotPathPolicy.IgnoreDoors(p)`
+returns `bool?`, `null` meaning "not mine, carry on", which is MODIFICATIONS entry 5's shape. The
+reason is the log itself: with the type test in the engine file, every future change to *which*
+mobiles route through doors is another upstream edit, and the collision session is going to want to
+move exactly that predicate. The `BaseCreature` branch is untouched and keeps priority, so `bc` keeps
+its reader and no `BaseCreature` route changes - which is what a green `[WalkAudit` over 2,510 legs
+actually checks, its probes being `BaseCreature`s.
+
+**And we took one patch where they took two.** Their second closes the locked-door case with a
+`_currentMobileUnlockedDoorsOnly` flag and a per-cell guard. ServUO has nowhere to put that: the
+door test is `FastMovementImpl.IsOk` (`FastMovement.cs:39-52`) reading one global `bool`, so the
+guard would be a second upstream edit in a second file. It is deliberately not taken - which leaves
+us in exactly the position upstream's own *slow* path is in, and they documented it as a known limit
+(`INTEGRATION-NOTES.txt:245-250`). House doors need no guard either way: `IsOk` already ends its door
+branch with a `BaseHouseDoor.CheckAccess`, so a bot never plans through a house door it may not open,
+which is a **better** position than upstream's on that case. The locked non-house case is counted
+rather than guessed at - `NavWalkFailures` reports it as the `locked-door` cause - and the second
+edit is taken only if that number justifies it.
 
 ### A haul goes to the nearest STAFFED bench, not to any bench of the trade
 
