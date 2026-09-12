@@ -274,6 +274,17 @@ namespace Server.Custom
 
                 bot.MoveToWorld(new Point3D(stand.X, stand.Y, ZAt(map, stand, anchor.Outside.Z)), map);
 
+                // FACE IT FIRST, or the Move below is a TURN and not a step.
+                //
+                // Mobile.Move returns true for a turn without moving anything, which is the same
+                // rule PlayerBot.Move's own comment leans on from the other side: by the time Move
+                // returns FALSE the mobile is already facing d. A probe that skipped this read
+                // "Move returned True, it is standing where it started, the door is still shut" -
+                // a green engine reported as a broken one. The engine's own pathfinding walker
+                // does exactly this, `from.Direction = d;` before `from.Move(d)`
+                // (MovementPath.cs:152-155).
+                bot.Direction = step;
+
                 bool moved = bot.Move(step);
                 openedIt = door.Open;
 
