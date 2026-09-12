@@ -86,9 +86,14 @@ change drives most of the differences in this folder.
 
 Four reasons, in the order of what they cost to work around otherwise:
 
-1. **`NavWalker` takes a `BaseCreature`** (`Core/Navigation/NavWalker.cs:63`). It drives
-   `BaseAI.DoMove` and works around `ForceStayHome` and `Home`. This shard has exactly one walker
-   on purpose, and a `PlayerMobile` cannot use it.
+1. ~~**`NavWalker` takes a `BaseCreature`**~~ — **spent, 11 September 2026.** It took a
+   `BaseCreature`, drove `BaseAI.DoMove` and worked around `ForceStayHome` and `Home`, and this
+   shard has exactly one walker on purpose, so a `PlayerMobile` could not use it. It now takes an
+   `INavActor` (`Core/Navigation/NavActor.cs`), with `NavCreatureActor` as the only implementation
+   and `NavActor.For` as the single place a second one is chosen. **This reason no longer holds**,
+   which is step 1 of the migration `CLASS-DECISION.md` records; the three below still stand until
+   their own sessions. See the Deviations row *Locomotion is an interface, not a per-behaviour step
+   timer*.
 2. **Doors.** `FastAStarAlgorithm.cs:93` sets `MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors`,
    and only for a `BaseCreature` — a `PlayerMobile` bot treats every closed door as a wall.
    `CanOpenDoors` defaults true for a humanoid body (`BaseCreature.cs:1924`). Upstream had to patch
@@ -225,6 +230,39 @@ looks like a mistake later, read the reason before "fixing" it back.
 > once would restate seventy citations nobody had re-checked. The navigation data itself is
 > identical at both pins (`Data/Custom/reference/README.md` has the record-level comparison), so no
 > row that turns on waypoints or destinations is affected by the move.
+
+### Locomotion is an interface, not a per-behaviour step timer
+
+*Added 11 September 2026, with the `INavActor` extraction.*
+
+Upstream gives each behaviour its own `_stepTimer` and `StepOnce`, at an interval picked from the
+bot's mount and whether it is running (`Behaviors/TravelerBehavior.cs:3249-3272`), and walks the leg
+with a `PathFollower` the behaviour owns (`:1963`, `:3323`). Here the whole fleet is driven from one
+shared 50 ms timer inside `NavWalker`, and what differs between mobile classes is behind
+`INavActor` (`Core/Navigation/NavActor.cs`).
+
+**Why not theirs.** Three of the walker's eight users are daily-life `BaseCreature`s -
+`DailyLifeTownsfolk`, the shop-schedule vendors and `[WalkAudit`'s own probe - which must keep
+`BaseAI`'s own `NextMove` clock, so a per-behaviour timer would have to exist *alongside* it rather
+than instead of it. The shared timer also predates the class question and is not a workaround for
+it: `PlayerRangeSensitive` freezes a creature's AI when nobody is watching, so a walker driven from
+its own `OnThink` would stop the moment no player was near, and a `PlayerMobile` has no AI timer to
+drive from at all. `CLASS-DECISION.md` §5 makes the same point from the other side - under
+`PlayerMobile` the shared timer stops being a workaround and becomes the only mechanism.
+
+**What that costs, and where it is paid.** The step clock has to come from somewhere. For a
+`BaseCreature` it is `BaseAI.NextMove`, unchanged. For a `PlayerMobile` it becomes
+`INavActor.NextStepTick`, a field the adapter advances after each step from the pace, the way
+`BaseAI.DoMoveImpl` advances it (`BaseAI.cs:2349-2353`) - which is why that member is a tick rather
+than a bool, and why `Step` is on the interface at all rather than being a bare `Mobile.Move`.
+
+**What did NOT need a member: doors.** The brief for this work assumed door policy would be one.
+It is not. The `Door` rung calls `BaseDoor.Use(mobile)`, which takes a `Mobile` and works for
+either class, and upstream opens doors inside `PlayerBot.Move` itself (`PlayerBot.cs:611-618`), which
+an override reaches without the walker knowing. The only real door asymmetry is in the
+*pathfinder* - `FastAStarAlgorithm.cs:77,93` sets `MoveImpl.AlwaysIgnoreDoors` only for a
+`BaseCreature` - and that is an upstream patch the class swap needs, not an adapter member. Reason 2
+in *The constraint everything else follows from* is therefore still live.
 
 ### A haul goes to the nearest STAFFED bench, not to any bench of the trade
 

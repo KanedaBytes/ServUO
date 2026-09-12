@@ -49,6 +49,16 @@ read when it was. **Where the two disagree, this section is the one that has bee
 
 - **Two consumers, not one future one**: Britain daily life and the bot layer, both through
   `NavWalker`. No actor owns its own pathing.
+- **`NavWalker` walks an `INavActor`, not a `BaseCreature`** (`NavActor.cs`). The walker touches its
+  mobile in about seventy places; sixty are plain `Mobile` members with the same answer whichever
+  class is underneath, and it reads those straight off `INavActor.Mobile`. The interface is the
+  eleven that differ - `ForceStayHome`, `AIObject`, `NextMove`, `MoveTo`, `TransformMoveDelay`,
+  `CurrentSpeed`, `Home`, plus `Step` and `PlaceAt` (`Mobile`-level, but a `PlayerMobile` must move
+  its own step clock inside a sidestep and drop its own `PathFollower` on a rescue) and `HasMover`.
+  **`NavCreatureActor` is the only implementation today** and is `BaseAI` exactly as the walker
+  drove it inline; `NavActor.For` is the one place a second implementation is chosen. `Nav.Actor`
+  holds the adapter's verdict on a step against the engine's, and guards that `AIObject` appears in
+  the adapter and nowhere else under this folder.
 - **An authored hop may be at most `Custom.NavHopMaxTiles` (12) tiles**, because
   `FastAStarAlgorithm` searches a 38x38 box and returns no path *silently* beyond it. A walker may
   stop `NavWalker.ArrivalRangeFor` (2) tiles short and plan the next hop from there, so a new
@@ -1507,6 +1517,52 @@ under the Trinsic pier — `CanFit` false, `TryResolveZ` no, all eight neighbour
 one it **must** pass, and it prints `SELF-TEST OK` or `SELF-TEST BROKEN` rather than leaving a
 reader to invert the verdict themselves. It seeds the *work list*, never `navigation.json`, so
 there is no seed to remove and no window in which a road through a wall could be committed.
+
+### The walker stopped taking a BaseCreature
+
+*11 September 2026.* Step 1 of the `PlayerMobile` migration
+(`Scripts/Custom/Bots/CLASS-DECISION.md`). `NavWalker(BaseCreature)` was reason 1 in the bots
+README for why a `PlayerBot` is not a `PlayerMobile`; it is now `NavWalker(INavActor)` and that
+reason is spent. **Nothing else changed** - no class swap, no `PlayerMobile` implementation, no
+behaviour.
+
+Kept because the shape of the proof is the reusable part. The extraction was gated against a
+baseline captured on the previous build, and the gate's own split was **measured rather than
+assumed**: two sweeps of the unchanged build established which of `walk-audit.json`'s columns are
+deterministic and which are not. The answer is that all 2,306 **edge** rows are identical run to
+run in `pass`, `tiles`, `pathTiles`, `ratio`, `rungs` and goal `x,y,z` - so those are gateable, and
+they are the per-edge detour comparison - while **arrival** rows move, because an arrival point is
+a stochastic pick plus a scatter, and `stopX/Y/Z`, `steps` and `seconds` move everywhere.
+
+The gate then passed on exactly that basis: every headline number identical, all 2,510 rows
+identical on the stable columns, all 2,306 edge rows identical on the detour columns, and
+`[WalkAudit selftest` reproducing its failing hop with the same full ladder -
+`Repath 1, Sidestep 1, Door 1, SkipWaypoint 1, Teleport 1` - which is what proves every rung still
+fires through the adapter rather than only the common path.
+
+**What the gate could not settle, and how it was settled.** One parity boot came back worse in four
+places at once: `fragile 1 / contested 1` on the sweep (one arrival walk into the Britain bank fired
+a `Repath` and still passed), `Bots.Life` warning that one bot of twelve was mid-recovery when its
+window closed, `Bots.Recipe` warning that a town had drifted outside its share, and `Bots.Shift`
+**failing** - a miner's ore went to a bench other than `brit-forge`. The fleet's own rung counter had
+gone from 4 repaths to 11 over a comparable number of walks.
+
+None of it was the extraction, and the way that was established is the part worth keeping. The
+mechanisms were ruled out first and cheaply: no `BaseCreature` overload exists at any site the
+walker hands `_mobile` to, so retyping that field to `Mobile` rebound no call;
+`BaseCreature.AIObject` is a plain field-backed getter, so the adapter's per-call read is identical
+to the local the walker used to cache; and the null-AI guard sits in the same place with the same
+effect. Then the whole protocol was re-run on the same binary, and **every one of the four recovered**
+- `Bots.Life`, `Bots.Recipe` and `Bots.Shift` all passed, and the fleet repath rate came back to
+0.45 per 100 walks against the baseline's 0.54.
+
+Two lessons, both of which cost real time here. **A fleet-populated shard cannot be held to a
+same-boot noise band** - two back-to-back sweeps agree far more closely than two boots do, so a
+band measured the first way will call ordinary variation a regression. And **the probes that depend
+on where sixty bots happen to be standing are not parity instruments**: `Bots.Shift` needs a smith
+clocked in at a named forge inside a seven-minute window, and the boot that failed it had already
+reported, independently, that its population had drifted away from that town. The instrument with
+the statistical weight is the walk audit's 2,306 deterministic edge rows, and those never moved.
 
 ## Reference
 

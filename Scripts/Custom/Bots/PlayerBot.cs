@@ -10,9 +10,12 @@
 // single largest deliberate divergence in the port. The reasons, in order of
 // how much they cost to work around otherwise:
 //
-//  1. NavWalker takes a BaseCreature (Core/Navigation/NavWalker.cs:63). It
-//     drives BaseAI.DoMove and works around ForceStayHome and Home. There is
-//     one walker on this shard on purpose, and a PlayerMobile cannot use it.
+//  1. SPENT, 11 September 2026. NavWalker took a BaseCreature, drove
+//     BaseAI.DoMove and worked around ForceStayHome and Home; there is one
+//     walker on this shard on purpose and a PlayerMobile could not use it. It
+//     now takes an INavActor (Core/Navigation/NavActor.cs), so this reason no
+//     longer holds. That was step 1 of the migration in CLASS-DECISION.md;
+//     reasons 2-4 below still stand until their own sessions.
 //
 //  2. Doors. ServUO's FastAStarAlgorithm sets MoveImpl.AlwaysIgnoreDoors from
 //     bc.CanOpenDoors (FastAStarAlgorithm.cs:93) and only for a BaseCreature -
