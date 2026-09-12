@@ -64,6 +64,18 @@ read when it was. **Where the two disagree, this section is the one that has bee
   `PlaceAt` because a rescue that left a follower walking to the old goal from the old tile would
   spend the next hop walking back. `NavActor.For` is the one place either is chosen, and the class
   swap added exactly one branch there and changed none of the eight construction sites.
+- **A bot's refused step turns twice and retries, exactly as a creature's does**, from 12 September
+  2026. `NavPlayerActor` carries the whole of `BaseAI.DoMoveImpl` (`BaseAI.cs:2323-2507`) rather than
+  its tail: the `CheckMove` clock gate, `Direction = d` *before* the step, `Pushing = false`, and the
+  turn-twice retry at `:2483-2499` that returns `SuccessAutoTurn`. Three clauses are deliberately
+  absent and each is named at the site — the five `BaseCreature`-only bad-state tests, because
+  `Mobile.Move` enforces the ones that matter for both classes (`Mobile.cs:3123-3132`);
+  `MoveImpl.IgnoreMovableImpassables`, because a bot may not walk where a player may not; and the
+  obstacle-clearing block, whose door half already runs one level lower inside `PlayerBot.Move`
+  (`PlayerBot.cs:759-767`) and whose destroy half is the furniture rule again. **`Step` is not part
+  of it.** The Sidestep rung is a bare `Mobile.Move` for *both* adapters, so it gets no auto-turn on
+  either — and `Nav.Actor`'s wall assertion asks whether a step in one named direction is refused,
+  which an adapter that answered by stepping somewhere else would not be answering.
 - **For a `PlayerMobile`, the two delay members are equal by construction**, and that costs an
   instrument. `NavCreatureActor` distinguishes the pace a creature was *given* (`CurrentSpeed`) from
   the pace the engine *steps on* (`TransformMoveDelay`, which runs it through `SpeedInfo`).
@@ -88,13 +100,24 @@ read when it was. **Where the two disagree, this section is the one that has bee
 - **`[WalkAudit` walks two probe classes and reports per class**, from 12 September 2026 - a
   `BaseCreature` for the daily-life walkers and `NavCreatureActor`, and a real `PlayerBot` for the
   fleet and `NavPlayerActor`. The gate is 2,510 / 0 failed / 0 fragile **per class**, and the bot
-  class does not currently meet it: 3 failed, 10 fragile, every one of them explained below under
-  *Two probes, and the rebaseline*. **Every sweep number recorded in this file before that section
+  class now reads **1 failed, 1 to 2 fragile** — down from 1 to 3 failed and 14 to 17 fragile before
+  the step-recovery port of 12 September 2026, measured over two sweeps each side. Its one remaining
+  failure is a single authored edge, `uo-rec-2-1 -> brit-tan-1`, whose ends are on opposite sides of
+  a sealed building; it is Sean's to move in the editor and is named below under *The port, and what
+  it left standing*. **Every sweep number recorded in this file before the rebaseline section
   is a `BaseCreature` number.**
 - **`Nav.Actor`** holds the adapter's verdict on a step against the engine's, **once per probe
   class**, and guards that `AIObject` appears in the adapter and nowhere else under this folder. It passed the class swap
   **unedited**: the new branch is an `as PlayerMobile`, which its `BaseCreature` regex does not
   match, so the ledger is still 1 each for `NavActor.cs`, `NavWalker.cs` and `NavWalkFailures.cs`.
+  **A fourth assertion, added with the step-recovery port, is the only cross-class one**: on the same
+  blocked tile every adapter reaches the same verdict and leaves its probe turned by the same amount.
+  It compares *magnitude* rather than facing, because `BaseAI.cs:2485` rolls the turn direction per
+  call and two probes on one tile may honestly end up facing `into+1` and `into-1`; and the expected
+  magnitude is derived from `Movement.CheckMovement` rather than named, so a tile whose neighbourhood
+  makes the roll decide the answer is reported instead of failed. On the seed tile it reads *turned 2
+  step(s)* — the wall refuses both diagonals, since a diagonal step needs both its orthogonal
+  neighbours and one of them is the wall, so the first turn cannot land and the second does.
 - **An authored hop may be at most `Custom.NavHopMaxTiles` (12) tiles**, because
   `FastAStarAlgorithm` searches a 38x38 box and returns no path *silently* beyond it. A walker may
   stop `NavWalker.ArrivalRangeFor` (2) tiles short and plan the next hop from there, so a new
@@ -950,7 +973,7 @@ recorded above as reshuffling completely.
 - **The bot's planned route is longer on 394 rows and shorter on none**, median 1 tile longer, max
   5. On **2** it has no engine route at all where the creature has one.
 
-#### Finding 1 — the old probe plans through furniture and a bot does not
+#### Finding 1 — the old probe plans through furniture and a bot does not — CLOSED BY DECISION
 
 `FastAStarAlgorithm.cs:100` sets `MoveImpl.IgnoreMovableImpassables = bc.CanMoveOverObstacles`
 **only inside the `BaseCreature` branch**. `BaseCreature.CanMoveOverObstacles` is
@@ -974,7 +997,14 @@ would make the creature probe stop matching the daily-life `BaseCreature`s it st
 get it from the same `Core.AOS`. The honest position is that **the two probes measure two different
 pathfinders because the shard has two**, and the per-class rows now say so.
 
-#### Finding 2 — a bot has no step-level recovery, and the audit can now see it
+**Sean's ruling, 12 September 2026, and it closes this:** *"If I can't as a player do something, then
+the bot shouldn't be able to either."* Bots path around movable impassables as players do. Entry 6
+does not widen, the step-recovery port below deliberately leaves
+`MoveImpl.IgnoreMovableImpassables` unset for the same reason, and **the bot-class detour baseline is
+the fleet's own** — the creature probe's detour figures are not the fleet's and are not to be quoted
+as if they were.
+
+#### Finding 2 — a bot has no step-level recovery, and the audit can now see it — FIXED, 12 September 2026
 
 All 3 failures and all 10 fragile rows are the bot class; the creature class has none of either.
 
@@ -998,10 +1028,91 @@ So a daily-life `BaseCreature` gets two extra step attempts on every refused ste
 none; a bot's coarsest substitute is the walker's own Sidestep rung, twenty seconds away. The ten
 fragile rows fit the same shape — nine of them are a single `Repath` on an interior arrival.
 
-**Reported rather than fixed.** Giving `NavPlayerActor` an auto-turn is a locomotion-parity change
-that would alter how every bot in the world walks, and it belongs with whoever owns that parity
-rather than with the session that found it. The measurement is now permanent: the bot probe walks
-every sweep.
+**Reported rather than fixed** *(when this was written; the next section is the session that fixed
+it)*. Giving `NavPlayerActor` an auto-turn is a locomotion-parity change that would alter how every
+bot in the world walks, and it belongs with whoever owns that parity rather than with the session
+that found it. The measurement is now permanent: the bot probe walks every sweep.
+
+#### The port, and what it left standing
+
+*12 September 2026, the locomotion-parity session. The fix Finding 2 asked for, plus a second gap
+the port itself turned up.*
+
+`NavPlayerActor` now carries **the whole of `BaseAI.DoMoveImpl`**, clause by clause, with the three
+deliberate omissions named in the [Current contract](#current-contract) bullet. The turn-twice retry
+is the one Finding 2 named; the port also closed a second gap, below.
+
+##### Finding A — a heading change cost a bot a step and it reported it as taken
+
+`DoMoveImpl` assigns `m_Mobile.Direction = d` *before* it steps (`BaseAI.cs:2346-2347`, carrying the
+comment *"This makes them always move one step, never any direction changes"*). `StepAndAdvance`
+never did. `Mobile.Move` only moves a mobile that **already faces `d`** (`Mobile.cs:3119`);
+otherwise it turns and returns **true**. So on the direct-step branch every heading change burned a
+step clock, moved nothing, and told the walker it had stepped. The follower branch never had the
+fault — `PathFollower.Follow` calls `SetDirection` itself (`PathFollower.cs:141,148`).
+
+It is visible in `stepRatio`, which is what `[BotPace` reads:
+
+| steps per tile, all bot rows | mean | median |
+| --- | --- | --- |
+| before | 1.1287, 1.1266 | 1.0800 |
+| after | 0.9665, 0.9772 | **0.8300** |
+| `BaseCreature`, same graph | 0.8583, 0.8533 | 0.8300 |
+
+**The bot's median is now the creature's, to the decimal.** Two sweeps each side, same boot per side.
+
+##### The two baselines after the port
+
+| class | walked | failed | fragile | contested | seconds |
+| --- | --- | --- | --- | --- | --- |
+| **BaseCreature** | 2,510 | **0** | **0** | 0 | 190 |
+| **PlayerBot**, sweep 1 | 2,510 | **1** | **2** | 2 | 244 |
+| **PlayerBot**, sweep 2 | 2,510 | **1** | **1** | 1 | 216 |
+
+Against **1 to 3 failed and 14 to 17 fragile** over two pre-port sweeps of the same graph on the same
+boot. The `BaseCreature` row is unchanged and **every one of its 1,310 edge rows is identical** to
+the pre-port sweep on `pass`, `tiles`, `pathTiles` and `ratio`; the 27 rows that moved are all
+*arrivals*, which this file already records as a stochastic pick plus a scatter. The same holds for
+the bot class — **not one edge row moved on `pass`, `tiles`, `pathTiles` or `ratio`**, so the port
+changed how a bot recovers a refused step and changed nothing about where the engine sends it.
+
+**Fixed by the port:** both `arrived-no-stand-tile` failures. `wp-23 -> brit-mine-west` failed twice
+before and passes twice after; `brit-minenorth-2 -> brit-mine-north` was fragile with
+`Repath 1, Sidestep 1` and is clean. Both goals are standable — `[TileProbe` says `CanFit True` at
+`1191,1748,2` and `1449,1521,45` — and both sit at the mouth of a slot: at the west mine
+`1191,1749` is impassable forest rising to z 14 and `1190,1748` is rock at z 11, so only the two
+tiles east are open, and at the north mine `1449,1523` is an 11-unit climb the engine refuses. One
+refused step with no turn-and-retry was the whole failure. The twelve-to-fifteen other pre-port
+fragile rows — interior shop arrivals and alley edges, each a single `Repath` — are gone with them.
+
+**Still red, and it is data: `uo-rec-2-1 -> brit-tan-1`.** Measured rather than inferred, with
+`[TileProbe`:
+
+- The tanner's **entire north face is sealed**: `y = 1607` from `x = 1429` to `x = 1439` is a
+  continuous run of `wooden wall` and `window`, every tile `CanFit False`. The authored edge is 8
+  tiles straight through it.
+- The way in is the **east shopfront**: `1440,1612` is open dirt under the eaves and `1439,1612` is
+  wooden floor — the walls above that tile sit at z 40 to 46, head height and above, so it is open at
+  z 20. The street outside is `1441,1612-1615`. (There is also a wooden door at `1440,1614`.)
+- **The route exists for a bot and the engine finds it in one direction only.** The reverse edge
+  `brit-tan-1 -> uo-rec-2-1` has `pathTiles` **25** and passes. Forward, `pathTiles` is **0** — no
+  route at all. That is `FastAStarAlgorithm`'s documented greediness and 300-node budget meeting a
+  straight line that points into a sealed wall.
+- The creature routes it forward in **46** tiles because it plans through movable impassables, which
+  is Finding 1 — withheld from bots by Sean's rule, so this row can never be closed that way.
+
+So it is not a code defect this layer can fix: `MODIFICATIONS.md` entry 6 records why the pathfinder
+flags cannot be driven from `Custom/` at all, and a higher node cap is its own roadmap item. It is an
+edge authored across a building. **The move is Sean's, in the editor** — `navigation.json` was not
+touched this session — and the proposal is: leave `uo-rec-2-1` (`1437,1603,20`) and `brit-tan-1`
+(`1429,1610,20`) where they are; add a street waypoint at `1440,1612,20` and a shopfront waypoint at
+`1439,1612,20`; delete the direct edge and author `uo-rec-2-1 -> 1440,1612` (9 tiles),
+`1440,1612 -> 1439,1612` (1 tile) and `1439,1612 -> brit-tan-1` (10 tiles). Every hop is then inside
+`Custom.NavHopMaxTiles` and none of them asks the pathfinder to search around a building.
+
+**The residual fragile row** is `brit-smith-1 -> brit-forge`, an interior forge arrival with a single
+`Repath` and nobody standing near it, in both post-port sweeps. One `Repath` is the mildest rung and
+the row passes; it is recorded as the floor rather than as a defect.
 
 #### What this does to the numbers already in this file
 
@@ -1627,6 +1738,7 @@ Dated in place, each explaining something still in force:
 | [What three measured windows say](#what-three-measured-windows-say), and windows D and E below it | 9 Sep 2026 | `ac547257` |
 | [What the five real cliffs turned out to be, and the fix](#what-the-five-real-cliffs-turned-out-to-be-and-the-fix) | 11 Sep 2026 | `5629b56d` |
 | [Adopting uo-offline's data](#adopting-uo-offlines-data) and its sweep figures | 7 Sep 2026 | `f62e2813` |
+| [Two probes, and the rebaseline](#two-probes-and-the-rebaseline--done-12-september-2026), and [The port, and what it left standing](#the-port-and-what-it-left-standing) under it | 12 Sep 2026 | `4cf13075`, this one |
 
 `NavAdopt` is deliberately NOT moved here even though its section is mostly measurement: it
 documents a tool that still runs, and its safety property - that there is no code path from it to

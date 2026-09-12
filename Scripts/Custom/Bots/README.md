@@ -797,7 +797,7 @@ measured.
 **What it does NOT rest on.** Not the `FreeMovement` short-circuit — the cell is `yes` on both
 facets, and on Felucca it is `yes` *because* of the override. That is why `Bots.Shove` asks both.
 
-### The town jams between its own actors — reported, not fixed
+### The town jams between its own actors — decided 12 September 2026: it stays
 
 *Found 12 September 2026 while building the collision table. Sean's call was to report it.*
 
@@ -838,6 +838,49 @@ Whether ~24 refusals per dusk justifies widening a collision rule is Sean's call
 says is that it is real and bounded, not that it is harmful: every one of them is a step the
 recovery ladder then handled, and the acceptance window's single terminal walk failure was a
 daily-life actor with **nobody standing anywhere near it** - so none of the 24 became a failed walk.
+
+**Sean's call, 12 September 2026: the town keeps blocking itself, and `IsSymmetricMover` stays keyed
+on `PlayerBot`.** The reason is what the block is *for*: stock blocking is what stops two look-alike
+NPCs coming to rest on the same tile, and a town of vendors standing inside each other is a worse
+artefact than 27 refusals per dusk commute that the ladder absorbs. **No code change**, and the
+one-line widening above stays written down as the thing that was considered and declined rather than
+the thing nobody thought of. The counter stays: `BotShove.ActorJams` is the instrument if the number
+ever stops being a commute.
+
+### Bots path around furniture, because players do
+
+*Decided 12 September 2026, closing Finding 1 of the walk-audit rebaseline.*
+
+Sean's rule, in his words: **"If I can't as a player do something, then the bot shouldn't be able to
+either."**
+
+What it settles is `MoveImpl.IgnoreMovableImpassables`. `FastAStarAlgorithm.cs:100` sets it from
+`bc.CanMoveOverObstacles` inside the `BaseCreature` branch only, and that property is
+`Core.AOS || Body.IsMonster` — true for every `BaseCreature` on this EJ shard, including the old walk
+probe. `MODIFICATIONS.md` entry 6 gives a bot's route `AlwaysIgnoreDoors` and **deliberately not**
+this flag; upstream does not grant it either. The step-recovery port of the same day leaves it unset
+for the same reason, so a bot's *route* and a bot's *step* now agree: both go round the movable
+impassable, the way a player has to.
+
+The consequence worth writing down is about evidence, not behaviour. The `BaseCreature` walk probe
+plans through furniture and the fleet does not, so **every detour figure the audit recorded before
+12 September 2026 was measured on a more permissive pathfinder than the fleet's** — 394 of 2,510
+routes are longer for a bot, none shorter, two do not exist for it at all. The bot-class column is
+the fleet's baseline; the creature column is the daily-life walkers' and is not to be quoted for
+bots. The Navigation README carries both.
+
+### A bot may rest on a vendor's tile
+
+*Decided 12 September 2026.*
+
+There is no occupied-tile rule and none is wanted: **a player can stand on a vendor's tile, so a bot
+can.** The collision table above is the whole of the rule, and nothing in it asks where a walker
+comes to rest — only whether a step onto an occupied tile is allowed. A bot that finishes a hop on a
+shopkeeper is doing what a player does while buying from one.
+
+It is recorded because the opposite is an easy thing to add by reflex — an arrival that refuses an
+occupied tile, or a scatter that avoids vendors — and each would be a rule players do not live under,
+which is the same test the furniture row above turns on.
 
 ### Bots walk through crowds, and yield to players
 
