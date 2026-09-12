@@ -48,7 +48,9 @@ find out. **Where the two disagree, this section is the one that has been re-che
 
 - **A bot is a `BaseCreature` with `Player = true`**, not a `PlayerMobile`. The flag is what gets it
   past the party gate and onto the live map, and it is also why it ghosts rather than vanishing on
-  death. The identity decision is open: REVIEW.md section 3.
+  death. The identity decision is TAKEN: PlayerMobile, accountless now, an Account per
+  persistent economic bot later - see CLASS-DECISION.md, which is the evidence and the
+  migration order. REVIEW.md section 3 is the question it answers.
 - **A bot walks through every occupant except a real player**, and the reverse pass is narrower.
   `BotShove.MayBotPass` answers the forward question, mirroring `BaseCreature.OnMoveOver`'s three
   branches; `ConsentsToBotPass` answers the reverse one, where a stock vendor still jams against a
