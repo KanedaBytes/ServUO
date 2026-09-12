@@ -58,21 +58,22 @@ find out. **Where the two disagree, this section is the one that has been re-che
   never reached that call and merely orphaned the house. No houses, no player vendors, no durable
   property until a bot has an `Account`, which is a decision `CLASS-DECISION.md` defers to the
   session where something is actually owned.
-- **A bot now walks through every occupant INCLUDING a real player, and nobody decided that.**
-  This is the one thing the class swap changed that was not on anybody's list, and it is written
-  here as a contract bullet because it silently spends a named deviation. `PlayerMobile.OnMoveOver`
-  refuses a mover only at `m is BaseCreature && !Controlled` (`PlayerMobile.cs:3488-3491`); a bot
-  mover is no longer a `BaseCreature`, so it falls through to `Mobile.OnMoveOver` -> the mover's own
-  `CheckShove`, which a bot answers `true`. Measured, not inferred: `Bots.Shove` fails on exactly
-  this pair - *"Elowen onto Bot Shove Probe Player: the engine says True, MayBotPass says False"*.
-  It matches upstream, whose bots phase through players too, but this port held the other half
-  deliberately and the decision is Sean's to retake. **Session 3 owns it.**
-- **The reverse pass is unchanged and still narrower.** `BotShove.OnMoveOver`'s `IsSymmetricMover`
-  branch runs before the base call, so a bot, the walk probe and a daily-life actor still pass; and
-  a stock vendor still jams against a bot, because `PlayerMobile.OnMoveOver` carries the *identical*
-  uncontrolled-creature refusal `BaseCreature.OnMoveOver` did. `ConsentsToBotPass` is type-interface
-  based and needed no change at all. `Bots.Shove` asserts both directions against the engine's own
-  `OnMoveOver` for every ordered pair of actors.
+- **A bot walks through every occupant, a real player included, and that is now Sean's decision
+  rather than an accident.** It matches upstream (`uo-offline CustomBots/PlayerBot.cs:595`). The
+  class swap spent that deviation silently and `Bots.Shove` is what caught it; the decision of 12
+  September 2026 was to keep upstream's rule. **The whole rule is one table** - see
+  [The collision table](#the-collision-table), which is the current contract and supersedes every
+  prose description of shove behaviour elsewhere in this file.
+- **The reverse pass is narrower on purpose, and is a policy rather than a mirror.** A bot lets
+  through another bot, either walk-audit probe and a daily-life actor (`ConsentsToBotPass`); a
+  stock vendor still jams against a bot, which is a deviation held open deliberately. A controlled
+  pet is *also* let onto a bot's tile, by a different route and not by consent - the distinction
+  the table's reverse section exists to make.
+- **`Mobile.CheckShove` is a no-op on Trammel**, so `PlayerBot.CheckShove => true` buys nothing on
+  the facet the bots live on and is load-bearing on Felucca only. `Bots.Shove` walks its
+  ordered-pair grid on **both facets**, movers drained to zero stamina, for that reason.
+  Consequence worth knowing before reading older prose here: *"a real player shoving a bot still
+  pays the full-stamina rule"* was true of Felucca and false of here.
 - **A reportable bot death completes. REVIEW.md F2 is closed**, by the class rather than by a patch
   to an upstream file that was correct about every mobile ServUO ships. `ReportMurdererGump` casts
   the victim to `PlayerMobile` (`ReportMurderer.cs:43`) and a bot now satisfies it. `Bots.Death`
@@ -667,7 +668,184 @@ Door recoveries in the walk probe.
 
 Ours additionally passes `checkMobiles: true` when picking the spot, which upstream does not.
 
+### The collision table
+
+*Rewritten 12 September 2026, the collision vocabulary session. **This is the current contract.**
+The section below it is the dated narrative of how the rule was arrived at, and it describes a
+world in which a bot was a `BaseCreature`.*
+
+Four things decide whether a mover may step onto an occupied tile, and they are asked in this
+order. `FastMovementImpl` builds no mobile list (`FastMovement.cs:361`), so **the occupant's
+`OnMoveOver` is the only occupant gate on this shard** — which is what makes the table below the
+whole of the rule rather than most of it.
+
+| Occupant class | Its `OnMoveOver` |
+| --- | --- |
+| `WalkAuditProbe` | an unconditional `true` (`NavWalkAudit.cs:362`). Transparent to everything |
+| `PlayerBot`, and `PlayerBotWalkAuditProbe` | `BotShove` first (`PlayerBot.cs:777`), then `PlayerMobile`'s |
+| the eight `IDailyLifeActor`s | `BotShove` first, then `BaseCreature`'s |
+| stock `BaseCreature`, controlled pet | `BotShove` first (`BaseCreature.cs:4557`, MODIFICATIONS entry 5), then the uncontrolled-mover refusal (`:4564`) |
+| real `PlayerMobile`, connected or not | **no `BotShove` at all.** The uncontrolled-mover refusal (`:3488`), then base |
+| anything else | `Mobile.OnMoveOver` (`:3506`) defers to the mover's `CheckShove` |
+
+`BotShove.OnMoveOver` answers `true` when the mover is an `IBotMover`; `true` when the occupant is
+a `PlayerBot` and `ConsentsToBotPass(mover)`; and `null` — "not mine, carry on" — otherwise.
+
+#### Forward: may this mover step onto this occupant's tile?
+
+Rows are the mover, columns the occupant. **Every cell is Trammel**, and the Felucca differences
+are listed underneath. `Bots.Shove` asserts all of them against the real `OnMoveOver`.
+
+| mover ↓ / occupant → | bot | bot-probe | probe | actor | stock NPC | pet | player | link-dead |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **bot** | yes | yes | yes | yes | yes | yes | **yes** ¹ | **yes** ¹ |
+| **bot-probe** | yes | yes | yes | yes | yes | yes | yes ¹ | yes ¹ |
+| **probe** (`BaseCreature`) | yes | yes | yes | yes | **yes** ² | yes ² | **no** | **no** |
+| **actor** (daily-life) | **yes** ³ | yes ³ | yes | **no** ⁴ | no | no | no | no |
+| **stock NPC** | no | no | yes | no | no | no | no | no |
+| **pet** (controlled) | yes ⁵ | yes ⁵ | yes | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ |
+| **player** | yes ⁵ | yes ⁵ | yes | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ |
+| **link-dead player** | yes ⁵ | yes ⁵ | yes | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ | yes ⁵ |
+
+1. **A bot passes a real player.** Sean's decision of 12 September 2026, to match upstream, whose
+   `PlayerBot.CheckShove` is the same unconditional `true` (`uo-offline CustomBots/PlayerBot.cs:595`)
+   for the reason their comment gives: the engine's full-stamina rule jammed their bank plazas.
+   **This spent a deviation nobody chose to spend** — the class swap did it silently, and
+   `Bots.Shove` is what caught it, one failing pair out of twenty. A **Deviations row** of its own,
+   below.
+2. **MODIFICATIONS entry 5**, and these two cells are now its **only** readers. An uncontrolled
+   `BaseCreature` mover matches `:4564` and is refused outright without the guard.
+3. A bot consents to the town's own traffic — `ConsentsToBotPass`, which is `IBotMover ||
+   IDailyLifeActor`. This is what stops a shopkeeper freezing in a doorway a bot stands in.
+4. **A FINDING, not a rule anybody chose.** `BotShove.IsSymmetricMover` keys on `shoved is
+   PlayerBot` — the one concrete-class test in the whole vocabulary — so a daily-life actor
+   stepping onto **another** daily-life actor gets `null`, falls to `:4564` and is refused. The
+   town jams between its own eight actors. Reported rather than fixed: see the Deviations row.
+5. Decided by `Mobile.CheckShove`, which on Trammel is an unconditional `true`. See below.
+
+#### Reverse: does a bot consent to this mover?
+
+`ConsentsToBotPass` is deliberately narrower than the forward question and is a **policy**, not a
+mirror of the engine: a bot, either probe and a daily-life actor pass; a stock vendor, a pet and a
+player do not. That a pet is nonetheless let onto a bot's tile (row 6 above) is not a
+contradiction — it gets there by a different route, `null` → `PlayerMobile.OnMoveOver` not matching
+a *controlled* creature → `Mobile.OnMoveOver` → the pet's own `CheckShove`. **Two routes to yes,
+and only one of them is consent.** That distinction is what the controlled pet added to
+`Bots.Shove`, and it is why the reverse assertion no longer compares consent against the engine.
+
+#### The facet, which changes half the table and was never written down
+
+**`Mobile.CheckShove` does nothing on Trammel.** Its entire body is guarded by
+`(m_Map.Rules & MapRules.FreeMovement) == 0` (`Mobile.cs:3518`); `MapRules.TrammelRules` includes
+`FreeMovement` (`Map.cs:128`); `MapDefinitions.cs:27-32` gives `TrammelRules` to Trammel,
+Ilshenar, Malas, Tokuno and TerMur. That one test is **the only reader of the flag in the whole
+`Server/` tree**, and when it is skipped `CheckShove` returns `true` having read nothing — no
+stamina test, no ten-point cost, no refusal.
+
+Three consequences:
+
+- **`PlayerBot.CheckShove => true` buys nothing on the facet the bots live on.** The base already
+  answers `true` there. It is load-bearing on **Felucca only**.
+- The sentence this folder carried for a year — *"a real player shoving a bot still pays the
+  engine's full-stamina rule, full stamina, minus ten"* — **was true of Felucca and false of
+  here.** Corrected in place in MODIFICATIONS entry 5 and in `BotShove.cs`'s header.
+- On Felucca the three stamina-decided mover rows (`pet`, `player`, `link-dead`) become
+  conditional: at full stamina the shove is **allowed and charged ten**, and below full it is
+  **refused**. The bot and probe rows stay `yes`, and there they stay `yes` *because of our
+  overrides* — which is why `Bots.Shove` walks the grid on both facets with the bot-like movers
+  **drained to zero stamina**. Without the drain, Felucca proves nothing: the engine allows a
+  full-stamina shove anyway, so the override could be deleted with every cell still green. Empty
+  stamina is also the exact case upstream wrote it for — *"every road-weary bot"*.
+
+#### What the diagnostic says, and what it deliberately cannot
+
+`NavWalkFailures.MayBotPass(mover, occupant)` mirrors the table above, branch for branch, and
+`Bots.Shove` holds the two together across **68 cells on two facets**. Two things it does not
+model, named here rather than left to be discovered:
+
+- **`m_Pushing`** (`Mobile.cs:3180`, `:3529`) makes the engine's answer stateful *within one step*
+  — the second occupant of a single move is free, whatever the rule says. Every answer above is
+  the answer for the first occupant, which is the only one a walker ever asks about.
+- **`PlayerMobile.CheckShove`'s WraithForm branch** (`PlayerMobile.cs:3498`) turns on a spell state
+  rather than a class.
+
+A link-dead player is a **player** in every cell. No test anywhere in the vocabulary uses the
+`Player` flag or an absent `NetState` to mean "bot" — that was REVIEW.md section 4's other finding,
+and `CLASS-DECISION.md`'s sweep ledger is the tree-wide proof of it.
+
+### A bot passes a real player, which is upstream's rule and now ours
+
+*Added 12 September 2026. Sean's decision, taken because it had already happened.*
+
+Upstream's `PlayerBot.CheckShove` is an unconditional `true` (`uo-offline
+CustomBots/PlayerBot.cs:595`) and their comment gives the reason: the engine's full-stamina rule
+*"bounced every road-weary bot off the permanent bank-plaza crowds forever - 500+ pacing events per
+soak"*. This port held the other half deliberately for a long time — a bot could push an NPC but
+not a person — with a README bullet and a MODIFICATIONS entry-5 paragraph both saying so.
+
+**The class swap spent it without anybody choosing to.** `PlayerMobile.OnMoveOver` refuses a mover
+only at `m is BaseCreature && !Controlled` (`:3488`); a `PlayerMobile` bot misses that cast and
+falls through to its own `CheckShove`. The deviation was gone the morning the class changed, and
+the only reason anybody noticed is that `Bots.Shove` asserts the diagnostic against the engine for
+every ordered pair and failed on exactly one of twenty.
+
+So the decision was retaken rather than inherited, and it went upstream's way. What it costs: a bot
+walks through a player standing in a doorway, and a player cannot tell by looking that the bot is
+not another player doing the same. What it buys: the plazas do not jam, which is the thing upstream
+measured.
+
+**What it does NOT rest on.** Not the `FreeMovement` short-circuit — the cell is `yes` on both
+facets, and on Felucca it is `yes` *because* of the override. That is why `Bots.Shove` asks both.
+
+### The town jams between its own actors — reported, not fixed
+
+*Found 12 September 2026 while building the collision table. Sean's call was to report it.*
+
+`BotShove.IsSymmetricMover` is `shoved is PlayerBot && ConsentsToBotPass(mover)` (`BotShove.cs:141`)
+— and `shoved is PlayerBot` is **the one concrete-class test in the whole vocabulary**, where every
+other test is an interface. The consequence is a cell nobody designed: a daily-life actor stepping
+onto **another** daily-life actor gets `null` from `BotShove`, falls through to
+`BaseCreature.OnMoveOver:4564`, and is refused as an uncontrolled creature. Eight actors — two
+townsfolk classes and six `GG` vendors — jam against each other.
+
+It is the same shape as the bug that *was* fixed for bot-versus-shopkeeper, met from the other
+side: the fix taught a **bot** to consent to town traffic and never taught the town to consent to
+itself.
+
+**The one-line fix** is to widen the gate to `shoved is IBotActor || shoved is IDailyLifeActor`,
+which is what every other test in the file already looks like. It is not taken here because
+widening a collision rule is a deviation decision and a silent widening is precisely what the class
+swap did wrong — and because the number matters: eight actors on a town's worth of road is a
+different argument from eight actors in one doorway.
+
+**So it is counted. `BotShove.ActorJams`**, incremented at the fall-through, reported on
+`DailyLife.Smoke`. It needed its own counter because **the walk-failure ledger structurally cannot
+see this**: that ledger records TERMINAL failures - walks that climbed the whole recovery ladder -
+and a jam like this is waited out by the ladder and never reaches it. Exactly the under-reporting
+MODIFICATIONS entry 5 already records about the Trinsic doorway vendor, which *"never reached any
+ledger at all, because the stuck ladder waited her out"*. It is counted once per step rather than
+twice, which is why the eight overrides call `OnMoveOverActor`: an `IDailyLifeActor` occupant is
+asked by its own override AND by `BaseCreature.OnMoveOver` underneath it.
+
+**Measured, 12 September 2026: 27 refusals over the ~7 minutes following a forced dusk-to-day
+cycle, and then flat at 27 for the next 9 minutes of the same boot.** So it is a **commute**
+phenomenon and not a standing one - the actors meet each other on the road going home, and stop
+meeting once they have arrived. Note the forced cycle itself reads **0**, because `[DailyLifeSmoke` compresses
+the clock into milliseconds and the walks it orders happen afterwards in real time; the since-boot
+figure is the one to read.
+
+Whether ~24 refusals per dusk justifies widening a collision rule is Sean's call. What the number
+says is that it is real and bounded, not that it is harmful: every one of them is a step the
+recovery ladder then handled, and the acceptance window's single terminal walk failure was a
+daily-life actor with **nobody standing anywhere near it** - so none of the 24 became a failed walk.
+
 ### Bots walk through crowds, and yield to players
+
+> **HISTORICAL, and its title is now wrong twice over.** Written when a bot was a `BaseCreature`
+> and when a bot yielded to a real player; neither holds. Kept because it is the record of how the
+> rule was arrived at and what each step of it cost to find out, and because a reader of an older
+> diff will meet these arguments. **The contract is
+> [The collision table](#the-collision-table) above.**
 
 Upstream's rule is `PlayerBot.CheckShove => true` (`PlayerBot.cs:504-512`), with its reason in the
 same comment: the engine's full-stamina shove rule "bounced every road-weary bot off the permanent
@@ -740,12 +918,22 @@ classification, not current telemetry. `Describe` also split `Player` on the Net
 link-dead player was labelled a PlayerBot - as something a bot may walk through, about the one
 occupant in the world that refuses; every test there is now a type.
 
-`[BotSmoke` runs `BotShoveProbe` (reported as `Bots.Shove`), which spawns a bot, the walk audit's
-own probe class, a daily-life townsfolk, a stock vendor and an accountless `PlayerMobile`, and
-asserts for every ordered pair that the diagnostic's verdict **equals the engine's** - the real
-`OnMoveOver` call, not a restatement of the predicate. The one path it does not call is a player
-mover onto a bot, which falls through to the engine's full-stamina rule and would cost ten stamina
-to ask; there the assertion is that `BotShove` returns null and stays out of it.
+`[BotSmoke` runs `BotShoveProbe` (reported as `Bots.Shove`), which asserts for every ordered pair
+that the diagnostic's verdict **equals the engine's** - the real `OnMoveOver` call, not a
+restatement of the predicate.
+
+> **Rewritten 12 September 2026.** It was five actors on one facet and twenty checks. It is now six
+> subjects - the five plus a **controlled pet**, which is the one class refused by neither
+> uncontrolled-creature branch - over **two facets**, at 68 checks. The pet is what showed the
+> reverse assertion had been the wrong shape: it compared the engine against `ConsentsToBotPass` as
+> though consent were a mirror of the engine, and a pet is let through while consent correctly says
+> no. The engine half is now one column of the forward grid; consent is asserted against a policy
+> expectation carried per subject rather than derived from the predicate it checks.
+>
+> The one path it still does not call is a player mover onto a bot - the assertion there is that
+> `BotShove` returns `null` and stays out of it. The reason is narrower than it used to read: on a
+> facet **without** `FreeMovement` that call deducts ten stamina (`Mobile.cs:3544`) and sets
+> `m_Pushing`, so asking twice is not the same question. On Trammel it would cost nothing.
 
 ### A station is a place, and the stand tile is chosen on arrival
 

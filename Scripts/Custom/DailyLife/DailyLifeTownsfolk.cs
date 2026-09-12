@@ -77,7 +77,7 @@ namespace Server.Custom
         /// </summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool IsInvulnerable

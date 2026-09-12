@@ -98,7 +98,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)
@@ -154,7 +154,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)
@@ -210,7 +210,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)
@@ -266,7 +266,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)
@@ -322,7 +322,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)
@@ -378,7 +378,7 @@ namespace Server.Custom
         /// <summary>A bot walks through this shopkeeper as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool CheckVendorAccess(Mobile from)

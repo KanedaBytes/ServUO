@@ -73,7 +73,7 @@ namespace Server.Custom
         /// <summary>A bot walks through a patron as a player would; see BotShove.</summary>
         public override bool OnMoveOver(Mobile m)
         {
-            return BotShove.OnMoveOver(this, m) ?? base.OnMoveOver(m);
+            return BotShove.OnMoveOverActor(this, m) ?? base.OnMoveOver(m);
         }
 
         public override bool IsInvulnerable

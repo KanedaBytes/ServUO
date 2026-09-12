@@ -208,8 +208,9 @@ Rules in force for bots and occupied tiles, each with its row in the README's De
   deviation without anybody choosing to, and `Bots.Shove` is what caught it** - one failing pair out
   of twenty. Sean's decision of 12 September 2026 was to keep upstream's rule, so `NavWalkFailures.MayBotPass`
   now says so too and takes the **mover** to say it: a bot passes a live player, and the walk audit's
-  probe, being an uncontrolled `BaseCreature`, still does not. Re-deriving that predicate against
-  `ConsentsToBotPass` is the vocabulary session's.
+  `BaseCreature` probe, being an uncontrolled creature, still does not. **The whole rule is one
+  table** - `Scripts/Custom/Bots/README.md`, *The collision table*, which is the current contract
+  and supersedes every prose description of shove behaviour anywhere else.
 - **A bot's route plans through a closed door, and its step opens one.** MODIFICATIONS entry 6 - the
   second `.cs` edit in the tree - puts an `IBotActor` branch beside `FastAStarAlgorithm`'s
   `BaseCreature` one, because `MoveImpl.AlwaysIgnoreDoors` is reset inside the search loop and no
@@ -218,12 +219,24 @@ Rules in force for bots and occupied tiles, each with its row in the README's De
   `Nav.Doors` on `[CoreSmoke` asserts both, plus the half that matters for a merge: a plain
   `PlayerMobile` must **not** get the same route. The known limit is locked doors, counted as the
   ledger's `locked-door` cause rather than guessed at.
-- **The reverse pass is narrower, on purpose**: a bot lets through another bot, the walk probe and a
-  daily-life actor, and a stock vendor still jams against it. `BotShove.MayBotPass` answers the
-  forward question and `ConsentsToBotPass` the reverse one; they were one predicate until 7e, which
-  is what made the rung log call a stock NPC unpushable about a step the engine allows. `[BotSmoke`'s
-  `Bots.Shove` asserts both against the real `OnMoveOver` for every ordered pair. When a walker is
+- **The reverse pass is narrower, on purpose**: a bot lets through another bot, either walk-audit
+  probe and a daily-life actor, and a stock vendor still jams against it. `NavWalkFailures.MayBotPass`
+  answers the forward question and `ConsentsToBotPass` the reverse one; they were one predicate
+  until 7e, which is what made the rung log call a stock NPC unpushable about a step the engine
+  allows. `[BotSmoke`'s `Bots.Shove` asserts them against the real `OnMoveOver` for every ordered
+  pair **on both facets** - because `Mobile.CheckShove` is a no-op on Trammel, where `FreeMovement`
+  skips its whole body, so a Trammel-only grid cannot tell our rules from stock. When a walker is
   wedged, its rung log names who is standing on the tile the next step wants.
+- **`Mobile.CheckShove` does nothing on Trammel**, and a good deal of older prose in this repository
+  assumes otherwise. `MapRules.TrammelRules` includes `FreeMovement` (`Map.cs:128`) and
+  `Mobile.cs:3518` - the only reader of that flag in the whole `Server/` tree - skips the entire
+  full-stamina body when it is set. So *"a real player shoving a bot still pays full stamina, minus
+  ten"* was true of Felucca and false of the facet the bots live on, and `PlayerBot.CheckShove =>
+  true` buys nothing here.
+- **One daily-life actor cannot walk through another**, which nobody decided: `IsSymmetricMover`
+  keys on `shoved is PlayerBot`, so the town jams between its own eight actors. Reported rather
+  than fixed; the count is `BotShove.ActorJams`, reported on `DailyLife.Smoke`, and the one-line
+  widening waits on it.
 - **An arrival can be a place**: `NavArrival.range` rides on the route's last step and the walker
   accepts arrival from inside it. The forge arrivals author 2 (uo-offline's `DriftArriveRange`);
   banks, shops and guard posts keep the tile. A shop spot is scattered by `Custom.NavArrivalScatter`
@@ -276,7 +289,7 @@ checkpoint has shipped it as `True` once already.
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
 | `nav-rejoin` (token only, like `nav-adopt`) | Administrator | Re-pick every join in a region by **walked road length** rather than straight line. Body is `x,y,width,height`. Proposes edges only - no waypoint is created, moved or deleted - and writes to `Data/Live/nav-adopt.json` for `accept-adopt.js` |
 | `[NavAudit [full]` | Administrator | Pathfind every walk edge against real map data (1153 edges, ~0.5 s). `full` adds the approach-tile cliff scan — 54,683 engine paths, ~9 s — which the editor's quiet post-save run deliberately skips |
-| `[WalkAudit [probes\|selftest]` | Administrator | **Walk** every edge and arrival with real probe walkers; `selftest` proves the instrument |
+| `[WalkAudit [probes] [selftest] [class]` | Administrator | **Walk** every edge and arrival with real probe walkers, **once per probe class and reported per class**; `selftest` proves the instrument, per class. The class key is `creature` (the `BaseCreature` probe, which is the daily-life walkers' instrument) or `bot` (a real `PlayerBot`, which is the fleet's); omit it for both. Arguments are order-free, and the `walk-audit` token takes the same three |
 | `[TileProbe [<x> <y> [z]]` | Administrator | What the engine sees at a tile - land, statics, items in all three lists, the movement switches, and whether a step onto it is refused from each of the eight neighbours (token: `tile-probe`, which also takes `sweep <lo> <hi>` over an ItemID range) |
 | `[DayPhase` | GameMaster | Report the day phase, anchor time and whether an override is active |
 | `[DayPhase <dawn\|day\|dusk\|night\|clear>` | GameMaster | Force a phase for testing, or release it |
@@ -541,12 +554,23 @@ Three instruments and a switch, because a clean `[NavAudit` and bots that fail w
 at once and the audit cannot see why - and a bot standing still can be failing at that too.
 
 - **`[WalkAudit`** walks the whole graph with real probe walkers - every edge both ways, every
-  arrival from each approach - in about three minutes, and reports the engine's route length
-  against the authored straight line. `[WalkAudit selftest` proves the instrument before you trust
-  it, and **it has caught a real fault once**: the probe was refused by every occupant class a real
-  bot walks through, because `BotShove` keyed on `PlayerBot` and a probe is a plain `BaseCreature`.
-  Run the self-test first; it is two walks and a hundred seconds. See
-  `Scripts/Custom/Core/Navigation/README.md`.
+  arrival from each approach - and reports the engine's route length against the authored straight
+  line. **Two probe classes since 12 September 2026, reported per class**: a `BaseCreature`, which
+  is the daily-life walkers' instrument and the only thing measuring `NavCreatureActor`, and a real
+  `PlayerBot`, which is the fleet's. 5,020 walks in about eight minutes; `[WalkAudit bot` or
+  `[WalkAudit creature` narrows it to one. `[WalkAudit selftest` proves the instrument - **per
+  class**, because the aggregate version of that verdict was last-row-wins and could have read OK
+  while one class passed the hop it is required to fail.
+
+  **It has caught a real fault twice.** The first: the probe was refused by every occupant class a
+  real bot walks through, because `BotShove` keyed on `PlayerBot` and a probe is a plain
+  `BaseCreature`. The second is the reason there are now two of them - **the `BaseCreature` probe
+  plans routes through movable impassables and a bot does not**, because
+  `FastAStarAlgorithm.cs:100` sets `IgnoreMovableImpassables` from `bc.CanMoveOverObstacles` inside
+  the `BaseCreature` branch only, and that property is `Core.AOS || Body.IsMonster` on an EJ shard.
+  394 of 2,510 routes are longer for a bot and two do not exist for it, so every detour figure this
+  instrument recorded before the rebaseline was measured on a more permissive pathfinder than the
+  fleet's. See `Scripts/Custom/Core/Navigation/README.md`, *Two probes, and the rebaseline*.
 - **The approach-tile scan**, in `[NavAudit full` and in every `[WalkAudit`. Both of the other two
   instruments start every measurement *on* an authored waypoint; a bot starts wherever its last hop
   stopped, anywhere inside `ArrivalRangeFor`'s 5x5 box. A **cliff** is a tile in that box the

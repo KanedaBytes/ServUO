@@ -1510,6 +1510,28 @@ was wrong with a record and three of them could only say so as a mark on a dot**
 | `[NavAudit`'s blocked / far / occupied edges | the same banner, same cap |
 | the `z?` and `!` badges (`shapes.js`) | the marker, and nowhere else |
 
+### A walk row says which probe walked it
+
+*12 September 2026.* `[WalkAudit` walks **two probe classes** now - a `BaseCreature`, which is the
+daily-life walkers' instrument, and a real `PlayerBot`, which is the fleet's - so the same edge can
+produce two rows, and the same edge can **fail for one class and pass for the other**. That
+difference is the whole reason there are two probes: it is what the doors regression consisted of,
+and a Problems row that did not name the class would point at a road when the answer is a class.
+
+So `walkAuditRows`' label and `walkAuditFor`'s properties line carry the class in brackets -
+`uo-wp-174 -> uo-wp-173-s1 [bot]` - and `walkAuditSummary` reports each class against its own gate
+rather than adding them together, because `5020 walked, 0 failed` would be true and useless.
+
+**The tag is conditional, and that is deliberate.** Every sweep number recorded in
+`Scripts/Custom/Core/Navigation/README.md` was taken with one probe class, and a `walk-audit.json`
+written before this change has no `probeClass` on its rows - so an absent field means an absent
+tag, not `undefined`. `problems.test.js` pins that, along with the field name itself on the shard
+side, beside the seventeen row fields it already pinned.
+
+The `rows` array stays **flat**. Nesting it per class would have broken `walkAuditRows`,
+`walkAuditFor` and `walkAuditSummary` at once, so the class rides on the row and the per-class
+totals arrive in a sibling `classes` block that older readers ignore.
+
 **The `z?` badge is the shard's answer, and used not to be.** It compared a record's stored Z
 against the pick map's `StandingZ` - one line of `map.GetAverageZ`, which sees land and nothing
 else - and flagged anything more than a storey off. That is every record standing on something
@@ -2025,7 +2047,7 @@ shape the existing cases already had (`GGSpawnCommands.TryReimport(null, …)`,
 | Bot smoke | `bot-smoke` | `BotSmoke.Run(null)` — walk, life, chat, work. Minutes |
 | Reload bots | `bots-reload` | `BotSystem.TryReload` **and** `BotWorkSites.Validate` |
 | Nav audit / full | `nav-audit` | Body empty or `full`; `full` adds the ~8 s cliff scan |
-| Walk audit | `walk-audit` | Real probe walkers over the whole graph. Minutes |
+| Walk audit | `walk-audit` | Real probe walkers over the whole graph, **once per probe class**. Minutes, and about twice as many since 12 September 2026. The body takes a probe count, `selftest`, and a class key (`creature` or `bot`) in any order; no key means both |
 | World items | `world-items` | The art view's furniture snapshot |
 | Resync spawns | `gg-reimport` | Behind a typed `RESYNC` |
 | Regen bot spawns | three | `botpop-gen` → `gg-reimport` → `botpop-audit`, behind `REGEN` |

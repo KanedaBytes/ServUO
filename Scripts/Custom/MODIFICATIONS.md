@@ -171,8 +171,23 @@ through a dragon. That is upstream uo-offline's rule too (`PlayerBot.CheckShove 
 combat layer here yet for a narrower rule to serve. Revisit with the combat session; seam 13 in the
 Bots README is the place it will be felt first.
 
-**What it deliberately does not change.** `Scripts/Mobiles/PlayerMobile.cs:3487-3494` is untouched,
-and a real player shoving a bot still pays the engine's full-stamina rule.
+**What it deliberately does not change.** `Scripts/Mobiles/PlayerMobile.cs:3486-3494` is
+untouched, so a real player shoving a bot is left to the engine.
+
+> **CORRECTION, 12 September 2026, the collision vocabulary session.** That sentence used to end
+> *"still pays the engine's full-stamina rule"*, and **on this shard's own facet it does not.**
+> `Mobile.CheckShove`'s entire body is guarded by `(m_Map.Rules & MapRules.FreeMovement) == 0`
+> (`Mobile.cs:3518`), `MapRules.TrammelRules` includes `FreeMovement` (`Map.cs:128`), and
+> `MapDefinitions.cs:27-32` gives `TrammelRules` to Trammel, Ilshenar, Malas, Tokuno and TerMur.
+> That one test is the **only reader of the flag in the whole `Server/` tree**, and when it is
+> skipped `CheckShove` returns an unconditional `true` having read nothing: no stamina check, no
+> ten-point cost, no refusal. The full-stamina rule bites on **Felucca only**.
+>
+> Which also means `PlayerBot.CheckShove => true` buys nothing on Trammel — the base already
+> answers `true` there — and is load-bearing on Felucca. `Bots.Shove` walks its ordered-pair grid
+> on **both facets** for exactly that reason, with the bot-like movers drained to zero stamina,
+> because the engine *allows* a full-stamina shove and charges for it and refuses only below max:
+> a freshly spawned bot would have passed a player on Felucca whether or not the override existed.
 
 > **CORRECTION, 12 September 2026.** This paragraph also used to say *"a bot still yields to a real
 > player"*, and that stopped being true the day `PlayerBot` became a `PlayerMobile` — without this
@@ -190,13 +205,59 @@ and a real player shoving a bot still pays the engine's full-stamina rule.
 > a real bot walks through: `[WalkAudit selftest` read `SELF-TEST BROKEN` before this edit existed.
 > So entry 5 stays, and the class swap did not remove an upstream edit after all.
 
+### Entry 5's readers, enumerated — 12 September 2026
+
+*The collision vocabulary session was to decide whether this edit still has a reader once the walk
+audit grew a second, `PlayerBot`-derived probe. It does. The whole list, so the next session does
+not have to re-derive it:*
+
+The guard changes an answer only where `BotShove.OnMoveOver(stockCreature, mover)` returns
+non-null. That is one branch: `mover is IBotMover` → `mover.CheckShove(...)` → `true`. The other
+branch needs `shoved is PlayerBot` and is **unreachable from this call site**, because `this` here
+is always a stock `BaseCreature` and the two types are disjoint.
+
+| Mover | Needs entry 5? |
+| --- | --- |
+| `PlayerBot`, and the new `PlayerBotWalkAuditProbe` | **No.** A `PlayerMobile` misses `:4564`'s `m is BaseCreature` and reaches `CheckShove` on its own |
+| `WalkAuditProbe` (the `BaseCreature` one) | **YES — the only reader.** An *uncontrolled* `BaseCreature` mover matches `:4564` and is refused outright |
+| daily-life `BaseCreature` actors | **No, and they are not passed by it either.** They are `IDailyLifeActor`, not `IBotMover`, so the guard returns null for them and `:4564` refuses them — see the finding below |
+| stock creatures, controlled pets, real players | **No.** None is an `IBotMover`; the guard is null and upstream's own two branches decide |
+
+**So the edit stays, and it now has two tests rather than one.** `[WalkAudit selftest` still reads
+`SELF-TEST BROKEN` without it, because the must-pass control hop at `1849,2711` is a tile a mobile
+stands on. And `Bots.Shove` now asserts the cell directly: its grid includes the creature probe as
+a mover onto a stock vendor, where the engine answers `true` **only** because of this guard, and
+`MayBotPass` answers `true` unconditionally for an `IBotMover` mover — so reverting the edit makes
+that pair disagree and the probe fails by name.
+
+> **FINDING, reported rather than fixed: the creature probe is now MORE permissive than the
+> walkers it stands in for.** `WalkAuditProbe` was made an `IBotMover` when bots were
+> `BaseCreature`s and it was standing in for a bot. Since the class swap, bots have their own
+> probe, and this one's subject is the three daily-life `BaseCreature` walkers — which are
+> `IDailyLifeActor`, are **not** `IBotMover`, and are therefore refused by every stock creature
+> they meet. The instrument is passed where its subject is jammed. It is the exact mirror of the
+> historical fault this entry records fixing, where the probe was *less* permissive than a bot.
+>
+> The clean version would be to make the probe an `IDailyLifeActor` instead of an `IBotMover`: it
+> would then be refused by stock creatures exactly as a townsfolk is, bots would still consent to
+> it through `ConsentsToBotPass`, and **entry 5 would lose its only reader and could be retired.**
+> Not taken here, for three reasons that are Sean's to weigh rather than mine: it would make the
+> audit red wherever a stock NPC stands on a road, which is a true fact about a daily-life walker
+> and not a fact about the graph the audit exists to measure; it would change what every recorded
+> sweep number in the Navigation README means; and `tools/editor/problems.test.js` pins the
+> declaration line `class WalkAuditProbe : BaseCreature, IBotMover`, so the change is a visible
+> contract edit rather than a tweak. The trade is: one upstream edit retired, against an instrument
+> that reports its own class's collision limits as walk failures.
+
 **What travels under it, as of the walk-audit fix.** The guard calls
 `BotShove.OnMoveOver(this, m)`, and that method's mover test is now `mover as IBotMover` rather
 than `mover as PlayerBot` — so this edit also passes the walk audit's **probe**, which is a plain
 `BaseCreature` in `Core/Navigation` and was therefore refused by every occupant class a real bot
 walks through. **No second edit was needed and none was made**; the `Custom/`-side predicate
-widened and this file did not change. The interface has exactly two implementers, `PlayerBot` and
-`WalkAuditProbe`, and is tested for in exactly one place. Measured: `[WalkAudit selftest` read
+widened and this file did not change. The interface had exactly two implementers then; it has
+**three** since the walk audit's `PlayerBot`-derived probe landed (`PlayerBot`, `WalkAuditProbe`,
+`PlayerBotWalkAuditProbe`), and the third inherits its membership rather than declaring it.
+Measured: `[WalkAudit selftest` read
 `SELF-TEST BROKEN` before and `SELF-TEST OK` after, because its must-pass control hop at
 `1849,2711` is a tile a mobile stands on and the probe could not push past it.
 

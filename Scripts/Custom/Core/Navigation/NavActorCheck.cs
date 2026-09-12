@@ -501,12 +501,28 @@ namespace Server.Custom
                 return false;
             }
 
+            // The SUM, not the entry count. It read AllowedTypeTests.Count, which is how many
+            // FILES are listed rather than how many tests they hold, and the two stopped being
+            // equal on 12 September 2026 when NavWalkFailures.cs went to two.
+            int allowedTests = 0;
+
+            foreach (int count in AllowedTypeTests.Values)
+            {
+                allowedTests += count;
+            }
+
             detail = String.Format(
                 "{0} source(s) under {1}: AIObject appears in {2} and nowhere else ({3} site(s)), "
-                + "and the BaseCreature type tests are the {4} the ledger allows - the factory's, "
-                + "plus NavWalker.DescribeMobiles and NavWalkFailures.Describe, which invert at "
-                + "the class swap",
-                files.Length, SourceDirectory, AdapterFile, adapterDrives, AllowedTypeTests.Count);
+                + "and the BaseCreature type tests are the {4} the ledger allows across {5} file(s)"
+                + " - the adapter factory's, plus NavWalkFailures' Describe and "
+                + "IsUncontrolledCreature, which are the diagnostic vocabulary mirroring the "
+                + "engine's own condition",
+                files.Length,
+                SourceDirectory,
+                AdapterFile,
+                adapterDrives,
+                allowedTests,
+                AllowedTypeTests.Count);
 
             return true;
         }

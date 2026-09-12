@@ -27,6 +27,15 @@ namespace Server.Custom
         private static string _firstFailure;
         private static int _checks;
 
+        /// <summary>
+        /// Actor-onto-actor collision refusals during the last forced cycle.
+        ///
+        /// Reported here because a forced dusk-to-day cycle is the crowded case: it puts all eight
+        /// daily-life actors on the road at once, which is exactly when they meet each other. See
+        /// BotShove.ActorJams for the rule being measured and the decision waiting on the number.
+        /// </summary>
+        private static long _actorJams;
+
         public static void Initialize()
         {
             CommandSystem.Register("DailyLifeSmoke", AccessLevel.Administrator, DailyLifeSmoke_OnCommand);
@@ -53,6 +62,8 @@ namespace Server.Custom
             _firstFailure = null;
             _checks = 0;
 
+            long jamsBefore = BotShove.ActorJams;
+
             bool hadOverride = DayCycleSystem.HasOverride;
 
             report.Add("-- daily life smoke --");
@@ -78,6 +89,7 @@ namespace Server.Custom
             }
 
             _lastRunUtc = DateTime.UtcNow;
+            _actorJams = BotShove.ActorJams - jamsBefore;
 
             if (hadOverride)
             {
@@ -277,7 +289,19 @@ namespace Server.Custom
                 return HealthResult.Fail(String.Format("FAILED at {0}: {1}", when, _firstFailure));
             }
 
-            return HealthResult.Ok(String.Format("passed at {0}, {1} check(s)", when, _checks));
+            // BOTH NUMBERS, because neither alone is the answer. The cycle figure is the
+            // crowded case - a forced dusk-to-day puts all eight actors on the road at once - but
+            // the clock is compressed into milliseconds, so their WALKS do not overlap the way
+            // they do in real time. The since-boot total is the one that has had a real window to
+            // accumulate in. See BotShove.ActorJams.
+            return HealthResult.Ok(String.Format(
+                "passed at {0}, {1} check(s); actor-onto-actor collision refusals: {2} during the "
+                + "forced cycle, {3} since boot (BotShove.ActorJams - the number the "
+                + "IsSymmetricMover widening waits on)",
+                when,
+                _checks,
+                _actorJams,
+                BotShove.ActorJams));
         }
     }
 }

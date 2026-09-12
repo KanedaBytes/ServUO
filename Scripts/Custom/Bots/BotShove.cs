@@ -129,6 +129,54 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// How many times one daily-life actor has been refused the tile another is standing on.
+        ///
+        /// A MEASUREMENT WITH A DECISION WAITING ON IT, in the shape MODIFICATIONS entry 6's
+        /// locked-door count already has. IsSymmetricMover keys on `shoved is PlayerBot` - the one
+        /// concrete-class test in this vocabulary, where every other test is an interface - so a
+        /// daily-life actor stepping onto ANOTHER daily-life actor gets null here, falls through to
+        /// BaseCreature.OnMoveOver's uncontrolled-creature branch and is refused. Eight actors, two
+        /// townsfolk classes and six GG vendors, jamming against each other. Nobody decided that;
+        /// it is the fix for bot-versus-shopkeeper met from the side nobody was standing on.
+        ///
+        /// The one-line fix is to widen the gate to IBotActor-or-IDailyLifeActor. It is not taken
+        /// on a guess, because widening a collision rule is a deviation decision and the number
+        /// decides whether it is worth one: eight actors spread over a town's roads is a different
+        /// argument from eight actors in one doorway.
+        ///
+        /// WHY THE WALK-FAILURE LEDGER CANNOT ANSWER IT. That ledger records TERMINAL failures -
+        /// walks that climbed the whole recovery ladder - and a jam like this is waited out by the
+        /// ladder and never reaches it. It is the same under-reporting MODIFICATIONS entry 5
+        /// already records about the Trinsic doorway vendor, which "never reached any ledger at
+        /// all, because the stuck ladder waited her out". So this counts the refusal itself.
+        ///
+        /// COUNTED ONCE PER STEP, which is why the daily-life overrides call OnMoveOverActor
+        /// rather than OnMoveOver: an IDailyLifeActor occupant is asked TWICE per step, once by
+        /// its own override and once by BaseCreature.OnMoveOver underneath it, so counting inside
+        /// OnMoveOver would double every figure.
+        /// </summary>
+        public static long ActorJams;
+
+        /// <summary>
+        /// The entry point the eight IDailyLifeActor overrides use: OnMoveOver, plus the
+        /// actor-onto-actor tally. See <see cref="ActorJams"/> for why it is a separate method.
+        /// </summary>
+        public static bool? OnMoveOverActor(Mobile shoved, Mobile mover)
+        {
+            bool? answer = OnMoveOver(shoved, mover);
+
+            // Only the fall-through is a jam. A null here means BaseCreature.OnMoveOver's
+            // uncontrolled-creature branch is about to refuse the step, and both sides being town
+            // traffic is what makes the refusal the thing nobody chose.
+            if (answer == null && mover is IDailyLifeActor && shoved is IDailyLifeActor)
+            {
+                ActorJams++;
+            }
+
+            return answer;
+        }
+
+        /// <summary>
         /// Whether a PlayerBot should let this mover onto its tile.
         ///
         /// Only asked when the SHOVED side is a bot.

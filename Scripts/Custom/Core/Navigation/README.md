@@ -85,8 +85,14 @@ read when it was. **Where the two disagree, this section is the one that has bee
   bot's step onto that tile opens the door and lands, and `AlwaysIgnoreDoors` is false afterwards.
   Cached rather than live, because `HealthCheck.RunAll` runs every sixty seconds and the subject is
   a real bot; it runs at `ServerStarted` and with `[BotSmoke`.
-- **`Nav.Actor`** holds the adapter's verdict on a step against the engine's, and guards that
-  `AIObject` appears in the adapter and nowhere else under this folder. It passed the class swap
+- **`[WalkAudit` walks two probe classes and reports per class**, from 12 September 2026 - a
+  `BaseCreature` for the daily-life walkers and `NavCreatureActor`, and a real `PlayerBot` for the
+  fleet and `NavPlayerActor`. The gate is 2,510 / 0 failed / 0 fragile **per class**, and the bot
+  class does not currently meet it: 3 failed, 10 fragile, every one of them explained below under
+  *Two probes, and the rebaseline*. **Every sweep number recorded in this file before that section
+  is a `BaseCreature` number.**
+- **`Nav.Actor`** holds the adapter's verdict on a step against the engine's, **once per probe
+  class**, and guards that `AIObject` appears in the adapter and nowhere else under this folder. It passed the class swap
   **unedited**: the new branch is an `as PlayerMobile`, which its `BaseCreature` regex does not
   match, so the ledger is still 1 each for `NavActor.cs`, `NavWalker.cs` and `NavWalkFailures.cs`.
 - **An authored hop may be at most `Custom.NavHopMaxTiles` (12) tiles**, because
@@ -899,37 +905,111 @@ the door item, the same effect that made a doorway's `CanSpawnMobile` answer las
 A pass is also marked **contested** when a rung fired or a rung named somebody on the next-step
 tile, and contested rows are listed separately from the detour list for the same reason.
 
-### Should the walk probe become a `PlayerMobile`? — open, for Sean
+### Two probes, and the rebaseline — done, 12 September 2026
 
-*Raised 12 September 2026, with the door gate. Set up here rather than acted on; the session that
-acts is the rebaseline.*
+*This section replaced **"Should the walk probe become a `PlayerMobile`? — open, for Sean"**, which
+was raised with the door gate and deliberately left for the session that acted. The answer it
+guessed at was the right one: **two probes, not one swapped.** What it did not guess is what the
+second probe would find.*
 
-`WalkAuditProbe` is a `BaseCreature` with `CanOpenDoors => true`, so it has always taken the
-`bc != null` branch of the pathfinder and has always planned through doors. **On the day a bot's
-routes stopped planning through them, this audit was green - 2,510 legs, 0 failures - while the
-fleet's terminal failures went up tenfold.** A green audit is a real guarantee about the graph and
-about the `BaseCreature` adapter; it is not, and was not, a guarantee about bots.
+`[WalkAudit` walks **every registered probe class** and reports **per class**. Two are registered:
 
-**What swapping it to a `PlayerMobile` would buy.** The audit would measure the class the fleet
-actually is, and the doors regression would have surfaced in the instrument rather than only in a
-live ledger nobody reads until something breaks.
+| key | class | what it is the instrument for |
+| --- | --- | --- |
+| `creature` | `NavWalkAudit.WalkAuditProbe`, a `BaseCreature` | the three daily-life walkers — `DailyLifeTownsfolk`, the shop-schedule vendors, and the behaviour sites driving them — and `NavCreatureActor`, which nothing else measures |
+| `bot` | `PlayerBotWalkAuditProbe`, a real `PlayerBot` | the fleet, and `NavPlayerActor` |
 
-**What it would cost.** `WalkAuditProbe` is one of the two implementers of `IBotMover`, and it is
-what `MODIFICATIONS` entry 5 is currently kept alive **for** - a `PlayerMobile` probe reaches
-`Mobile.OnMoveOver` → `CheckShove` on its own, so entry 5 would have no reader left and would have
-to be deleted or re-justified. `NavActorCheck` spawns a `WalkAuditProbe`, so `Nav.Actor` would move
-from `NavCreatureActor` to `NavPlayerActor` and stop exercising the `BaseCreature` adapter at all.
-And `MayBotPass` now answers differently for the two movers, so every shove row in the audit would
-change meaning at once.
+`[WalkAudit bot` or `[WalkAudit creature` narrows it; the `walk-audit` token takes the same word.
+The bot probe **derives from `PlayerBot`** rather than reimplementing it, so the door gate, the
+door step, `CheckShove`, `IBotMover` and the adapter choice are all inherited — an instrument using
+a different rule from the shard is the failure this layer has paid for twice.
 
-**What the audit would lose.** The three daily-life `BaseCreature` walkers - `DailyLifeTownsfolk`,
-the shop-schedule vendors, and the behaviour sites that drive them - would have no probe of their
-own class, so the *other* adapter would go unmeasured. That is what this probe is for, and it is why
-the class swap's green audit was worth having.
+#### The two baselines
 
-**The likely answer is two probes, not one swapped**, walked in the same sweep and reported in
-separate rows - which is a rebaseline-sized change rather than a door-session one, because every
-recorded sweep number in this file is a one-probe-class number.
+**5,020 walks in 497 s over 12 probes**, against a live population of ~52 bots, with `[NavAudit
+full` reading 0 blocked / 0 over cap / 0 unstandable / 0 stale Z / 0 struck and **0 cliff pairs**
+on the same boot.
+
+| class | walked | failed | fragile | contested |
+| --- | --- | --- | --- | --- |
+| **BaseCreature** | 2,510 | **0** | **0** | 0 |
+| **PlayerBot** | 2,510 | **3** | **10** | 10 |
+
+**The `BaseCreature` row is the old baseline, reproduced exactly**, which is what makes the other
+row readable: nothing about the graph, the walker or the recovery ladder moved. The gate was
+2,510 / 0 / 0 for both classes and **the bot class does not meet it.** That is the finding, not a
+regression — it is the first time the fleet's own class has been measured.
+
+#### What differs between the classes, row by row
+
+Compared on the **deterministic** columns only — `pass`, `tiles`, `pathTiles`, `ratio` — because
+`stopX/Y/Z`, `steps` and `seconds` move everywhere between identical sweeps and `stepRatio` is
+recorded above as reshuffling completely.
+
+- **2,510 shared rows. 396 differ.** 393 on `pathTiles` and `ratio` alone; 3 on `pass` as well.
+- **The bot's planned route is longer on 394 rows and shorter on none**, median 1 tile longer, max
+  5. On **2** it has no engine route at all where the creature has one.
+
+#### Finding 1 — the old probe plans through furniture and a bot does not
+
+`FastAStarAlgorithm.cs:100` sets `MoveImpl.IgnoreMovableImpassables = bc.CanMoveOverObstacles`
+**only inside the `BaseCreature` branch**. `BaseCreature.CanMoveOverObstacles` is
+`Core.AOS || Body.IsMonster` (`BaseCreature.cs:1926`), `Core.AOS` is `Expansion >= Expansion.AOS`
+(`Main.cs:147`), and this shard is **EJ** — so it is **true for the walk probe**, and has been for
+its whole existence. MODIFICATIONS entry 6's bot branch sets `AlwaysIgnoreDoors` and **deliberately
+not** `IgnoreMovableImpassables`, matching upstream, which does not grant it either.
+
+So the `BaseCreature` probe has been measuring **a more permissive pathfinder than the fleet's**.
+Every detour ratio this file records was taken with a walker that could plan straight through
+movable impassables; 394 of 2,510 routes are longer for a bot, and two do not exist for it.
+
+**The direction is uniform, and that is the confirmation.** Doors cannot be the cause: the creature
+probe has `CanOpenDoors => true` so it takes the `bc` branch, and a bot gets the same flag from
+entry 6 — the two are **equal** on doors, which is exactly why no row is shorter for the bot. One
+flag differs and one direction appears.
+
+**Not fixed here, and the choice is real.** Granting bots `IgnoreMovableImpassables` would change
+how every bot on the shard paths and would go further than upstream. Removing it from the probe
+would make the creature probe stop matching the daily-life `BaseCreature`s it stands in for, which
+get it from the same `Core.AOS`. The honest position is that **the two probes measure two different
+pathfinders because the shard has two**, and the per-class rows now say so.
+
+#### Finding 2 — a bot has no step-level recovery, and the audit can now see it
+
+All 3 failures and all 10 fragile rows are the bot class; the creature class has none of either.
+
+| row | cause | rungs |
+| --- | --- | --- |
+| `wp-23 -> brit-mine-west` | `arrived-no-stand-tile`, teleported | the whole ladder |
+| `brit-minenorth-2 -> brit-mine-north` | `arrived-no-stand-tile`, teleported | the whole ladder |
+| `uo-rec-2-1 -> brit-tan-1` | `short-of-goal`, timed out | Repath 2, Sidestep 2, Door 1 |
+
+The third is Finding 1: `pathTiles` is **0** for the bot against **46** for the creature — no engine
+route, so the walker had only direct steps for the whole leg.
+
+The first two are a different mechanism, and **nobody was standing anywhere near either of them** —
+`occupied` is empty on both, so this is not contention. Both end *within* the arrival range of a
+standable goal and still fail, which means the last step was refused and never recovered.
+`BaseAI.DoMoveImpl` recovers exactly that case: when a step is blocked it **turns up to twice and
+retries in the turned direction**, returning `SuccessAutoTurn` (`BaseAI.cs:2483-2499`).
+`NavPlayerActor.StepAndAdvance` (`NavActor.cs:395-419`) makes one attempt and reports blocked.
+
+So a daily-life `BaseCreature` gets two extra step attempts on every refused step and a bot gets
+none; a bot's coarsest substitute is the walker's own Sidestep rung, twenty seconds away. The ten
+fragile rows fit the same shape — nine of them are a single `Repath` on an interior arrival.
+
+**Reported rather than fixed.** Giving `NavPlayerActor` an auto-turn is a locomotion-parity change
+that would alter how every bot in the world walks, and it belongs with whoever owns that parity
+rather than with the session that found it. The measurement is now permanent: the bot probe walks
+every sweep.
+
+#### What this does to the numbers already in this file
+
+**Every sweep figure recorded above this section is a `BaseCreature` number.** They are still true
+of that class and still the right regression test for the graph and for `NavCreatureActor` — the
+2,510 / 0 / 0 row reproduces exactly. What they were never evidence for is the fleet, and the
+detour rankings in particular are understated wherever furniture is in the way. Read them as the
+creature column of a two-column table from here on.
 
 ### What it costs
 
