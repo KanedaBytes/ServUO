@@ -899,6 +899,38 @@ the door item, the same effect that made a doorway's `CanSpawnMobile` answer las
 A pass is also marked **contested** when a rung fired or a rung named somebody on the next-step
 tile, and contested rows are listed separately from the detour list for the same reason.
 
+### Should the walk probe become a `PlayerMobile`? — open, for Sean
+
+*Raised 12 September 2026, with the door gate. Set up here rather than acted on; the session that
+acts is the rebaseline.*
+
+`WalkAuditProbe` is a `BaseCreature` with `CanOpenDoors => true`, so it has always taken the
+`bc != null` branch of the pathfinder and has always planned through doors. **On the day a bot's
+routes stopped planning through them, this audit was green - 2,510 legs, 0 failures - while the
+fleet's terminal failures went up tenfold.** A green audit is a real guarantee about the graph and
+about the `BaseCreature` adapter; it is not, and was not, a guarantee about bots.
+
+**What swapping it to a `PlayerMobile` would buy.** The audit would measure the class the fleet
+actually is, and the doors regression would have surfaced in the instrument rather than only in a
+live ledger nobody reads until something breaks.
+
+**What it would cost.** `WalkAuditProbe` is one of the two implementers of `IBotMover`, and it is
+what `MODIFICATIONS` entry 5 is currently kept alive **for** - a `PlayerMobile` probe reaches
+`Mobile.OnMoveOver` → `CheckShove` on its own, so entry 5 would have no reader left and would have
+to be deleted or re-justified. `NavActorCheck` spawns a `WalkAuditProbe`, so `Nav.Actor` would move
+from `NavCreatureActor` to `NavPlayerActor` and stop exercising the `BaseCreature` adapter at all.
+And `MayBotPass` now answers differently for the two movers, so every shove row in the audit would
+change meaning at once.
+
+**What the audit would lose.** The three daily-life `BaseCreature` walkers - `DailyLifeTownsfolk`,
+the shop-schedule vendors, and the behaviour sites that drive them - would have no probe of their
+own class, so the *other* adapter would go unmeasured. That is what this probe is for, and it is why
+the class swap's green audit was worth having.
+
+**The likely answer is two probes, not one swapped**, walked in the same sweep and reported in
+separate rows - which is a rebaseline-sized change rather than a door-session one, because every
+recorded sweep number in this file is a one-probe-class number.
+
 ### What it costs
 
 **1450 walks — 1310 edges, 140 arrivals — in about 2.5 to 4 minutes over 12 probes**, against a

@@ -311,7 +311,11 @@ Sean's call was to take one edit and **measure** the locked case rather than pay
 front. The instrument is the existing walk-failure ledger, not a new tool:
 `NavWalkFailures.CauseFor` gained a fourth cause, `locked-door`, asked before `goal-unstandable`
 because a closed door is an `Impassable` item and a goal on a door tile already reads unstandable.
-**Measured over the acceptance window of this session: TBD.**
+**Measured over this session's two acceptance windows, 12 September 2026: `locked-door` fired
+ZERO times in 1,503 walks** (614 and 889). The second edit is therefore **not taken**, and the
+number to beat is zero — if a later window shows locked doors accumulating, `FastMovement.cs:39-52`
+is where the guard goes. Note what a zero here does *not* say: it is evidence that bots rarely route
+at a locked door on the current graph, not that the gate is incapable of doing so.
 
 **This edit depends on the shard's movement implementation, as entry 5 does.** The flag reaches a
 door only through `FastMovementImpl.IsOk` (`FastMovement.cs:50-52`). `Nav.Movement` reports the

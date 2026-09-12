@@ -3239,6 +3239,66 @@ explains the shape of something still in force stays where it is and carries a d
 because moving it would separate it from the thing it explains. Both kinds are dated; neither is
 shortened. The dates are the commit that landed the investigation, from `git log`.
 
+### The pathfinder half of doors, and the number it gave back
+
+*12 September 2026.* The class swap's own history section above predicted this and named it: a bot
+had stopped being a `BaseCreature`, `FastAStarAlgorithm.cs:77` casts the pathing subject to one and
+`:93` sets `MoveImpl.AlwaysIgnoreDoors` only then, so **a bot's route was no longer planned through
+a closed door** and terminal walk failures had gone from ~0.5 to 5.23 per 100. This is that debt
+paid: **MODIFICATIONS entry 6**, an `IBotActor` branch beside the `BaseCreature` one, answered by
+`Bots/BotPathPolicy.cs` and guarded by `Nav.Doors`.
+
+**The number came back, and further than the ledger alone shows.** Two windows on the same build:
+
+| | baseline (11 Sep) | window A | window B |
+| --- | --- | --- | --- |
+| walks started | ~1,300 | 614 | 889 |
+| terminal failures | 68 | 1 | 1 |
+| per 100 walks | **5.23** | **0.16** | **0.11** |
+| of those, bots | 67 of 68 | 1 of 1 | **0 of 1** |
+
+Window B's single failure is `Perrin`, a **daily-life `BaseCreature`**, `short-of-goal` on
+`brit-jew-1 -> uo-britain-gem-shop-s4` - so **no bot failed a walk at all in 889 of them**. Window
+A's one failure is a bot and is worth naming precisely, because it is the kind of thing that gets
+mistaken for a regression: `arrived-no-stand-tile` at `1423,1558`, the `brit-forge` apron, range 0,
+`goalUnstandable: false` - *the place, not the road*. A crowded apron, not a door.
+
+**The recovery ladder stopped climbing.** Fleet-wide over window B: `repath 44, sidestep 5, door 2,
+skip 1, teleport 1`, against a window where the Door rung was the only door handling a bot had. Both
+walk probes read `repath 0, sidestep 0, door 0, skip 0, teleport 0` outright. The `Door` rung is now
+what it was designed to be - a recovery - rather than the mechanism, because `PlayerBot.Move` opens
+the tile ahead on a route that actually aims at it.
+
+**The tick cost did not move.** 0.8 ms mean / 24 ms max over 371 passes at 60 bots, against the
+class swap's 0.8 / 19 over 475 at 61. Which is expected and is worth saying so it is not read as a
+finding: the predicate is hoisted out of the A\* loop, so the per-iteration cost of a search is
+unchanged, and route-building was never in this stopwatch anyway.
+
+**What the walk audit proves here, and what it does not.** 2,510 legs, 0 failed / 0 fragile /
+0 contested, in 187.6 s and 189.45 s against a 188.97 s baseline. Its probes are `BaseCreature`s,
+which take the **untouched** branch of the edit - so that is evidence nothing regressed for
+creatures, which is exactly what an `else if` under the existing `if` is meant to guarantee. **It is
+not evidence that bots are fixed**, and on the day the door regression landed it was green too. See
+*Should the walk probe become a `PlayerMobile`* in `Core/Navigation/README.md`.
+
+**`Bots.Shift` did not go green, and it is not doors.** It was red before this session and it is red
+after, but the hand-over's description of it - "failed at the rescue teleport" - held in only one of
+two runs, and each run failed on a *different* single problem with the rest of the shift working:
+
+- **Window A**: *"the second smith teleported to reach the forge"*. That teleport is the ledger's
+  one entry above - `arrived-no-stand-tile` at the forge apron. The shift itself completed: 25 units
+  mined, the walking miner swung 22 times, one hand-over of 8 units, and the second smith settled at
+  `1423,1558` beside the first at `1422,1557` on a validated station tile and made an item.
+- **Window B**: *"the ore never reached a smith at `brit-forge` - 1 load(s) went somewhere else (an
+  empty bench or the bank)"*, with **no teleport at all**. That is the haul-weighting question the
+  *A haul goes to the nearest STAFFED bench* section is about, not a movement failure.
+
+Two runs, two different single problems, neither of them a door, and the probe's own prose shows the
+shift working in both. **The honest reading is that `Bots.Shift` is measuring a crowded four-tile
+forge apron with two smiths on it, and is flaky at that.** It owns a real question - can a second
+crafter join a bench and get the ore - and answering it needs the apron, not the pathfinder. That is
+the crafting session's, and it should not be counted against the door work.
+
 ### The class swap, and the two numbers it moved
 
 *12 September 2026.* Step 2 of the migration `CLASS-DECISION.md` records: `PlayerBot : PlayerMobile`,
