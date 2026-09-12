@@ -380,7 +380,11 @@ namespace Server.Custom
             {
                 foreach (Mobile mobile in nearby)
                 {
-                    if (mobile is PlayerMobile && mobile.Player && !mobile.Deleted)
+                    // NOT a PlayerBot: since the class swap a bot satisfies "is PlayerMobile"
+                    // and carries the Player flag, so without this the session hello would
+                    // fire for a bot standing beside any other bot - which is all of them.
+                    if (mobile is PlayerMobile && !(mobile is PlayerBot)
+                        && mobile.Player && !mobile.Deleted)
                     {
                         return true;
                     }

@@ -432,9 +432,12 @@ namespace Server.Custom
         /// in the woods, and unlike the client list it can see a mobile with no NetState - which
         /// is what the chat probe's synthetic player is.
         ///
-        /// Upstream tested "is a PlayerMobile and is not a PlayerBot". Here a PlayerBot is a
-        /// BaseCreature, so it can never be a PlayerMobile and the second test is unnecessary -
-        /// bots cannot trigger each other into an echo chamber by construction.
+        /// Upstream tests "is a PlayerMobile and is not a PlayerBot", and BOTH HALVES ARE NOW
+        /// LOAD-BEARING HERE TOO. This used to say the second test was unnecessary because a
+        /// PlayerBot was a BaseCreature and could never satisfy the first. Since the class swap
+        /// it satisfies it always - so without the PlayerBot test every bot standing near any
+        /// other bot would believe a player was listening, which is every bot in every town,
+        /// permanently.
         /// </summary>
         protected bool IsPlayerNearby(PlayerBot bot)
         {
@@ -444,7 +447,8 @@ namespace Server.Custom
             {
                 foreach (Mobile mobile in mobiles)
                 {
-                    if (mobile is PlayerMobile && !mobile.Deleted && mobile.Alive)
+                    if (mobile is PlayerMobile && !(mobile is PlayerBot)
+                        && !mobile.Deleted && mobile.Alive)
                     {
                         return true;
                     }

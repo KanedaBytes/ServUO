@@ -430,6 +430,24 @@ namespace Server.Custom
                 return true;
             }
 
+            // A BOT IS ASKED ABOUT BEFORE IT IS ASKED WHAT CLASS IT IS, and from the day bots
+            // became PlayerMobiles that ordering is the whole correctness of this method. The
+            // PlayerMobile branch below is "THE ONE REFUSAL", written when the only PlayerMobile
+            // on the shard was a real player. A bot now satisfies that cast too, so without this
+            // line the answer inverts: every bot would be reported as a mobile no bot may walk
+            // through, which is the exact opposite of CheckShove => true and of what the engine
+            // actually does.
+            //
+            // This is not cosmetic. NavWalker reads MayBotPass to decide whether a blocker is
+            // shovable, so the inverted answer would make the walker treat a crowd of its own
+            // fleet as a wall and climb the recovery ladder against it.
+            //
+            // IBotActor rather than PlayerBot: this is Core, and Core does not name bot classes.
+            if (occupant is IBotActor)
+            {
+                return true;
+            }
+
             var player = occupant as PlayerMobile;
 
             if (player == null)

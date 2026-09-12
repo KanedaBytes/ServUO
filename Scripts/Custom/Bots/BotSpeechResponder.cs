@@ -108,10 +108,15 @@ namespace Server.Custom
 
             Mobile speaker = e.Mobile;
 
-            // Real players only. A PlayerBot is a BaseCreature here, so it can never be a
-            // PlayerMobile - the echo chamber upstream had to guard against is closed by
-            // construction on this shard, and this test is the whole of it.
-            if (!(speaker is PlayerMobile) || speaker.Deleted)
+            // Real players only - and the second half of that test is no longer free.
+            //
+            // This comment used to say a PlayerBot is a BaseCreature and so can never be a
+            // PlayerMobile, which closed upstream's echo chamber "by construction". It does
+            // not any more: a bot IS a PlayerMobile. Without the PlayerBot test a bot's own
+            // ambient chatter would be delivered to every bot in earshot as though a player
+            // had spoken to it, each answer triggering the next - which is precisely the echo
+            // chamber upstream guards against with the same two tests (PlayerBot.cs:851).
+            if (!(speaker is PlayerMobile) || speaker is PlayerBot || speaker.Deleted)
             {
                 return;
             }
