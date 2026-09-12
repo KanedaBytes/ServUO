@@ -286,7 +286,7 @@ namespace Server.Custom
     /// and PlaceAt are on the interface at all.
     ///
     ///   THE STEP CLOCK. BaseAI.DoMoveImpl advances NextMove INSIDE the step (BaseAI.cs:2349-2353)
-    ///   and clamps a stale one forward to now. Here that is StepAndAdvance, which every step goes
+    ///   and clamps a stale one forward to now. Here that is AdvanceClock, which every step goes
     ///   through, so a step taken by the recovery ladder moves the clock exactly as a step taken by
     ///   the follower does. Additive then clamped, and compared by subtraction, because
     ///   Core.TickCount wraps (CLAUDE.md section 15).
@@ -385,17 +385,17 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// BaseAI.DoMoveImpl's own tail (BaseAI.cs:2336-2353), for one step.
+        /// The run flag, derived from the delay rather than passed in, which is what the engine
+        /// does (BaseAI.cs:2338-2344): a mobile is running when its step delay is shorter than the
+        /// walk constant for whatever it is on. Deriving it here rather than trusting the caller is
+        /// what keeps a sidestep and a follower step look the same to a watching client.
         ///
-        /// The run flag is derived from the delay rather than passed in, which is what the engine
-        /// does: a mobile is running when its step delay is shorter than the walk constant for
-        /// whatever it is on. Deriving it here rather than trusting the caller is what keeps a
-        /// sidestep and a follower step look the same to a watching client.
+        /// BaseAI ANDs in `CanRun` (BaseAI.cs:2339), a BaseAI property with no Mobile equivalent.
+        /// It is true for every walker this shard drives - it is only ever set false by fleeing and
+        /// hiding AI that does not exist here - so it is recorded rather than substituted.
         /// </summary>
-        private bool StepAndAdvance(Direction d)
+        private Direction WithRunningFlag(Direction d, int delay)
         {
-            int delay = (int)(PaceSeconds * 1000.0);
-
             bool mounted = _player.Mounted || _player.Flying;
 
             if (mounted ? delay < Mobile.WalkMount : delay < Mobile.WalkFoot)
@@ -403,18 +403,168 @@ namespace Server.Custom
                 d |= Direction.Running;
             }
 
-            bool moved = _player.Move(d);
+            return d;
+        }
 
-            // ADVANCED WHETHER OR NOT THE STEP LANDED, which is also what DoMoveImpl does: it
-            // advances NextMove before Move is attempted, so a mobile grinding against a wall is
-            // rate-limited exactly as a walking one is. Without that, a blocked walker would ask
-            // for a step on every 50ms tick of the shared timer.
+        /// <summary>
+        /// BaseAI.cs:2349-2354, verbatim over our own field.
+        ///
+        /// ADVANCED WHETHER OR NOT THE STEP LANDED, which is what DoMoveImpl does: it advances
+        /// NextMove before Move is attempted, so a mobile grinding against a wall is rate-limited
+        /// exactly as a walking one is. Without that, a blocked walker would ask for a step on
+        /// every 50ms tick of the shared timer.
+        /// </summary>
+        private void AdvanceClock(int delay)
+        {
             _nextStepTick += delay;
 
             if (Core.TickCount - _nextStepTick > 0)
             {
                 _nextStepTick = Core.TickCount;
             }
+        }
+
+        /// <summary>
+        /// BaseCreature.TurnInternal (BaseCreature.cs:4098) - the one member of DoMoveImpl that is
+        /// not reachable from a PlayerMobile, and the only substitute in this port.
+        ///
+        /// Its whole body is the line below, and every part of that line is Mobile-level:
+        /// Mobile.SetDirection is public (Mobile.cs:8740), the mask keeps the turn inside the eight
+        /// facings, and `v & 0x80` preserves the running bit. So this is the same arithmetic on the
+        /// same setter rather than a reimplementation - including the choice of SetDirection over
+        /// the Direction property, which is not cosmetic: the property sends a Direction delta
+        /// (Mobile.cs:8755) and SetDirection is silent, so a turn that is about to be followed by a
+        /// successful Move sends one packet rather than two, and a turn that fails sends none.
+        /// </summary>
+        private void TurnInternal(int turnSteps)
+        {
+            int v = (int)_player.Direction;
+
+            _player.SetDirection((Direction)((((v & 0x7) + turnSteps) & 0x7) | (v & 0x80)));
+        }
+
+        /// <summary>
+        /// BaseAI.DoMoveImpl (BaseAI.cs:2323-2507) for a PlayerMobile - one step, with the engine's
+        /// own step-level recovery.
+        ///
+        /// WHY IT IS A FULL PORT. This was `StepAndAdvance`, which was DoMoveImpl's *tail* only:
+        /// derive the run flag, Move, advance the clock. The 12 September rebaseline measured what
+        /// the rest of it was worth. A BaseCreature whose step is refused turns up to twice and
+        /// retries in the turned direction (:2483-2499); a bot did not, and its coarsest substitute
+        /// was NavWalker's Sidestep rung twenty seconds later. Two of the three bot-class walk
+        /// failures were `arrived-no-stand-tile` with NOBODY STANDING ANYWHERE NEAR, which is the
+        /// shape a missing step-level recovery makes and not a shape contention makes.
+        ///
+        /// WHAT EACH OMITTED CLAUSE IS, because "ported exactly" has to be checkable:
+        ///
+        ///   :2325-2329, the bad-state guard. Only `Deleted` survives the class change. `CanMove`
+        ///     (BaseCreature.cs:232), `DisallowAllMoves` (:338) and `FreezeOnCast` (:1062) are
+        ///     BaseCreature members; Frozen, Paralyzed and the casting test are enforced one level
+        ///     down by Mobile.Move itself (Mobile.cs:3123-3132), for both implementations.
+        ///
+        ///   :2358, MoveImpl.IgnoreMovableImpassables. DELIBERATELY NOT SET, which is Sean's rule
+        ///     for this layer: if a player cannot do it, a bot cannot either. Bots path and step
+        ///     around movable impassables, MODIFICATIONS entry 6 withholds the same flag from the
+        ///     route, and the two halves now agree. See Bots/README.md's Deviations.
+        ///
+        ///   :2360-2366, the direction-mismatch branch. DEAD, here and upstream: :2347 has just
+        ///     assigned Direction = d, so the masks cannot differ. Recorded rather than carried.
+        ///
+        ///   :2374-2479, obstacle clearing. Its two gates are `CanOpenDoors` and
+        ///     `CanDestroyObstacles`, both BaseCreature. The door half already runs for a bot ONE
+        ///     LEVEL LOWER - PlayerBot.Move tries DoorHelper.TryOpenAhead and re-Moves
+        ///     (PlayerBot.cs:759-767), upstream's own answer - so by the time Move returns false
+        ///     here the door has already been tried, which is exactly the state DoMoveImpl reaches
+        ///     with `blocked` still true. The destroy half is the furniture rule again. Note the
+        ///     turned retries below go through PlayerBot.Move too, so each of them gets the door
+        ///     attempt as well.
+        /// </summary>
+        private MoveResult DoStep(Direction d)
+        {
+            // BaseAI.cs:2325-2329, less the five BaseCreature clauses. See the summary.
+            if (_player.Deleted)
+            {
+                return MoveResult.BadState;
+            }
+
+            // BaseAI.cs:2331-2334, over CheckMove (:2303-2306). NEW: StepAndAdvance advanced this
+            // clock and never read it, so PathFollower.Follow's blocked-retry (PathFollower.cs:172-186)
+            // could take a SECOND physical step inside one Follow, where a creature's second call
+            // is refused here as BadState. Wraparound-safe by subtraction, as everything else is.
+            if (Core.TickCount - _nextStepTick < 0)
+            {
+                return MoveResult.BadState;
+            }
+
+            int delay = (int)(PaceSeconds * 1000.0);
+
+            d = WithRunningFlag(d, delay);
+
+            // BaseAI.cs:2346-2347, comment and all: "This makes them always move one step, never
+            // any direction changes."
+            //
+            // NEW, AND IT COSTS A STEP EVERY TIME IT IS MISSING. Mobile.Move only moves when the
+            // mobile ALREADY faces d (Mobile.cs:3119); otherwise it turns and returns true. So
+            // without this line a heading change on the direct-step branch burned the step clock,
+            // moved nothing, and reported success to the walker. The follower branch never had the
+            // fault - PathFollower.Follow calls SetDirection itself (PathFollower.cs:141,148).
+            _player.Direction = d;
+
+            AdvanceClock(delay);
+
+            // BaseAI.cs:2356. Mobile-level (Mobile.cs:3061), and only ever set by the shove branch
+            // at Mobile.cs:3531 - which is inside the body FreeMovement skips, so on Trammel this
+            // is always false and the clause below is Felucca's. Ported because the flag is real
+            // there, not because it fires here.
+            _player.Pushing = false;
+
+            if (_player.Move(d))
+            {
+                return MoveResult.Success; // BaseAI.cs:2502, :2506
+            }
+
+            bool wasPushing = _player.Pushing; // BaseAI.cs:2369
+
+            // BaseAI.cs:2483-2496 - turn twice, retry in the turned direction. The 0.6 split is
+            // upstream's: it picks a side, it does not pick a side fairly.
+            int offset = Utility.RandomDouble() >= 0.6 ? 1 : -1;
+
+            for (int i = 0; i < 2; i++)
+            {
+                TurnInternal(offset);
+
+                if (_player.Move(_player.Direction))
+                {
+                    return MoveResult.SuccessAutoTurn;
+                }
+            }
+
+            return wasPushing ? MoveResult.BadState : MoveResult.Blocked; // BaseAI.cs:2499
+        }
+
+        /// <summary>
+        /// One step with no auto-turn: Mobile.Move plus the step clock.
+        ///
+        /// THE SIDESTEP RUNG'S STEP, and it is deliberately NOT DoStep. NavCreatureActor.Step is a
+        /// bare `_creature.Move(d)` - the rung never went through BaseAI at all - so giving this
+        /// one an auto-turn would make the two adapters disagree on the member that Nav.Actor's
+        /// wall assertion measures, which asks whether a step in ONE NAMED DIRECTION is refused.
+        /// An adapter that answered by stepping somewhere else would be reporting a different
+        /// question's answer.
+        ///
+        /// It keeps the clock advance, which the creature's Step does not have. That is the
+        /// existing, deliberate difference (see the class summary): the rung's step is a step, and
+        /// a bot that sidestepped for free would step faster than its pace while recovering.
+        /// </summary>
+        private bool StepAndAdvance(Direction d)
+        {
+            int delay = (int)(PaceSeconds * 1000.0);
+
+            d = WithRunningFlag(d, delay);
+
+            bool moved = _player.Move(d);
+
+            AdvanceClock(delay);
 
             return moved;
         }
@@ -424,10 +574,15 @@ namespace Server.Custom
         /// direct one does - the counterpart of BaseAI setting m_Path.Mover = DoMoveImpl
         /// (BaseAI.cs:2655). Leaving Mover null would let PathFollower call Mobile.Move behind the
         /// clock (PathFollower.cs:44) and step at the shared timer rate instead of at the pace.
+        ///
+        /// It hands back the MoveResult RAW, which is the half that used to be lost: Follow
+        /// branches on Blocked alone (PathFollower.cs:153), so a SuccessAutoTurn correctly skips
+        /// the repath-and-retry and a BadState correctly does nothing, where the old
+        /// `moved ? Success : Blocked` collapsed all three into two.
         /// </summary>
         private MoveResult FollowerMove(Direction d)
         {
-            return StepAndAdvance(d) ? MoveResult.Success : MoveResult.Blocked;
+            return DoStep(d);
         }
 
         public bool MoveTowards(IPoint3D goal, bool run, int range)
@@ -469,7 +624,14 @@ namespace Server.Custom
 
             // Direct step first, path only on refusal. This is the ordering that keeps a walker
             // off the pathfinder for the ordinary case of an unobstructed tile.
-            if (StepAndAdvance(_player.GetDirectionTo(goal)))
+            //
+            // BaseAI.MoveTo:2651 asks DoMove(dir, badStateOk: true), and DoMove (:2313-2321) reads
+            // badStateOk as "a step we were not due is not a reason to go and search". The three
+            // accepted results below are that test, spelled out.
+            MoveResult direct = DoStep(_player.GetDirectionTo(goal));
+
+            if (direct == MoveResult.Success || direct == MoveResult.SuccessAutoTurn ||
+                direct == MoveResult.BadState)
             {
                 _path = null;
                 return true;

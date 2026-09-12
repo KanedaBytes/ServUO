@@ -44,12 +44,16 @@ namespace Server.Custom
         /// <summary>
         /// Does a step through the adapter match what the engine says about the same step?
         ///
-        /// Three assertions, in order:
+        /// Four assertions. The first three run once per adapter; the fourth compares them with
+        /// each other and lives in StepsRecoverAlike below.
         ///
         ///   1. A step onto the known wall is REFUSED through the adapter.
         ///   2. That verdict EQUALS what Movement.CheckMovement says about the identical step.
         ///   3. After a step the engine does allow, the mobile the adapter hands back is the one
         ///      that actually moved in the world.
+        ///   4. On that same blocked tile, every adapter reaches the same verdict and leaves its
+        ///      probe turned by the same amount - the step-level recovery BaseAI.DoMoveImpl has
+        ///      always had and NavPlayerActor gained on 12 September 2026.
         ///
         /// The third needs its shape explained, because the obvious form of it is vacuous. Under
         /// this interface the adapter's position and map ARE the mobile's - INavActor.Mobile hands
@@ -101,8 +105,254 @@ namespace Server.Custom
                 return false;
             }
 
+            string recovery;
+
+            if (!StepsRecoverAlike(out recovery))
+            {
+                detail = "step recovery: " + recovery;
+                return false;
+            }
+
+            details.Add("step recovery: " + recovery);
+
             detail = String.Join(" | ", details.ToArray());
             return true;
+        }
+
+        /// <summary>
+        /// THE FOURTH ASSERTION, and the only cross-class one: on the same blocked tile, every
+        /// adapter reaches the same verdict and leaves its probe turned by the same amount.
+        ///
+        /// WHAT IT IS FOR. BaseAI.DoMoveImpl recovers a refused step by turning up to twice and
+        /// retrying in the turned direction (BaseAI.cs:2483-2499). NavPlayerActor did not, which is
+        /// Finding 2 of the 12 September rebaseline - two of the three bot-class walk failures were
+        /// `arrived-no-stand-tile` with nobody standing near. The port is only worth anything if
+        /// something fails when it is reverted, and the three assertions above cannot see it: they
+        /// exercise Step, which is Mobile.Move for both adapters and has no auto-turn on either.
+        /// This one goes through MoveTowards, which is where DoMoveImpl lives.
+        ///
+        /// WHY IT CANNOT ASSERT AN IDENTICAL FACING, which is the shape it was first asked for.
+        /// BaseAI.cs:2485 rolls the turn direction per call - `Utility.RandomDouble() >= 0.6 ? 1 :
+        /// -1` - so two probes on one tile legitimately end up facing into+1 and into-1. Magnitude
+        /// is the half that is not rolled, and it discriminates just as sharply: before the port a
+        /// PlayerMobile's refused step built a PathFollower to an unstandable tile, whose no-path
+        /// branch sets the facing straight back to `into` (PathFollower.cs:137-146) - magnitude 0
+        /// against the creature's 1 or 2.
+        ///
+        /// AND THE EXPECTED MAGNITUDE IS DERIVED FROM THE ENGINE, not named here, for the same
+        /// reason TryStepSomewhere derives its direction: a hard-coded "it ends up facing north"
+        /// would be a second claim about Trinsic's geometry that nothing checks. The two shapes
+        /// that survive the random sign are the only ones asserted, and a tile that is in neither
+        /// is reported rather than failed - it is a fact about the map, and the verdict half of the
+        /// assertion still runs.
+        /// </summary>
+        private static bool StepsRecoverAlike(out string detail)
+        {
+            Map map = Map.Trammel;
+
+            Point3D from = NavMovement.SolidFrom;
+            Point3D wall = NavMovement.SolidTile;
+
+            Direction into = Utility.GetDirection(from, wall);
+
+            // The four tiles an auto-turn can reach, asked of the engine rather than assumed. Note
+            // what the wall itself does to two of them: a diagonal step needs both of its
+            // orthogonal neighbours, one of which is the wall, so into+/-1 are refused BY the
+            // obstruction being stepped into. That is the geometry, not a coincidence, and it is
+            // why the forced-magnitude-2 branch is the one this seed tile is expected to take.
+            bool plus1, minus1, plus2, minus2;
+
+            if (!EngineAllowsTurns(map, from, into, out plus1, out minus1, out plus2, out minus2))
+            {
+                detail = "no probe classes are registered, so the engine could not be asked";
+                return false;
+            }
+
+            int expectedTurn;
+            string shape;
+
+            if (plus1 && minus1)
+            {
+                expectedTurn = 1;
+                shape = "the first turn lands whichever way it is rolled";
+            }
+            else if (!plus1 && !minus1 && plus2 && minus2)
+            {
+                expectedTurn = 2;
+                shape = "the first turn is refused both ways and the second lands both ways";
+            }
+            else
+            {
+                // Sign-dependent: one roll recovers in one turn and the other in two, or one
+                // recovers and the other does not. Nothing deterministic can be said about the
+                // magnitude, so it is not said. The verdicts are still compared.
+                expectedTurn = -1;
+                shape = String.Format(
+                    "SIGN-DEPENDENT at {0},{1} - the engine allows +1 {2}, -1 {3}, +2 {4}, -2 {5}, "
+                    + "so BaseAI.cs:2485's roll decides the magnitude and only the verdicts are compared",
+                    from.X, from.Y, plus1, minus1, plus2, minus2);
+            }
+
+            bool haveFirst = false;
+            bool firstVerdict = false;
+            int firstTurn = 0;
+            string firstLabel = null;
+            int classes = 0;
+
+            foreach (NavWalkAudit.ProbeClass cls in NavWalkAudit.ProbeClasses)
+            {
+                classes++;
+
+                bool verdict;
+                int turned;
+
+                // One probe at a time, created and deleted inside the loop, so no probe is ever
+                // standing on the tile another one is being measured from and each adapter starts
+                // with its step clock due (NavActor.cs's ctor comment).
+                NavWalkAudit.IWalkAuditProbe probe = cls.Create();
+
+                try
+                {
+                    probe.Mobile.MoveToWorld(from, map);
+                    probe.Mobile.Direction = into;
+
+                    INavActor actor = NavActor.For(probe.Mobile);
+
+                    if (actor == null)
+                    {
+                        detail = "NavActor.For refused " + cls.Label;
+                        return false;
+                    }
+
+                    // The wall tile itself, so the call cannot be satisfied by pathing around it:
+                    // whatever happens here is the step-level recovery and nothing else.
+                    verdict = actor.MoveTowards(new Point3D(wall), false, 0);
+                    turned = TurnSteps(into, probe.Mobile.Direction);
+                }
+                catch (Exception ex)
+                {
+                    detail = cls.Label + "'s probe threw: " + ex.Message;
+                    return false;
+                }
+                finally
+                {
+                    probe.Mobile.Delete();
+                }
+
+                if (expectedTurn >= 0 && turned != expectedTurn)
+                {
+                    detail = String.Format(
+                        "{0} was refused a step {1} from {2},{3} and ended up turned {4} step(s) "
+                        + "where the engine's own recovery turns {5} - {6}",
+                        cls.Label, into, from.X, from.Y, turned, expectedTurn, shape);
+                    return false;
+                }
+
+                if (!haveFirst)
+                {
+                    haveFirst = true;
+                    firstVerdict = verdict;
+                    firstTurn = turned;
+                    firstLabel = cls.Label;
+                    continue;
+                }
+
+                // The magnitude is only comparable when it is forced. Under a sign-dependent
+                // neighbourhood two adapters can differ by BaseAI.cs:2485's roll alone, and an
+                // assertion that failed on a coin toss would be worse than no assertion.
+                if (verdict != firstVerdict || (expectedTurn >= 0 && turned != firstTurn))
+                {
+                    detail = String.Format(
+                        "{0} and {1} DISAGREE about a refused step {2} from {3},{4}: {0} {5} and "
+                        + "turned {6} step(s), {1} {7} and turned {8}",
+                        firstLabel, cls.Label, into, from.X, from.Y,
+                        firstVerdict ? "recovered" : "did not recover", firstTurn,
+                        verdict ? "recovered" : "did not recover", turned);
+                    return false;
+                }
+            }
+
+            if (classes < 2)
+            {
+                detail = String.Format(
+                    "only {0} probe class is registered, so the adapters were not compared with "
+                    + "each other; the one that ran turned {1} step(s)",
+                    classes, firstTurn);
+                return true;
+            }
+
+            detail = String.Format(
+                "every adapter met the refused step {0} from {1},{2} the same way - {3} and turned "
+                + "{4} step(s) ({5})",
+                into, from.X, from.Y,
+                firstVerdict ? "recovered" : "did not recover", firstTurn, shape);
+
+            return true;
+        }
+
+        /// <summary>
+        /// What the engine says about the four tiles an auto-turn can reach, asked once and
+        /// without moving anything.
+        ///
+        /// One probe for all four questions, and the FIRST registered class's, because
+        /// CheckMovement reads its mobile for passability rules only and both probe classes are
+        /// ordinary human-bodied mobiles standing on the same tile - the wall answers the same for
+        /// either. A stand-in declared here would be the third instrument this file already
+        /// refuses to grow.
+        /// </summary>
+        private static bool EngineAllowsTurns(
+            Map map, Point3D from, Direction into,
+            out bool plus1, out bool minus1, out bool plus2, out bool minus2)
+        {
+            plus1 = minus1 = plus2 = minus2 = false;
+
+            foreach (NavWalkAudit.ProbeClass cls in NavWalkAudit.ProbeClasses)
+            {
+                NavWalkAudit.IWalkAuditProbe probe = cls.Create();
+
+                try
+                {
+                    probe.Mobile.MoveToWorld(from, map);
+
+                    int newZ;
+
+                    plus1 = Movement.Movement.CheckMovement(probe.Mobile, map, from, Turned(into, 1), out newZ);
+                    minus1 = Movement.Movement.CheckMovement(probe.Mobile, map, from, Turned(into, -1), out newZ);
+                    plus2 = Movement.Movement.CheckMovement(probe.Mobile, map, from, Turned(into, 2), out newZ);
+                    minus2 = Movement.Movement.CheckMovement(probe.Mobile, map, from, Turned(into, -2), out newZ);
+                }
+                finally
+                {
+                    probe.Mobile.Delete();
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// BaseCreature.TurnInternal's arithmetic (BaseCreature.cs:4098), without the mobile: the
+        /// low three bits are the facing and the turn wraps inside them.
+        /// </summary>
+        private static Direction Turned(Direction d, int steps)
+        {
+            int v = (int)d;
+
+            return (Direction)((((v & 0x7) + steps) & 0x7) | (v & 0x80));
+        }
+
+        /// <summary>
+        /// How many 45 degree steps apart two facings are, 0 to 4. The short way round, because a
+        /// turn of +1 and a turn of -1 are the same size and BaseAI.cs:2485 chooses between them
+        /// at random.
+        /// </summary>
+        private static int TurnSteps(Direction a, Direction b)
+        {
+            int diff = Math.Abs(((int)a & 0x7) - ((int)b & 0x7));
+
+            return Math.Min(diff, 8 - diff);
         }
 
         /// <summary>
