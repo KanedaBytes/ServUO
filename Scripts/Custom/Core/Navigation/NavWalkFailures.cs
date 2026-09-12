@@ -41,6 +41,7 @@
 using System;
 using System.Collections.Generic;
 
+using Server.Items;
 using Server.Mobiles;
 
 namespace Server.Custom
@@ -279,11 +280,24 @@ namespace Server.Custom
         /// of the walk audit is that its causes read against the live ledger's without a
         /// translation table - so the classification is a function and both callers call it.
         ///
-        /// The three causes are not degrees of the same thing. `goal-unstandable` is a tile
-        /// nothing fits on and a walk that could never have finished. `arrived-no-stand-tile` is a
-        /// bot INSIDE the arrival's range that still found nowhere to stand - the place, not the
-        /// road. `short-of-goal` never reached the place at all, and its problem is the road
-        /// behind it. Merged, they made 28 of 30 failures in one window look like one thing.
+        /// The causes are not degrees of the same thing. `locked-door` is a door the mobile was
+        /// never going to get through, standing where the Door rung already tried and failed.
+        /// `goal-unstandable` is a tile nothing fits on and a walk that could never have finished.
+        /// `arrived-no-stand-tile` is a bot INSIDE the arrival's range that still found nowhere to
+        /// stand - the place, not the road. `short-of-goal` never reached the place at all, and its
+        /// problem is the road behind it. Merged, they made 28 of 30 failures in one window look
+        /// like one thing.
+        ///
+        /// `locked-door` IS A MEASUREMENT WITH A DECISION WAITING ON IT, and that is why it is
+        /// here rather than folded into one of the others. The door gate this shard added to
+        /// FastAStarAlgorithm (MODIFICATIONS entry 6) lets a bot's route plan through a closed
+        /// door, and ServUO's AlwaysIgnoreDoors has no "unlocked only" notion - so a bot can plan
+        /// through a LOCKED door and then fail at it. Upstream carries exactly this limit on their
+        /// slow path (INTEGRATION-NOTES.txt:245-250) and closes it on their cache path with a
+        /// second flag and a per-cell guard, which here would be a SECOND upstream edit, in
+        /// FastMovement.cs:39-52. That edit was deliberately not taken; this count is what decides
+        /// whether it should be. House doors need no such guard and never did: FastMovementImpl's
+        /// door branch (FastMovement.cs:50-52) runs BaseHouseDoor.CheckAccess already.
         /// </summary>
         public static string CauseFor(
             Mobile mobile, Map map, Point3D goal, int arrivalRange, out bool goalUnstandable)
@@ -301,6 +315,16 @@ namespace Server.Custom
                 !map.CanFit(goal.X, goal.Y, goal.Z, 16, false, false, true)
                 && !map.CanFit(goal.X, goal.Y, map.GetAverageZ(goal.X, goal.Y), 16, false, false, true);
 
+            // Asked before goalUnstandable, and the ordering is the point: a closed door is an
+            // Impassable item, so a goal ON a door tile already reads unstandable - the false
+            // positive the navigation README warns about - and that answer hides the one cause
+            // anybody can act on. goalUnstandable itself is left computed either way, because the
+            // caller stores it as its own fact.
+            if (LockedDoorNear(mobile, map))
+            {
+                return "locked-door";
+            }
+
             if (goalUnstandable)
             {
                 return "goal-unstandable";
@@ -312,6 +336,48 @@ namespace Server.Custom
             int reach = Math.Max(Math.Abs(mobile.X - goal.X), Math.Abs(mobile.Y - goal.Y));
 
             return reach <= Math.Max(arrivalRange, 1) ? "arrived-no-stand-tile" : "short-of-goal";
+        }
+
+        /// <summary>
+        /// A closed, LOCKED door within a tile of where the mobile gave up.
+        ///
+        /// Range 1 and the vertical window are not chosen here - they are the Door rung's, copied
+        /// from Core/DoorHelper.cs (TryOpenAdjacent's GetItemsInRange(location, 1) and
+        /// WithinReach's `door.Z + height > from.Z && from.Z + 16 > door.Z`, which is the window
+        /// the client's own open-door macro uses). Asking a different question from the rung that
+        /// already failed would name a door that was never in the way.
+        ///
+        /// Only LOCKED doors count. An unlocked one the walker could not open is a different
+        /// fault - LOS, reach, or somebody standing in the doorway - and filing it here would bury
+        /// the number the second upstream edit is waiting on.
+        /// </summary>
+        private static bool LockedDoorNear(Mobile mobile, Map map)
+        {
+            IPooledEnumerable<Item> items = map.GetItemsInRange(mobile.Location, 1);
+
+            try
+            {
+                foreach (Item item in items)
+                {
+                    var door = item as BaseDoor;
+
+                    if (door == null || door.Open || !door.Locked)
+                    {
+                        continue;
+                    }
+
+                    if (door.Z + door.ItemData.Height > mobile.Z && mobile.Z + 16 > door.Z)
+                    {
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                items.Free();
+            }
+
+            return false;
         }
 
         /// <summary>

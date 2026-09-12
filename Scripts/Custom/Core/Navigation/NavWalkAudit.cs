@@ -104,8 +104,10 @@ namespace Server.Custom
         public int Range;
 
         /// <summary>
-        /// NavWalkFailures' vocabulary - goal-unstandable / arrived-no-stand-tile / short-of-goal.
-        /// Null on a pass, and ALWAYS one of those three on a failure, however the walk ended.
+        /// NavWalkFailures' vocabulary - locked-door / goal-unstandable / arrived-no-stand-tile /
+        /// short-of-goal. Null on a pass, and ALWAYS one of those four on a failure, however the
+        /// walk ended. `locked-door` arrived with the pathfinder door gate (MODIFICATIONS entry 6)
+        /// and is the count deciding whether the second upstream edit is worth taking.
         /// </summary>
         public string Cause;
 
