@@ -80,14 +80,19 @@ namespace Server.Custom
         {
             long working = WorkingSetBytes;
 
+            // The loop clause rides here rather than on a check of its own: it is the same
+            // question CyclesPerSecond answers as a mean, and a reader comparing the two should
+            // not have to find them in different places. LoopCost.Describe says "off" when the
+            // sampler is not running, which is the shipping state.
             return String.Format(
                 CultureInfo.InvariantCulture,
-                "{0:F1} cycles/s now, {1:F1} mean; {2} managed{3}; {4}",
+                "{0:F1} cycles/s now, {1:F1} mean; {2} managed{3}; {4}; {5}",
                 Core.CyclesPerSecond,
                 Core.AverageCPS,
                 Megabytes(ManagedBytes),
                 working > 0 ? ", " + Megabytes(working) + " working set" : "",
-                DescribeSaves());
+                DescribeSaves(),
+                LoopCost.Describe());
         }
 
         public static string DescribeSaves()

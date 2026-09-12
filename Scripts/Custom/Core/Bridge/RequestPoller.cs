@@ -742,6 +742,78 @@ namespace Server.Custom
                     return true;
                 }
 
+                // Plan hops three ways - stock, the Custom/ copy of stock, and that copy with
+                // FastAStarAlgorithm.cs:118's dead-end `break` changed to `continue` - and report
+                // success, route length and node expansions for each.
+                //
+                // Its own token rather than a mode of nav-hop, because nav-hop answers "is this
+                // hop walkable" about authored data and this answers "what can the pathfinder
+                // see" about the engine. Same shape of body, different question.
+                //
+                //   "gen [count] [bot|creature]"       a controlled set at 9/12/16/20/24 tiles
+                //   "validate [count] [bot|creature]"  assert the copy IS stock, byte for byte
+                //   "x,y,z x,y,z ... [bot|creature]"   explicit pairs
+                case "nav-hop-probe":
+                {
+                    string probeSummary;
+                    IList<string> probeReport;
+
+                    if (!NavHopProbe.TryRun(body, out probeSummary, out probeReport))
+                    {
+                        message = probeSummary;
+                        return false;
+                    }
+
+                    warnings = probeReport;
+                    message = probeSummary + " Rows at " + NavHopProbe.SnapshotPath + ".";
+                    return true;
+                }
+
+                // The whole-loop sampler: "on", "off", or "reset" to open a fresh window.
+                // A token rather than only a config key, because a measurement window has to be
+                // opened against a shard that is already warm - a restart to turn a sampler on
+                // measures the boot as much as the thing under test.
+                case "loop-cost":
+                {
+                    string word = FirstWord(body);
+
+                    if (Insensitive.Equals(word, "on"))
+                    {
+                        LoopCost.SetEnabled(true);
+                    }
+                    else if (Insensitive.Equals(word, "off"))
+                    {
+                        LoopCost.SetEnabled(false);
+                    }
+                    else if (Insensitive.Equals(word, "reset"))
+                    {
+                        LoopCost.Reset();
+                    }
+                    else if (!String.IsNullOrEmpty(word))
+                    {
+                        message = "loop-cost takes 'on', 'off' or 'reset'";
+                        return false;
+                    }
+
+                    message = LoopCost.Describe();
+                    return true;
+                }
+
+                // The pathfinder instrument's counters. "reset" opens a fresh window; an empty
+                // body just reports. It cannot CHANGE the mode - that is Config/Custom.cfg's, and
+                // a token that could swap the shard's pathfinder from outside is precisely the
+                // global-state hazard REVIEW.md:89 warns about.
+                case "nav-pathfinder":
+                {
+                    if (Insensitive.Equals(FirstWord(body), "reset"))
+                    {
+                        NavPathfinder.Reset();
+                    }
+
+                    message = NavPathfinder.Describe();
+                    return true;
+                }
+
                 // "<x>,<y>,<w>,<h>" - a region of the uo-offline reference to propose.
                 //
                 // Answers as soon as the work is SET UP, not when it is finished: an adopt is a
