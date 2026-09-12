@@ -984,9 +984,12 @@ namespace Server.Custom
         /// Upstream's RespawnAllSpawners (BotStartupManager.cs:119-154), minus its runaway brake:
         /// that brake exists because upstream's spawners persist in the world save and can stack,
         /// and ours are rebuilt from a file whose UniqueIds are derived, so there is nothing to
-        /// stack. Upstream's other half - a World.Mobiles sweep deleting stale bots - is not
-        /// ported either, because PlayerBot.Deserialize already deletes every bot on load, for
-        /// every bot, however it got into the save.
+        /// stack.
+        ///
+        /// Upstream's other half - a World.Mobiles sweep deleting stale bots - IS ported now, and
+        /// this comment used to say it was not. The reason it gave was that PlayerBot.Deserialize
+        /// already deleted every bot on load; that tail went with the class swap, and the sweep is
+        /// what replaced it. See BotStartupPurge.
         /// </summary>
         public static int RespawnAll()
         {

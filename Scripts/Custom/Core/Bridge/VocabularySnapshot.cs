@@ -144,6 +144,16 @@ namespace Server.Custom
             Type creature = typeof(BaseCreature);
             Type vendor = typeof(BaseVendor);
 
+            // A THIRD ROOT, BECAUSE A BOT IS NO LONGER A BaseCreature. Without it PlayerBot simply
+            // vanished from the editor's spawnable-type list the day the class changed - a silent
+            // loss, because an absent entry in a dropdown of a thousand looks like nothing at all,
+            // and the one spawn string this shard generates by machine names it.
+            //
+            // typeof(PlayerBot) rather than typeof(PlayerMobile): the question this list answers is
+            // "what may a spawner be told to make", and the answer must not become every player
+            // class on the shard.
+            Type bot = typeof(PlayerBot);
+
             foreach (Assembly assembly in Assemblies())
             {
                 Type[] types;
@@ -170,7 +180,8 @@ namespace Server.Custom
                 {
                     Type type = types[i];
 
-                    if (type == null || type.IsAbstract || !creature.IsAssignableFrom(type))
+                    if (type == null || type.IsAbstract
+                        || !(creature.IsAssignableFrom(type) || bot.IsAssignableFrom(type)))
                     {
                         continue;
                     }

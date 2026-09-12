@@ -97,13 +97,18 @@ namespace Server.Custom
 
             double delay = DelayFor(pace, bot.Mounted);
 
-            bot.ActiveSpeed = delay;
-            bot.PassiveSpeed = delay;
-
-            if (Math.Abs(bot.CurrentSpeed - delay) > 0.0001)
-            {
-                bot.CurrentSpeed = delay;
-            }
+            // ONE WRITE, WHERE THERE WERE THREE AND A GUARD.
+            //
+            // ActiveSpeed and PassiveSpeed both had to be set because BaseAI chose between them by
+            // its own ActionType and a commuting Traveler counted as wandering, so writing only
+            // one left it to chance which was read. CurrentSpeed was the one DoMoveImpl actually
+            // stepped on, and its write was guarded by an epsilon comparison because assigning it
+            // fired OnCurrentSpeedChanged, which stopped and restarted the AI timer
+            // (BaseAI.cs:3031-3037) - called every tick unguarded, the bot would never think.
+            //
+            // A PlayerMobile has neither the three properties nor the timer. There is one pace,
+            // nothing is restarted by writing it, and NavPlayerActor reads it through IBotActor.
+            bot.StepDelaySeconds = delay;
         }
 
         /// <summary>
@@ -260,7 +265,7 @@ namespace Server.Custom
         /// <summary>The pace a bot is already moving at, so remounting does not change it.</summary>
         private static BotPace CurrentPace(PlayerBot bot)
         {
-            return bot.CurrentSpeed <= DelayFor(BotPace.Run, false) + 0.0001
+            return bot.StepDelaySeconds <= DelayFor(BotPace.Run, false) + 0.0001
                 ? BotPace.Run
                 : BotPace.Walk;
         }

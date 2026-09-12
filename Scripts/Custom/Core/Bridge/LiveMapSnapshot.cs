@@ -397,14 +397,16 @@ namespace Server.Custom
             // outside the process: "is that bot running?" could only be answered by timing it
             // across two snapshots, which a town jam or a bend in the road makes a lie.
             //
-            // THE DELAY THE ENGINE STEPS ON, not CurrentSpeed. BaseAI.DoMoveImpl advances NextMove
-            // by TransformMoveDelay(CurrentSpeed) and derives the run flag from that, and the two
-            // were not the same number: this line printed "running, 200ms/step" for a bot the AI
-            // was stepping every 500ms, because BotAI's commute override sat between them. Asking
-            // the AI is what makes this the value the engine is acting on rather than a claim.
-            double stepSeconds = bot.AIObject != null
-                ? bot.AIObject.TransformMoveDelay(bot.CurrentSpeed)
-                : bot.CurrentSpeed;
+            // THE DELAY THE ENGINE STEPS ON - which, since the class swap, is the delay the bot
+            // was given, and that is a change worth knowing about rather than a simplification.
+            //
+            // It used to ask the AI: DoMoveImpl advanced NextMove by TransformMoveDelay(CurrentSpeed)
+            // and derived the run flag from that, and the two were not the same number - this line
+            // printed "running, 200ms/step" for a bot the AI was stepping every 500ms, because
+            // BotAI's commute override sat between them. There is no AI now and no SpeedInfo in the
+            // path (see NavPlayerActor), so the pace a bot is given IS the pace it steps at and
+            // there is nothing left to ask.
+            double stepSeconds = bot.StepDelaySeconds;
 
             builder.Append(",\"stepMs\":").Append((int)Math.Round(stepSeconds * 1000.0));
             builder.Append(",\"mounted\":").Append(bot.Mounted ? "true" : "false");

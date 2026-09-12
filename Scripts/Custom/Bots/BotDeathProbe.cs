@@ -6,34 +6,35 @@
 //
 // BotDeathProbe.cs — a reportable bot death, on the record. Reports as Bots.Death.
 //
-// THIS FIXES NOTHING, DELIBERATELY. It is REVIEW.md's F2 turned into a reproduction that runs on
-// every [BotSmoke, so the defect is a measured fact rather than a paragraph somebody has to believe.
+// THIS USED TO FIX NOTHING, DELIBERATELY, AND NOW IT ASSERTS. It was REVIEW.md's F2 turned into a
+// reproduction: a known defect, reported green on purpose so that a permanently red check did not
+// become one nobody read. The class swap closed the defect, so the probe turned round - a clean
+// reportable death is now the PASS, and the cast coming back is a FAIL naming F2 as regressed.
 //
-// THE DEFECT. PlayerBot is a BaseCreature that sets Player = true, for the party gate among other
-// things. Mobile.OnDeath takes the PLAYER branch for anything with that flag and raises PlayerDeath
-// (Mobile.cs:4235). ReportMurdererGump handles that event, and when Core.SE is on and the victim
-// has a reportable player aggressor it evaluates ((PlayerMobile)m).RecentlyReported
-// (ReportMurderer.cs:43) - a cast a bot cannot satisfy. Our own bots are Player-flagged too, so a
-// bot killing a bot is a reportable player aggressor: no real player, no NetState, no client needed
-// to reach it.
+// WHAT THE DEFECT WAS. A PlayerBot was a BaseCreature that set Player = true, for the party gate
+// among other things. Mobile.OnDeath takes the PLAYER branch for anything with that flag and raises
+// PlayerDeath (Mobile.cs:4235). ReportMurdererGump handles that event, and when Core.SE is on and
+// the victim has a reportable player aggressor it evaluates ((PlayerMobile)m).RecentlyReported
+// (ReportMurderer.cs:43) - a cast a BaseCreature cannot satisfy. Our own bots are Player-flagged
+// too, so a bot killing a bot was a reportable player aggressor: no real player, no NetState and no
+// client were needed to reach it.
 //
-// It is not "every bot death crashes". It needs SE rules, a Player-flagged aggressor, and
-// CanReportMurder still true on that aggression - which is why nothing has tripped over it yet, and
-// exactly why it needs a probe rather than a note: the conditions are ordinary enough to arrive the
-// day bots fight each other, and the failure lands INSIDE PlayerBot.OnDeath's base call, before the
-// mount is released and before the delete is scheduled, so a bot dying that way also skips its own
-// cleanup.
+// WHAT CLOSED IT. PlayerBot is a PlayerMobile (CLASS-DECISION.md, option d), so the cast succeeds
+// and the handler runs to completion. That is the whole repair, and it is why the class decision
+// was taken rather than ReportMurderer patched: that file is upstream and its cast is correct about
+// every mobile ServUO ships.
 //
-// WHY THE CHAIN STAYS GREEN. A probe that failed on a known, scheduled defect would make [BotSmoke
-// permanently red, and a permanently red check is one nobody reads - which is how a real regression
-// hides. So the EXPECTED outcome reports Ok and says so in its own words. What fails here is the
-// probe being unable to establish its own preconditions: that is the probe going wrong, and it is
-// worth waking somebody for. If it ever stops reproducing, that reports Ok too, with a different
-// sentence asking to be read - because on the day the class decision lands, this is the check that
-// tells you it worked.
+// WHAT IT DOES NOT CLOSE, AND MUST NOT BE READ AS CLOSING. The gump is delivered to a client
+// (ReportMurderer.cs:96) and the count is awarded inside OnResponse (:112, killer.Kills++ at :122).
+// A clientless victim answers nothing, so a player can still cut down the whole of Britain and stay
+// blue. Upstream answers that with an adapter their bot runs before base.OnDeath
+// (BotMurderReport.OnBotDeath), and it is not ported here - it belongs with the PK session, and it
+// carries a shard policy question with it about whether bot-on-bot kills should award counts at
+// all. THIS PROBE ASSERTS THAT THE DEATH COMPLETES, NOT THAT ANYBODY WAS REPORTED.
 //
-// The permanent repair is the PlayerMobile identity decision (REVIEW.md section 3), not a patch to
-// ReportMurderer: that file is upstream, and the cast is correct about every mobile ServUO ships.
+// WHY IT STILL FAILS LOUDLY WHEN IT CANNOT SET ITS OWN TRAP. An exception other than the cast, or
+// an aggression that never registers as reportable, is the probe going wrong rather than the engine,
+// and a probe that cannot ask its question must never answer it green.
 
 using System;
 
@@ -113,16 +114,18 @@ namespace Server.Custom
 
                 if (thrown is InvalidCastException)
                 {
-                    _last = HealthResult.Ok(String.Format(
-                        "reproduced as expected: a reportable bot death throws {0} in the murder "
-                        + "report ({1}). EXPECTED FAILURE until the class decision - PlayerBot is a "
-                        + "BaseCreature with Player = true, and ReportMurderer casts the victim to "
-                        + "PlayerMobile. REVIEW.md F2; the repair is the identity migration, not a "
-                        + "patch to an upstream file.",
+                    // F2, BACK FROM THE DEAD. This was the expected outcome until the class swap
+                    // and reported Ok; it is now a failure, because the only way to reach it again
+                    // is for a PlayerBot to have stopped being a PlayerMobile.
+                    _last = HealthResult.Fail(String.Format(
+                        "REGRESSED: a reportable bot death threw {0} in the murder report ({1}). "
+                        + "That is REVIEW.md F2, which the PlayerMobile class swap closed - "
+                        + "ReportMurderer casts the victim to PlayerMobile (ReportMurderer.cs:43) "
+                        + "and a PlayerBot must satisfy it. Check what PlayerBot now inherits from.",
                         thrown.GetType().Name,
                         FirstFrame(thrown)));
 
-                    Log.Warn("Bot death probe reproduced F2 as expected - {0}", thrown.Message);
+                    Log.Error("Bot death probe FAILED - F2 has regressed: {0}", thrown.Message);
 
                     return Finish(victim, killer, corpse);
                 }
@@ -130,16 +133,18 @@ namespace Server.Custom
                 if (thrown != null)
                 {
                     return Broken(victim, killer, String.Format(
-                        "the death threw {0}, which is not the cast this probe reproduces: {1}",
+                        "the death threw {0}: {1}",
                         thrown.GetType().Name,
                         thrown.Message));
                 }
 
                 _last = HealthResult.Ok(
-                    "NO LONGER REPRODUCES: a reportable bot death completed without the "
-                    + "PlayerMobile cast failing. That is news - either the class decision has "
-                    + "landed (REVIEW.md F2, section 3) or the conditions moved. Read this line "
-                    + "rather than skimming it, and retire the probe deliberately.");
+                    "a reportable bot death completed: the aggression registered as reportable, "
+                    + "the victim died, and the murder report ran through without the PlayerMobile "
+                    + "cast failing. REVIEW.md F2 is closed by the class swap. Note what this does "
+                    + "NOT assert: the report gump is delivered to a client and the count is "
+                    + "awarded in its OnResponse, so a clientless victim still awards nobody a "
+                    + "murder count. That adapter is the PK session.");
 
                 Log.Info("Bot death probe - {0}", _last.Detail);
 
@@ -202,10 +207,15 @@ namespace Server.Custom
         /// <summary>
         /// Clear up, whatever happened.
         ///
-        /// The exception lands INSIDE base.OnDeath, so PlayerBot.OnDeath never reaches its mount
-        /// release or its delete timer: nothing else is going to tidy this up. The corpse goes too,
-        /// which is a deviation from the ordinary death path on purpose - a real bot's corpse is
-        /// left for a player to loot, and a probe's is litter in a plaza.
+        /// Unconditional, and it was not always safe to assume it needed to be: while F2 stood,
+        /// the exception landed INSIDE base.OnDeath, so PlayerBot.OnDeath never reached its mount
+        /// release or its delete timer and nothing else was going to tidy up. That path is closed,
+        /// and PlayerBot.OnDeath now runs to the end - but this stays unconditional, because a
+        /// probe that only cleans up after the outcomes it predicted is a probe that leaks on the
+        /// one it did not.
+        ///
+        /// The corpse goes too, which is a deviation from the ordinary death path on purpose - a
+        /// real bot's corpse is left for a player to loot, and a probe's is litter in a plaza.
         /// </summary>
         private static HealthResult Finish(PlayerBot victim, PlayerBot killer, Container corpse)
         {

@@ -444,7 +444,6 @@ namespace Server.Custom
         {
             _anchor = bot.Location;
             bot.Home = _anchor;
-            bot.RangeHome = 0;
             bot.IdleTolerance = 0;
 
             if (bot.TradeClass == BotClass.Smith)
@@ -485,7 +484,6 @@ namespace Server.Custom
             }
 
             bot.Home = Point3D.Zero;
-            bot.RangeHome = 0;
             bot.IdleTolerance = 0;
             bot.Commuting = false;
             _walkingToStation = false;

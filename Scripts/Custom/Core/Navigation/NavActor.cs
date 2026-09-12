@@ -275,6 +275,247 @@ namespace Server.Custom
     }
 
     /// <summary>
+    /// The PlayerMobile implementation: BaseAI.MoveTo's structure over a plain PathFollower.
+    ///
+    /// NOT AN INVENTION - this is what BaseAI.MoveTo does (BaseAI.cs:2621-2669) with the two
+    /// BaseCreature-only clauses removed, and it is the shape upstream already runs in production
+    /// for exactly this class (Behaviors/TravelerBehavior.cs:1963, :3323). A PathFollower takes a
+    /// plain Mobile (PathFollower.cs:18) and needs nothing from BaseAI.
+    ///
+    /// TWO THINGS BaseAI DID FOR FREE AND THIS MUST DO ITSELF, and they are the whole reason Step
+    /// and PlaceAt are on the interface at all.
+    ///
+    ///   THE STEP CLOCK. BaseAI.DoMoveImpl advances NextMove INSIDE the step (BaseAI.cs:2349-2353)
+    ///   and clamps a stale one forward to now. Here that is StepAndAdvance, which every step goes
+    ///   through, so a step taken by the recovery ladder moves the clock exactly as a step taken by
+    ///   the follower does. Additive then clamped, and compared by subtraction, because
+    ///   Core.TickCount wraps (CLAUDE.md section 15).
+    ///
+    ///   THE CACHED PATH. BaseAI.OnTeleported force-repaths its follower (BaseAI.cs:2612-2619).
+    ///   A rescue that moved the mobile and left a follower still walking to the old goal from the
+    ///   old tile would spend the next hop walking back. PlaceAt drops it, which is the same
+    ///   guarantee one step stronger than a repath.
+    ///
+    /// WHAT IT DELIBERATELY DOES NOT DO: SpeedInfo. BaseAI.TransformMoveDelay runs the creature
+    /// through SpeedInfo, which clamps toward MaxDelayWild for an uncontrolled creature below full
+    /// Stam - re-inflating a run the moment a bot takes damage. BotAI overrode that away for
+    /// exactly that reason while it existed. So here the two delay members are EQUAL, and the pace
+    /// the bot was given is the pace it steps at. One consequence worth knowing: [BotPace exists to
+    /// tell those two apart, and for a PlayerMobile they can no longer disagree.
+    /// </summary>
+    public sealed class NavPlayerActor : INavActor
+    {
+        private readonly PlayerMobile _player;
+
+        private PathFollower _path;
+        private long _nextStepTick;
+
+        public NavPlayerActor(PlayerMobile player)
+        {
+            if (player == null)
+            {
+                throw new ArgumentNullException("player");
+            }
+
+            _player = player;
+
+            // Due immediately. A fresh actor that made the walker wait would lose the first step
+            // of every leg, and a leg gets a fresh walker in four of the five behaviours.
+            _nextStepTick = Core.TickCount;
+        }
+
+        public Mobile Mobile
+        {
+            get { return _player; }
+        }
+
+        /// <summary>
+        /// Always. There is no AI to be missing - which is the point of the class swap, and the
+        /// reason the null-AI early return in NavWalker never fires for this actor.
+        /// </summary>
+        public bool HasMover
+        {
+            get { return true; }
+        }
+
+        /// <summary>ForceStayHome is a BaseCreature property; a PlayerMobile has no tether.</summary>
+        public bool RefusesDistantGoals
+        {
+            get { return false; }
+        }
+
+        public long NextStepTick
+        {
+            get { return _nextStepTick; }
+        }
+
+        /// <summary>
+        /// The pace the bot was given, in seconds per step.
+        ///
+        /// Read off IBotActor rather than off a concrete class, because this is Core and Core does
+        /// not name bot classes. The fallback is the engine's own walk-on-foot constant, for a
+        /// PlayerMobile that is not a bot: nothing constructs one today, but an actor whose step
+        /// delay was zero would ask the walker for a step on every single tick of the shared timer.
+        /// </summary>
+        private double PaceSeconds
+        {
+            get
+            {
+                var actor = _player as IBotActor;
+
+                if (actor == null)
+                {
+                    return Mobile.WalkFoot / 1000.0;
+                }
+
+                double pace = actor.StepDelaySeconds;
+
+                return pace > 0.0 ? pace : Mobile.WalkFoot / 1000.0;
+            }
+        }
+
+        public double StepDelaySeconds
+        {
+            get { return PaceSeconds; }
+        }
+
+        public double TransformedStepDelaySeconds
+        {
+            get { return PaceSeconds; }
+        }
+
+        /// <summary>
+        /// BaseAI.DoMoveImpl's own tail (BaseAI.cs:2336-2353), for one step.
+        ///
+        /// The run flag is derived from the delay rather than passed in, which is what the engine
+        /// does: a mobile is running when its step delay is shorter than the walk constant for
+        /// whatever it is on. Deriving it here rather than trusting the caller is what keeps a
+        /// sidestep and a follower step look the same to a watching client.
+        /// </summary>
+        private bool StepAndAdvance(Direction d)
+        {
+            int delay = (int)(PaceSeconds * 1000.0);
+
+            bool mounted = _player.Mounted || _player.Flying;
+
+            if (mounted ? delay < Mobile.WalkMount : delay < Mobile.WalkFoot)
+            {
+                d |= Direction.Running;
+            }
+
+            bool moved = _player.Move(d);
+
+            // ADVANCED WHETHER OR NOT THE STEP LANDED, which is also what DoMoveImpl does: it
+            // advances NextMove before Move is attempted, so a mobile grinding against a wall is
+            // rate-limited exactly as a walking one is. Without that, a blocked walker would ask
+            // for a step on every 50ms tick of the shared timer.
+            _nextStepTick += delay;
+
+            if (Core.TickCount - _nextStepTick > 0)
+            {
+                _nextStepTick = Core.TickCount;
+            }
+
+            return moved;
+        }
+
+        /// <summary>
+        /// The Mover the PathFollower calls, so a path-driven step moves the clock the same way a
+        /// direct one does - the counterpart of BaseAI setting m_Path.Mover = DoMoveImpl
+        /// (BaseAI.cs:2655). Leaving Mover null would let PathFollower call Mobile.Move behind the
+        /// clock (PathFollower.cs:44) and step at the shared timer rate instead of at the pace.
+        /// </summary>
+        private MoveResult FollowerMove(Direction d)
+        {
+            return StepAndAdvance(d) ? MoveResult.Success : MoveResult.Blocked;
+        }
+
+        public bool MoveTowards(IPoint3D goal, bool run, int range)
+        {
+            // BaseAI.MoveTo also tests DisallowAllMoves here; that is a BaseCreature property and
+            // there is no PlayerMobile equivalent to test. Nothing is lost: Mobile.Move refuses a
+            // deleted, frozen, paralyzed or mid-cast mobile on its own (Mobile.cs:3105, :3130), so
+            // the guards that matter are enforced one level down for both implementations.
+            if (_player.Deleted || goal == null)
+            {
+                return false;
+            }
+
+            var damageable = goal as IDamageable;
+
+            if (damageable != null && damageable.Deleted)
+            {
+                return false;
+            }
+
+            if (_player.InRange(goal, range))
+            {
+                _path = null;
+                return true;
+            }
+
+            // Goal compared BY REFERENCE, as BaseAI.cs:2644 does - which is why NavWalker holds a
+            // NavGoal instance for the length of a hop and replaces it to force a repath.
+            if (_path != null && _path.Goal == goal)
+            {
+                if (_path.Follow(run, 1))
+                {
+                    _path = null;
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Direct step first, path only on refusal. This is the ordering that keeps a walker
+            // off the pathfinder for the ordinary case of an unobstructed tile.
+            if (StepAndAdvance(_player.GetDirectionTo(goal)))
+            {
+                _path = null;
+                return true;
+            }
+
+            _path = new PathFollower(_player, goal);
+            _path.Mover = FollowerMove;
+
+            if (_path.Follow(run, 1))
+            {
+                _path = null;
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool Step(Direction d)
+        {
+            return StepAndAdvance(d);
+        }
+
+        public void PlaceAt(Point3D location, Map map)
+        {
+            _player.MoveToWorld(location, map);
+
+            // BaseAI.OnTeleported, one step stronger: the follower is dropped rather than
+            // repathed, so the next MoveTowards rebuilds it from where the mobile now stands.
+            _path = null;
+        }
+
+        /// <summary>
+        /// Nothing to align. A PlayerMobile has no idle wander to point at a destination, and
+        /// XmlSpawner2.cs:9318 never gave it a Home to point with.
+        /// </summary>
+        public void AlignHome(Point3D location)
+        {
+        }
+
+        public void DropCachedPath()
+        {
+            _path = null;
+        }
+    }
+
+    /// <summary>
     /// Which implementation a mobile gets.
     ///
     /// ONE PLACE, and that is the point of it existing at all rather than each of the eight
@@ -292,6 +533,17 @@ namespace Server.Custom
         /// </summary>
         public static INavActor For(Mobile mobile)
         {
+            // PlayerMobile first, and the two are disjoint - nothing is both - so the order
+            // is for the reader rather than for correctness. This is the ONE branch the
+            // class swap adds anywhere in the tree: the eight construction sites all call
+            // For, and not one of them changed.
+            var player = mobile as PlayerMobile;
+
+            if (player != null)
+            {
+                return new NavPlayerActor(player);
+            }
+
             var creature = mobile as BaseCreature;
 
             if (creature != null)

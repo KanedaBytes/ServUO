@@ -321,9 +321,10 @@ namespace Server.Custom
             // that showed up as a flood of Sidestep and Door recoveries.
             bot.Home = PickScatteredHome(bot);
 
-            // RangeHome 0, NOT the old SitterRange: a non-zero RangeHome is a licence to wander
-            // inside it, not a tolerance. See Tolerance above for what that cost and what replaced it.
-            bot.RangeHome = 0;
+            // RangeHome went with the class - it was a BaseCreature property, and every one of its
+            // six writes in this layer set it to zero because a non-zero RangeHome was a licence to
+            // wander inside it rather than a tolerance. See Tolerance above for what that cost and
+            // what replaced it. IdleTolerance is ours, and is now the whole rule.
             bot.IdleTolerance = Tolerance;
             _onSpotAt = Core.TickCount;
             _pinned = true;
@@ -433,7 +434,6 @@ namespace Server.Custom
             }
 
             bot.Home = Point3D.Zero;
-            bot.RangeHome = 0;
             bot.IdleTolerance = 0;
             _pinned = false;
         }
@@ -452,19 +452,47 @@ namespace Server.Custom
                 return;
             }
 
+            // THE WALK-BACK, WHICH USED TO BE THE ENGINE'S AND IS NOW OURS.
+            //
+            // It was BaseAI.WalkRandomInHome (BaseAI.cs:2573-2578), a straight-line DoMove toward
+            // Home with RangeHome 0, fired whenever PlayerBot.CheckIdle returned false. The class
+            // swap took all three away - no BaseAI, no wander tick, no CheckIdle - and left the
+            // VALUES, because a bank sitter still has a spot and still gets shoved off it.
+            //
+            // SO THIS IS NOT A PORT OF THE ENGINE'S MECHANISM, it is a port of its EFFECT, and the
+            // two differ in one way worth writing down: this runs on the behaviour tick, two
+            // seconds apart, where the AI timer ran at CurrentSpeed, 400ms. A shoved sitter
+            // therefore takes a little longer to drift back. That is the right trade - the tick is
+            // where every other decision this bot makes already happens, and a second timer per bot
+            // is exactly the cost the class swap was taken to remove.
+            //
+            // One step per tick, and deliberately so. The old walk-back was also one step per fire;
+            // what made it a grind was the FIRING RATE against an unreachable spot, which is the
+            // resettle rule below.
+            if (_pinned)
+            {
+                int off = Math.Max(
+                    Math.Abs(bot.X - bot.Home.X), Math.Abs(bot.Y - bot.Home.Y));
+
+                if (off > bot.IdleTolerance && !bot.Commuting && bot.Alive && bot.Map != null)
+                {
+                    bot.Move(bot.GetDirectionTo(bot.Home));
+                }
+            }
+
             // GIVE UP ON A SPOT IT CANNOT GET BACK TO, and stand where it is instead.
             //
-            // The walk-back is the engine's straight-line DoMove toward Home (BaseAI.cs:2573-2578),
-            // not a pathfind, and PickScatteredHome validates its tile for standing and occupancy
-            // but NEVER for reachability - so a spot across a counter is a spot this bot will walk
-            // into a wall to reach. That was survivable while base.CheckIdle's five-percent pause
-            // damped it; the fidget fix returns false instead, deliberately, so the walk-back is
-            // immediate and certain, and immediate-and-certain against a wall is a grind.
+            // PickScatteredHome validates its tile for standing and for occupancy but NEVER for
+            // reachability - so a spot across a counter is a spot this bot will walk into a wall to
+            // reach. That was survivable while base.CheckIdle's five-percent pause damped it; the
+            // fidget fix returned false instead, deliberately, so the walk-back was immediate and
+            // certain, and immediate-and-certain against a wall is a grind. The step above is the
+            // same shape and inherits the same hazard.
             //
             // Bounded rather than prevented: re-pinning to where it actually stands is what a person
             // does when the spot they wanted turns out to be behind the counter, and it is the one
             // outcome that cannot loop. The grind would also be INVISIBLE to the step census - a
-            // blocked DoMove takes no step - which is the argument for handling it here rather than
+            // blocked Move takes no step - which is the argument for handling it here rather than
             // waiting to see it in a window.
             if (_pinned && Core.TickCount - _onSpotAt >= ResettleMs)
             {

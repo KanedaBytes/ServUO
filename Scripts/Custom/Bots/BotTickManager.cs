@@ -322,6 +322,32 @@ namespace Server.Custom
                     continue;
                 }
 
+                // THE PARTY POLL, WHICH USED TO RIDE THE AI TIMER AND NO LONGER HAS ONE.
+                //
+                // It lived in PlayerBot.OnThink, whose only two callers were inside the BaseAI
+                // timer (BaseAI.cs:2204, :3082). The PlayerMobile swap left it with no driver at
+                // all, and the failure would have been silent: party invitations simply never
+                // answered, with nothing in any log to say so. REVIEW.md section 3 asked for this
+                // move on its own account, before the class question was settled.
+                //
+                // Here is strictly better than where it was, for the reason this file's own header
+                // gives about OnThink: PlayerRangeSensitive froze the AI timer entirely when no
+                // player was in the sector, so a bot standing alone in a quiet town was not
+                // polling for invitations either - and a bot alone in a quiet town is precisely the
+                // one a newly arrived player walks up to. Upstream drives it from the same place in
+                // its own global tick (BehaviorTickManager.cs:64).
+                //
+                // Outside the behaviour try/catch below on purpose: an invitation is not the
+                // behaviour's business, and a faulting brain must not swallow the answer to one.
+                try
+                {
+                    BotParty.CheckInvite(bot);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "{0}'s party check faulted.", bot.Name);
+                }
+
                 PlayerBotBehavior behavior = bot.Behavior;
 
                 if (behavior == null)

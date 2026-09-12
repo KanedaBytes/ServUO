@@ -616,10 +616,13 @@ namespace Server.Custom
                 problems.Add(String.Format("{0}: Player flag is false; party invites will be refused", who));
             }
 
-            if (!bot.InitialInnocent)
-            {
-                problems.Add(String.Format("{0}: not InitialInnocent; it will read grey", who));
-            }
+            // The InitialInnocent assertion stood here and is gone with the class rather than
+            // re-pointed. It was a BaseCreature property, and the reason it had to be overridden
+            // was that Notoriety.cs:441-443 falls through to CanBeAttacked for a BaseCreature that
+            // is not InitialInnocent, so a bot read grey. A PlayerMobile never reaches that branch
+            // and reads blue with nothing done, so there is no longer a property to assert on -
+            // asserting on notoriety itself would be a different and much larger check, and the
+            // colour a bot reads is not what this audit is for.
         }
 
         private static void CheckStat(string who, string name, int value, BotCaps caps, List<string> problems)

@@ -6,39 +6,50 @@
 //
 // PlayerBot.cs — a fake player.
 //
-// Upstream this is a PlayerMobile. Here it is a BaseCreature, and that is the
-// single largest deliberate divergence in the port. The reasons, in order of
-// how much they cost to work around otherwise:
+// AN ACCOUNTLESS PlayerMobile, as upstream runs it (uo-offline PlayerBot.cs:28). It was a
+// BaseCreature until 12 September 2026 and that was the single largest deliberate divergence in
+// the port; CLASS-DECISION.md is the evidence Sean took the decision on, and the four reasons the
+// divergence rested on are all spent or scheduled:
 //
-//  1. SPENT, 11 September 2026. NavWalker took a BaseCreature, drove
-//     BaseAI.DoMove and worked around ForceStayHome and Home; there is one
-//     walker on this shard on purpose and a PlayerMobile could not use it. It
-//     now takes an INavActor (Core/Navigation/NavActor.cs), so this reason no
-//     longer holds. That was step 1 of the migration in CLASS-DECISION.md;
-//     reasons 2-4 below still stand until their own sessions.
+//  1. SPENT, 11 September 2026. NavWalker took a BaseCreature and drove BaseAI.DoMove. It now
+//     takes an INavActor (Core/Navigation/NavActor.cs) with two implementations, and this class
+//     gets NavPlayerActor.
 //
-//  2. Doors. ServUO's FastAStarAlgorithm sets MoveImpl.AlwaysIgnoreDoors from
-//     bc.CanOpenDoors (FastAStarAlgorithm.cs:93) and only for a BaseCreature -
-//     a PlayerMobile bot treats every closed door as a wall. CanOpenDoors is
-//     true by default for a humanoid body (BaseCreature.cs:1924), so as a
-//     BaseCreature this is free. Upstream had to patch the pathfinder.
+//  2. STILL OWED - doors, in the PATHFINDER. FastAStarAlgorithm.cs:77,93 sets
+//     MoveImpl.AlwaysIgnoreDoors from bc.CanOpenDoors and only for a BaseCreature, and resets it
+//     after every GetSuccessors call (:102), so no Custom/-side assignment survives one loop
+//     iteration. A route therefore still will not PLAN through a closed door. Move() below
+//     recovers the step once a route has aimed at one, which is upstream's own answer
+//     (PlayerBot.cs:611-620) and is all a Custom/-side change can do; the pathfinder half is an
+//     upstream edit and belongs to its own session.
 //
-//  3. The PlayerMobile dependency was shallow: 15 overrides upstream, and
-//     OpenTrade, ApplyNameSuffix, CheckShove and ShouldCheckStatTimers are all
-//     virtual on Mobile anyway.
+//  3. SPENT. The PlayerMobile dependency was shallow - about sixteen overrides upstream, most of
+//     them virtual on Mobile anyway. It was, and the ledger of which we adopted is in the Bots
+//     README.
 //
-//  4. It matches the actor pattern already running here - DailyLifeTownsfolk is
-//     a BaseCreature with a stand-aside AI.
+//  4. SPENT. It matched DailyLifeTownsfolk, a BaseCreature with a stand-aside AI. Bots no longer
+//     have an AI to stand aside; the daily-life actors still do, and still work, because the
+//     walker no longer cares which it is driving.
 //
-// What that costs is documented at the two places it costs anything: Player and
-// OnDeath, below.
+// AN ACCOUNTLESS BOT OWNS NOTHING DURABLE. This is a rule, not a preference, and it is a crash
+// guard. BaseHouse.HandleDeletion returns early on zero houses (BaseHouse.cs:3531) and then reads
+// acct.Length with no null check (:3534-3537) - and it is reached from PlayerMobile.OnAfterDelete
+// (:5250), which every bot deletion now goes through. So an accountless bot that owns a house and
+// is deleted throws a NullReferenceException ON THE GAME THREAD. As a BaseCreature it never
+// reached that call and its house was merely orphaned; now it takes the shard with it. The house
+// would have been Condemned in any case, because DecayType returns Condemned with no Account under
+// AOS (BaseHouse.cs:75-104). Houses and player vendors are the two wants that genuinely need an
+// Account, and CLASS-DECISION.md defers both to one deliberate decision taken when something is
+// actually owned - so until a bot has an Account, it gets no house, no player vendor and no
+// durable property of any kind.
 //
-// PERSISTENCE. Bots do not survive a restart. Upstream got that for free -
-// ModernUO writes players through their account, so an accountless bot was
-// never in the save at all. ServUO's StandardSaveStrategy.SaveMobiles writes
-// every mobile in World.Mobiles with no account filter, so bots ARE saved here.
-// The ephemeral idiom answers it: Timer.DelayCall(Delete) at the tail of
-// Deserialize, exactly as DailyLifePatron and DailyLifeTownsfolk do.
+// PERSISTENCE. Bots still do not survive a restart, and this shard still has to do something
+// about it: ServUO's StandardSaveStrategy.SaveMobiles writes every mobile in World.Mobiles with no
+// account filter, so an accountless bot IS in the save here even though it is not in ModernUO.
+// What changed is WHERE the answer lives. It used to be Timer.DelayCall(Delete) at the tail of
+// Deserialize; it is now a single boot sweep in BotStartupPurge, which is what upstream does
+// (BotStartupManager.PurgeStaleBots :92-119) and which the Bots README records as a corrected
+// claim - upstream pays for the guarantee too, it does not get it free.
 
 using System;
 using System.Collections.Generic;
@@ -48,7 +59,7 @@ using Server.Mobiles;
 
 namespace Server.Custom
 {
-    public class PlayerBot : BaseCreature, IBotActor, IBotMover
+    public class PlayerBot : PlayerMobile, IBotActor, IBotMover
     {
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
 
@@ -256,14 +267,55 @@ namespace Server.Custom
         public bool Commuting { get; set; }
 
         /// <summary>
-        /// How far this bot may stand from Home before the engine walks it back. Transient.
+        /// The tile this bot has been posted to, or Point3D.Zero for none. Transient.
         ///
-        /// Read by CheckIdle, written by whichever behaviour pinned Home, and cleared with Home -
-        /// a leftover tolerance is as wrong as a leftover Home. It lives on the mobile rather than
-        /// on the behaviour because the thing that consults it is an AI override, which cannot see
-        /// the behaviour, and because the two values only make sense together: a sitter wants one
-        /// tile of slack for the shove it just took, and a crafter wants none because its tile was
-        /// chosen for crafting reach.
+        /// OURS NOW, AND IT USED TO BE THE ENGINE'S. BaseCreature.Home plus RangeHome 0 was the
+        /// pin idiom: BaseAI.WalkRandomInHome (BaseAI.cs:2573-2578) walked a shoved sitter
+        /// straight back, and PlayerBot.CheckIdle decided when it should. A PlayerMobile has
+        /// neither property nor wander tick, so the VALUE stays - a bank sitter still has a spot
+        /// and a crafter still has an anchor - and the WALK-BACK moved into BankSitterBehavior,
+        /// which is the only behaviour that ever needed one.
+        ///
+        /// RangeHome went with the engine and is not replaced: every one of its six writes set it
+        /// to zero, because a non-zero RangeHome was a licence to wander that this layer spent
+        /// three sessions taking away.
+        /// </summary>
+        public Point3D Home { get; set; }
+
+        /// <summary>
+        /// Seconds per step - the pace this bot was given. IBotActor, read by NavPlayerActor.
+        ///
+        /// THIS IS WHAT BaseCreature.CurrentSpeed USED TO BE, and the three writes that used to go
+        /// to ActiveSpeed, PassiveSpeed and CurrentSpeed are now one write here. Two things went
+        /// with the engine and neither is missed:
+        ///
+        ///   The ACTIVE/PASSIVE SPLIT. BaseAI chose between the two by its own ActionType, and a
+        ///   commuting Traveler counted as wandering - so BotMovement had to write both to be sure
+        ///   which one was read. Nothing chooses now; there is one pace.
+        ///
+        ///   The TIMER RESTART. Writing CurrentSpeed fired OnCurrentSpeedChanged, which stopped and
+        ///   restarted the AI timer (BaseAI.cs:3031-3037) - which is why BotMovement.SetPace
+        ///   guarded the write with an epsilon comparison. There is no per-bot timer to restart, so
+        ///   the guard went too.
+        ///
+        /// It is [CommandProperty]-visible because CurrentSpeed was, and [BotPace and the editor
+        /// panel both read the pace a bot was given.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster)]
+        public double StepDelaySeconds { get; set; }
+
+        /// <summary>
+        /// How far this bot may stand from Home before it is walked back. Transient.
+        ///
+        /// Written by whichever behaviour pinned Home, and cleared with Home - a leftover
+        /// tolerance is as wrong as a leftover Home. The two values only make sense together: a
+        /// sitter wants one tile of slack for the shove it just took, and a crafter wants none
+        /// because its tile was chosen for crafting reach.
+        ///
+        /// It used to be read by CheckIdle, a BaseCreature override, and lived on the mobile
+        /// because an AI override cannot see the behaviour. The reader is now
+        /// BankSitterBehavior.Tick, which can - but the field stays here, because Home is here and
+        /// splitting a pair that is only ever read together would be the worse shape.
         /// </summary>
         public int IdleTolerance { get; set; }
 
@@ -399,10 +451,17 @@ namespace Server.Custom
         }
 
         public PlayerBot(BotClass cls, BotSkillTier tier)
-            : base(AIType.AI_Vendor, FightMode.None, 2, 1, 0.5, 2.0)
+            : base()
         {
             Class = cls;
             SkillTier = tier;
+
+            // A pace before anybody asks for one. NavPlayerActor falls back to the engine's walk
+            // constant for a zero, but a bot that reached a walker before BotMovement had settled
+            // it would be stepping at a default rather than at its own pace, and the difference is
+            // invisible in a log. BotMovement.SetPace overwrites this on mount, dismount and
+            // arrival.
+            StepDelaySeconds = Mobile.WalkFoot / 1000.0;
             CrafterSpec = CrafterTypeHelper.RollRandom();
             Personality = BotPersonality.RollRandom();
 
@@ -462,10 +521,11 @@ namespace Server.Custom
             // actors it is NOT IsInvulnerable. Nothing attacks it in this session; the point is
             // that its name reads the right colour when a player looks at it.
 
-            // No home tether. WalkRandomInHome would otherwise drag it back to wherever it was
-            // created every time it paused - the same reason DailyLifeTownsfolk clears Home.
+            // Unposted until a behaviour posts it. There is no engine tether to clear any more -
+            // WalkRandomInHome went with BaseAI - but Home is still the flag BankSitterBehavior
+            // and the step census read, and a bot that started life believing it was posted to
+            // 0,0,0 would be walked there.
             Home = Point3D.Zero;
-            RangeHome = 0;
             IdleTolerance = 0;
 
             LiveRegistry.Register(this);
@@ -582,6 +642,98 @@ namespace Server.Custom
         ///   - Death. Mobile.OnDeath deletes a dying mobile only when the Player flag is false
         ///     (Mobile.cs:4229). See OnDeath below.
         /// </summary>
+        /// <summary>
+        /// Upstream's override (PlayerBot.cs:585), and worth copying for what it does rather than
+        /// for what it sounds like it does.
+        ///
+        /// BaseCreature answered false here (BaseCreature.cs:3074) and PlayerMobile does not, so
+        /// the class swap would have silently flipped it back. But it is consulted at EXACTLY ONE
+        /// SITE - Mobile.Deserialize (:6205-6207) - while the Hits, Stam and Mana setters call
+        /// CheckStatTimers for every mobile regardless (:9718, :9747, :9774). So this is not a
+        /// standing saving and must not be quoted as one. What it buys is narrow and real: sixty
+        /// bot records in a save no longer each start up to three regen timers during World.Load,
+        /// in the window before the boot purge deletes them.
+        /// </summary>
+        public override bool ShouldCheckStatTimers
+        {
+            get { return false; }
+        }
+
+        /// <summary>
+        /// Equip an item, or pack it if the layer is taken.
+        ///
+        /// A LINE-FOR-LINE PORT OF BaseCreature.SetWearable (:5722), which this class inherited
+        /// until the swap and which has no PlayerMobile or Mobile equivalent. It is not a
+        /// convenience: Mobile.AddItem notices a taken layer, writes LayerConflict.log and a red
+        /// console line, AND THEN EQUIPS THE ITEM ANYWAY, falling through to m_Items.Add at
+        /// Mobile.cs:6807. Nothing is dropped and nothing is refused, so both items sit on the
+        /// layer, FindItemOnLayer returns whichever is first in list order, and the other is an
+        /// invisible ghost that still carries weight and resistances and still drops on the
+        /// corpse. That was 107 ghost items the last time nothing stood here.
+        ///
+        /// It also catches what no table in EquipmentTable can express, because Layer is not
+        /// knowable from a Type: CheckEquip reaches BaseWeapon.CheckConflictingLayer, which is
+        /// what knows a shield and a halberd cannot share a bot.
+        ///
+        /// Every one of the roughly sixty equip sites in EquipmentTable funnels through its two
+        /// private helpers, Add and AddArmor, and both call this - so this method and those two
+        /// are the whole of the repair surface.
+        ///
+        /// AddToBackpack rather than BaseCreature.PackItem, which is the same call for a mobile
+        /// that has a backpack; the constructor gives every bot one before any gear is rolled.
+        /// </summary>
+        public void SetWearable(Item item, int hue = -1, double dropChance = 0.0)
+        {
+            if (item == null)
+            {
+                return;
+            }
+
+            if (hue > -1)
+            {
+                item.Hue = hue;
+            }
+
+            item.Movable = dropChance > Utility.RandomDouble();
+
+            if (!CheckEquip(item) || !OnEquip(item) || !item.OnEquip(this))
+            {
+                AddToBackpack(item);
+            }
+            else
+            {
+                AddItem(item);
+            }
+        }
+
+        /// <summary>
+        /// Walk into a closed door and it opens, the way a player's client does.
+        ///
+        /// Upstream's override (PlayerBot.cs:611-620) and their reasoning with it: every behaviour
+        /// steps through Mobile.Move, so this is the one place that covers all of them, and
+        /// Mobile.Move only returns false for a genuinely blocked STEP - a turn always succeeds -
+        /// so by the time we get here the bot already faces d, and d is the tile to look at.
+        ///
+        /// THIS IS HALF THE DOOR PROBLEM AND SAYS SO. It recovers a step a route has already aimed
+        /// at a door; it does not make the PATHFINDER willing to plan through one, because
+        /// FastAStarAlgorithm.cs:77,93 sets MoveImpl.AlwaysIgnoreDoors only for a BaseCreature and
+        /// resets it after every GetSuccessors call (:102), so nothing on this side of the seam
+        /// survives a single loop iteration. Reason 2 in the header; an upstream edit, in its own
+        /// session. Upstream hit exactly this and needed two engine patches for it.
+        ///
+        /// The scan itself is Core/DoorHelper.cs, shared with NavWalker's Door rung, which has
+        /// asked the same question since before bots were PlayerMobiles.
+        /// </summary>
+        public override bool Move(Direction d)
+        {
+            if (base.Move(d))
+            {
+                return true;
+            }
+
+            return DoorHelper.TryOpenAhead(this, d) && base.Move(d);
+        }
+
         public override bool CanBeRenamedBy(Mobile from)
         {
             // A bot is not a pet. Stock BaseCreature would let a control master rename it; there
@@ -589,24 +741,12 @@ namespace Server.Custom
             return from != null && from.AccessLevel >= AccessLevel.GameMaster;
         }
 
-        /// <summary>
-        /// A bot reads blue.
-        ///
-        /// Without this, Notoriety.cs:441-443 falls through to CanBeAttacked for anything that is
-        /// not InitialInnocent, and stock BaseCreature.InitialInnocent (BaseCreature.cs:1786)
-        /// answers from an XmlAttach lookup that a bot has no reason to carry. Murderer, Criminal
-        /// and guild notoriety all still work from here - they live on Mobile.
-        /// </summary>
-        public override bool InitialInnocent
-        {
-            get { return true; }
-        }
-
-        /// <summary>Bots are not tameable, commandable or teachable, so their context menu is a player's.</summary>
-        public override bool CanTeach
-        {
-            get { return false; }
-        }
+        // InitialInnocent and CanTeach were here, and both are gone with the class rather than
+        // ported. Notoriety.cs:441-443 only falls through to CanBeAttacked for a BaseCreature that
+        // is not InitialInnocent, and BaseCreature.GetContextMenuEntries (:4574) is what offered
+        // Rename, Tame, Teach and the AI commands. A PlayerMobile reaches neither: it reads blue
+        // and shows a player's context menu with nothing done. Murderer, Criminal and guild
+        // notoriety were never affected - they live on Mobile.
 
         /// <summary>
         /// A bot walks through crowds - uo-offline PlayerBot.cs:512, and its reason: the engine's
@@ -651,49 +791,24 @@ namespace Server.Custom
             BotStepCensus.Note(this, oldLocation);
         }
 
-        /// <summary>
-        /// Stand still.
-        ///
-        /// THIS IS THE FIDGET FIX, and what it turns off was never ours. BotAI.DoActionWander stands
-        /// aside only while Commuting (BotAI.cs:48-58), so an ARRIVED bot falls through to
-        /// BaseAI.DoActionWander -> WalkRandomInHome(2,2,1) (BaseAI.cs:1061-1067, :2509-2582) on the
-        /// AI timer, whose interval is CurrentSpeed - which BotMovement.Settle drops to
-        /// Mobile.WalkFoot, 400ms. WalkRandom's own gate is Utility.Random(16) &lt;= 8, about 56%
-        /// (:2241), and BaseCreature.CheckIdle damps only 5% of calls into a 15-25 second pause
-        /// (BaseCreature.cs:4754-4759). Measured on a live window of 61 bots before this override
-        /// existed: 21.0 idle steps per bot-minute for a Shopper, 30.1 for a BankSitter, 34.3 for a
-        /// lingering Traveler - and 0.00 for a Crafter, which is the only one of the four that pins
-        /// with RangeHome 0.
-        ///
-        /// Upstream has none of this layer, because their bot is a PlayerMobile with no BaseAI under
-        /// it: their BankSitter steps only when further than HomeRadius 1 from its spot
-        /// (BankSitterBehavior.cs:586-617), and their Shopper does not move at all - its own header
-        /// says "does NOT path anywhere... No movement = no wall-grinding" (ShopperBehavior.cs:1-14).
-        /// Our idle texture already matched theirs; only the engine underneath it did not.
-        ///
-        /// CheckIdle rather than DoActionWander, because CheckIdle is the ONE thing DoActionWander
-        /// asks before it wanders and nothing else consults it - overriding DoActionWander would
-        /// also skip herding, navpoints, waypoints and the combatant-facing tail. It is also the
-        /// lever this tree already proves: NavWalkAudit's probe overrides exactly this, and the
-        /// three measured variants are tabulated in Navigation/README.md.
-        ///
-        /// Beyond the tolerance it returns FALSE rather than base, so the walk-back is immediate and
-        /// certain: base would enter a 15-25 second pause one call in twenty and leave a shoved
-        /// sitter standing where it was shoved to, which upstream's unconditional walk-back does not.
-        /// The walk back itself is still the engine's - Home with RangeHome 0 is the pin idiom
-        /// (BaseAI.cs:2573-2578) - so nothing here re-implements movement.
-        /// </summary>
-        public override bool CheckIdle()
-        {
-            if (Home == Point3D.Zero)
-            {
-                return true;
-            }
-
-            int off = Math.Max(Math.Abs(X - Home.X), Math.Abs(Y - Home.Y));
-
-            return off <= IdleTolerance;
-        }
+        // CheckIdle - THE FIDGET FIX - stood here, and what it turned off was never ours.
+        //
+        // BotAI.DoActionWander stood aside only while Commuting, so an ARRIVED bot fell through to
+        // BaseAI.DoActionWander -> WalkRandomInHome(2,2,1) on the AI timer, whose interval was
+        // CurrentSpeed - which BotMovement.Settle dropped to Mobile.WalkFoot, 400ms. Measured on a
+        // live window of 61 bots before the override existed: 21.0 idle steps per bot-minute for a
+        // Shopper, 30.1 for a BankSitter, 34.3 for a lingering Traveler.
+        //
+        // ALL OF THAT IS GONE WITH THE CLASS, not suppressed by it. There is no BaseAI, no
+        // DoActionWander, no WalkRandomInHome and no AI timer, so there is nothing to damp and
+        // 11,925 idle steps a session stop being generated rather than being cancelled. Upstream
+        // never had this layer for the same reason.
+        //
+        // What CheckIdle also did, and what therefore had to be re-ported rather than deleted, is
+        // the WALK-BACK: returning false was how a shoved bank sitter was returned to its spot,
+        // via the engine's straight-line DoMove toward Home. That now lives in
+        // BankSitterBehavior.Tick, which is the only behaviour that ever wanted one - a Crafter
+        // pinned with no tolerance and a Traveler is by definition not standing still.
 
         /// <summary>The paperdoll title is the class and tier; a click-title would double it up.</summary>
         public override bool ClickTitle
@@ -746,19 +861,17 @@ namespace Server.Custom
             // spawner rather than by [SpawnBot is on the live map too.
             LiveRegistry.Register(this);
 
-            // UNTETHER, AGAIN. The constructor cleared Home and RangeHome (see the note there) so
-            // that BaseAI.DoActionWander cannot drag a bot back to wherever it was created every
-            // time it pauses. Every spawner on this engine then sets them right back, after the
-            // constructor and before this call: XmlSpawner at XmlSpawner2.cs:9317-9326 and stock
-            // Spawner at Scripts/Services/Spawner/Spawner.cs:498-508 both assign RangeHome from
-            // their home range and Home from the spawner's tile.
+            // THE UNTETHER THAT USED TO BE HERE IS GONE, AND IT IS THE SPAWNER THAT CHANGED.
             //
-            // So the whole population would be on a leash the length of its spawner's <Range>, and
-            // the symptom would be bots that walk out of town and turn round. This is the only
-            // place that can undo it, because it is the only hook that runs after both.
-            Home = Point3D.Zero;
-            RangeHome = 0;
-            IdleTolerance = 0;
+            // XmlSpawner2.cs:9317-9333 assigns RangeHome, CurrentWayPoint, Team and Home only
+            // `if (m is BaseCreature)`, and stock Spawner.cs:498-508 does the same. A spawned bot
+            // is no longer a BaseCreature, so nothing puts it on a leash the length of its
+            // spawner's <Range> and there is nothing left to undo. The three lines that undid it
+            // would now be clearing values nobody set.
+            //
+            // Mobile.OnAfterSpawn (:9696) still fires, and still fires BEFORE XmlSpawner applies
+            // the property string (:9337 against :9345) - which is why the seed is properties on
+            // the bot rather than a spawner subclass, and that is unchanged.
         }
 
         // ---- applying a spawner's seed ----
@@ -970,18 +1083,18 @@ namespace Server.Custom
             }
         }
 
-        /// <summary>
-        /// Called by the AI timer, and only while a player is in the sector
-        /// (`BaseAI.cs:3072-3082`). That gating is why the party check lives here rather than in
-        /// a sweep of its own: an invitation can only arrive from somebody standing next to the
-        /// bot, which is precisely when this runs.
-        /// </summary>
-        public override void OnThink()
-        {
-            base.OnThink();
-
-            BotParty.CheckInvite(this);
-        }
+        // OnThink, and the party-invite poll it carried, moved to BotTickManager.
+        //
+        // It had exactly two callers and both were inside the BaseAI timer (BaseAI.cs:2204, :3082),
+        // so under PlayerMobile it has no driver at all - the poll would simply have stopped, in
+        // silence, and the only symptom would have been party invitations that were never
+        // answered. REVIEW.md section 3 asked for this move independently of the class question.
+        //
+        // BotTickManager is the better home anyway, and for the reason its own header gives about
+        // the AI timer: PlayerRangeSensitive froze OnThink entirely when no player was in the
+        // sector, so a bot standing alone in a town nobody was watching was not polling for
+        // invitations either. Upstream calls BotPlayerParty.CheckInvite from the same place in its
+        // own global tick (BehaviorTickManager.cs:64).
 
         /// <summary>
         /// Required, not belt-and-braces: without it a bot cannot hear you from three tiles away.
@@ -997,7 +1110,13 @@ namespace Server.Custom
         /// </summary>
         public override bool HandlesOnSpeech(Mobile from)
         {
-            return from.InRange(Location, BotSpeechResponder.ListenRange) || base.HandlesOnSpeech(from);
+            // NO `|| base` ANY MORE, and that is a retarget rather than a removal. The base was
+            // BaseCreature.HandlesOnSpeech (:4621), which answered true inside RangePerception -
+            // set to 2 by the AI constructor this class no longer calls. It is now
+            // Mobile.HandlesOnSpeech (:7614), which is a flat false. So the ListenRange test is
+            // the whole rule, which is what it was always written to be, and the old `|| base`
+            // was widening it by two tiles for reasons nothing here wanted.
+            return from.InRange(Location, BotSpeechResponder.ListenRange);
         }
 
         /// <summary>
@@ -1051,10 +1170,13 @@ namespace Server.Custom
             base.OnDelete();
         }
 
-        protected override BaseAI ForcedAI
-        {
-            get { return new BotAI(this); }
-        }
+        // ForcedAI, and BotAI with it, are gone. Both existed only to fight BaseAI: DoActionWander
+        // to stand aside while the walker was steering, TransformMoveDelay to stop SpeedInfo
+        // re-inflating a pace the bot had been given. There is no AI under a PlayerMobile, so
+        // neither has anything to fight, and the file that held them was the tree's only permitted
+        // mention of VendorAI - seam 5 in the README, closed by deletion rather than by the combat
+        // session that was scheduled to replace it. IBotActor outlived it and now lives in
+        // IBotActor.cs.
 
         // ---- serialization ----
         //
@@ -1102,11 +1224,26 @@ namespace Server.Custom
 
             _behavior = new IdleBehavior();
 
-            // ServUO has no [AfterDeserialization]; this is the equivalent, and it is what makes
-            // the bot ephemeral across a restart. Deliberately NOT registering with LiveRegistry
-            // on this path - a bot that is about to delete itself would sit on the live map for
-            // one tick as a corpse.
-            Timer.DelayCall(Delete);
+            // NO LiveRegistry.Register ON THIS PATH, deliberately, and that is unchanged: a bot
+            // that is about to be purged would sit on the editor's live map for one tick.
+            //
+            // WHAT IS GONE IS THE Timer.DelayCall(Delete) THAT USED TO CLOSE THIS METHOD. It was
+            // the ephemeral idiom and it worked - measured at 2,871 bot-owned items and zero of
+            // them orphaned - but the deletion now happens in BotStartupPurge, which is what
+            // upstream does (BotStartupManager.PurgeStaleBots :92-119). Two reasons it moved.
+            //
+            // It reports a count, so the ephemerality rule is something you can read in the boot
+            // log rather than something inferred afterwards from an orphan census. And it stops
+            // being a side effect of a serialization method: base.Deserialize is now roughly 440
+            // lines of PlayerMobile player-housekeeping (account lookup at :4902, CheckAtrophies at
+            // :4925, a Timer.DelayCall at :4934) which would all have run, on this mobile, on the
+            // way to a line scheduling its destruction.
+            //
+            // The ordering that made the old idiom safe is what makes the new one safe too, read
+            // from the other end: the Timer thread does not start until after World.Load AND after
+            // Initialize (Server/Main.cs, CLAUDE.md section 3), and the purge runs inside
+            // Initialize - so it is strictly EARLIER than the first timer slice, and a loaded bot
+            // never gets a tick.
         }
     }
 }
