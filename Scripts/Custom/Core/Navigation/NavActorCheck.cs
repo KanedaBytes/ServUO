@@ -259,8 +259,16 @@ namespace Server.Custom
         /// and the mover is not a bot" - which is a different claim, and was wrong for a stock
         /// creature mover onto a bot. A mirror of a type test is a type test.
         ///
-        /// This is the ledger doing the job it describes: the number moved with a reason attached,
-        /// rather than a third test appearing quietly.
+        /// AND NavWalker.cs LEFT THE LEDGER ENTIRELY, the same day and for the opposite reason.
+        /// Its one test was DescribeMobiles' `other.Player && !(other is BaseCreature)` - a second,
+        /// older copy of Describe's own rule, correct only because an IBotActor branch above it got
+        /// there first. DescribeMobiles now calls Describe, so there is one vocabulary instead of
+        /// two and nothing in NavWalker.cs names BaseCreature at all. The check refuses a ledger
+        /// entry with no matching test, by design, so the entry had to go with the test.
+        ///
+        /// This is the ledger doing the job it describes, in both directions: a number moves only
+        /// with a reason attached, and an entry whose test is gone is deleted rather than left to
+        /// sit there claiming a coupling that no longer exists.
         /// </summary>
         private static readonly Dictionary<string, int> AllowedTypeTests =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
@@ -268,7 +276,9 @@ namespace Server.Custom
                 // The factory's `mobile as BaseCreature`. Choosing the implementation is the whole
                 // job; this is the seam, not a leak through it.
                 { "NavActor.cs", 1 },
-                { "NavWalker.cs", 1 },
+                // NavWalker.cs is deliberately ABSENT: DescribeMobiles used to carry its own copy
+                // of Describe's rule and now calls Describe instead, so the file names BaseCreature
+                // nowhere. See the note above.
 
                 // TWO: Describe's animal-and-monster branch, and IsUncontrolledCreature - the
                 // engine's own uncontrolled-mover condition, which MayBotPass mirrors rather than

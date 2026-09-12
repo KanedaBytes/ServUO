@@ -386,10 +386,35 @@ namespace Server.Custom
             TryJail(pm, region.Record.Name);
         }
 
+        /// <summary>
+        /// Whether this mobile is somebody the zone should warn, and then sentence.
+        ///
+        /// THE ONE CHOKEPOINT, which is why the bot test belongs here: OnEnterZone asks it, and
+        /// the 30-second timer asks it again before jailing, so OnEnter, OnResurrect and the jail
+        /// itself are all covered by this one line.
+        ///
+        /// A BOT IS EXCLUDED BECAUSE IT CANNOT RECEIVE THE WARNING, AND FOR NO OTHER REASON.
+        /// This whole system's output is a message and a countdown gump. A PlayerBot is an
+        /// accountless PlayerMobile with Player = true and no NetState (12 September 2026's class
+        /// swap), so every test below already passes for one: it would be counted down by a gump
+        /// that goes nowhere and then jailed by a warning it was never shown. That is not a
+        /// policy, it is a sentence with the notice undelivered.
+        ///
+        /// SO THIS IS NOT A RULING THAT BOTS ARE EXEMPT FROM RESTRICTED ZONES. Whether a bot
+        /// should be subject to them - turned back at the boundary, or walked out, or jailed with
+        /// some consequence that does not need a client - is an open owner question, and nothing
+        /// here settles it. If the answer is yes, the place to express it is a bot-shaped
+        /// consequence, not this predicate.
+        ///
+        /// Measured before the guard was written: restricted-zones.json holds an EMPTY zone list,
+        /// so there is no zone for a bot to walk into and this has never fired. It is a guard
+        /// against the day somebody authors one near a bot route, not a repair.
+        /// </summary>
         private static bool ShouldWarn(PlayerMobile pm)
         {
             return pm != null
                 && !pm.Deleted
+                && !(pm is IBotActor)
                 && pm.Player
                 && pm.Alive
                 && pm.AccessLevel <= AccessLevel.Player;

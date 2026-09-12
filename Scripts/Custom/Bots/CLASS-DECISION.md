@@ -369,7 +369,7 @@ own; it belongs in the next documentation pass.
 | `OnAfterSpawn` untether — `Home` / `RangeHome` / `IdleTolerance` back to zero | `PlayerBot.cs:737-760` | **Vanishes.** `XmlSpawner2.cs:9318` sets `Home` and `RangeHome` only `if (m is BaseCreature)`. `Mobile.OnAfterSpawn` (`Mobile.cs:9696`) still fires, so the population seed path survives untouched |
 | **MODIFICATIONS entry 5** — the `BaseCreature.OnMoveOver` guard | `BaseCreature.cs:4546` | **Vanishes.** A `PlayerMobile` mover misses the `m is BaseCreature && !Controlled` branch (`:4564`) and falls to `Mobile.OnMoveOver` → the mover's `CheckShove` (`Mobile.cs:3506`), which on Trammel passes unconditionally because `TrammelRules` includes `FreeMovement` (`Map.cs:128`, `Mobile.cs:3518`). **One upstream edit deleted** |
 | `BotShove.OnMoveOver`'s mover branch, and `IBotMover` | `BotShove.cs:75`, `NavWalkFailures.cs:67` | **Re-port, narrowed.** Only the walk-audit probe still needs the mover branch; the reverse half (`ConsentsToBotPass`) moves into `PlayerBot.OnMoveOver` over `PlayerMobile`'s rather than `BaseCreature`'s — same behaviour, different base |
-| `MayBotPass`, `Describe`, and the rung log's occupant kind | `NavWalkFailures.cs:426,511`; `NavWalker.cs:1606` | **Re-port, inverted — the highest-risk item here.** All three encode *`PlayerMobile` means a real player*. `MayBotPass` refuses exactly one thing, a live `PlayerMobile` (`:432-444`), and `Describe` answers "player" to `mobile is PlayerMobile \|\| mobile.Player` (`:511`). The day bots are `PlayerMobile`s, the diagnostic refuses its own fleet and labels every bot a player. Every test must ask `is PlayerBot` first |
+| `MayBotPass`, `Describe`, and the rung log's occupant kind | `NavWalkFailures.cs:426,511`; `NavWalker.cs:1606` | **Re-port, inverted — the highest-risk item here.** All three encode *`PlayerMobile` means a real player*. `MayBotPass` refuses exactly one thing, a live `PlayerMobile` (`:432-444`), and `Describe` answers "player" to `mobile is PlayerMobile \|\| mobile.Player` (`:511`). The day bots are `PlayerMobile`s, the diagnostic refuses its own fleet and labels every bot a player. Every test must ask `is PlayerBot` first. **CLOSED, 12 September 2026** - `MayBotPass` is re-derived against `ConsentsToBotPass` and `DescribeMobiles` now calls `Describe` rather than carrying its own copy; the tree-wide sweep that checks the discipline is below, under *The sweep that closes "every test must ask `is PlayerBot` first"* |
 | `Bots.Shove` — whose stand-in for a link-dead player **is** an accountless `PlayerMobile` | `BotShoveProbe.cs:27,85` | **Re-port.** The stand-in and the subject become the same class and must be told apart by type. It is also this tree's existing proof that an accountless `PlayerMobile` constructs, enters the world and behaves |
 | `InitialInnocent`, `CanTeach`, `CanBeRenamedBy`, context-menu suppression | `PlayerBot.cs:597,603,582` | **Vanish.** `Notoriety.cs:441` and `BaseCreature.GetContextMenuEntries` (`:4574`) are `BaseCreature` surfaces; a `PlayerMobile` reads blue and shows a player's menu with nothing done |
 | `ApplySkills` zeroing, to undo the pet-training stamp | README **The engine writes skills behind you**; `BaseCreature.cs:625-632` | **Vanishes.** `ChangeAIType` never touches a `PlayerMobile`, so nothing spends 80 points of the skill budget on `Focus` and `DetectHidden` behind us |
@@ -381,6 +381,106 @@ own; it belongs in the next documentation pass.
 | `LiveMapSnapshot.KindOf` | `LiveMapSnapshot.cs:525-534` | **Unchanged.** Already tests `is PlayerBot` before `mobile.Player`, which is exactly the discipline the rest of the diagnostics now need |
 | `CheckShove`, `HandlesOnSpeech`, `OnSpeech`, `OnLocationChange`, `OnDeath`, `OpenTrade` | `PlayerBot.cs:619,995,1012,644,701` | **Unchanged.** All virtual on `Mobile` |
 | **Doors, in the pathfinder** | `FastAStarAlgorithm.cs:77,93` | **A new upstream edit is required.** `MoveImpl.AlwaysIgnoreDoors` is set only when `p as BaseCreature` is non-null and is reset to `false` after every `GetSuccessors` call (`:102`), so no `Custom/`-side assignment survives a single loop iteration. Upstream hit this twice. **Net MODIFICATIONS count is unchanged: entry 5 out, a door entry in** |
+
+### The sweep that closes "every test must ask `is PlayerBot` first"
+
+*12 September 2026, the collision vocabulary session.* The table above set that discipline and the
+row for `MayBotPass` called it **the highest-risk item here** — *"the one most likely to go green
+while being wrong"*. A discipline is only checkable if somebody has actually walked the tree, so
+here is the walk: **every place under `Scripts/Custom/` that tests a mobile's kind**, across 145
+`.cs` files, in one of three states.
+
+The fact that makes the sweep necessary, in one sentence: a `PlayerBot` **is** a `PlayerMobile`,
+**does** set `Mobile.Player = true` (for the party gate), and has **no `NetState`** — so
+`is PlayerMobile`, `as PlayerMobile` and `.Player` all match a bot, and `NetState == null` matches
+both a bot and a link-dead human.
+
+#### (a) Already asks the bot interface first — no change
+
+| Site | What it decides |
+| --- | --- |
+| `NavWalkFailures.Describe:618` | `IBotActor`, then `IBotMover`, then `IDailyLifeActor`, then player. Every test is a type |
+| `NavWalkFailures.MayBotPass` | re-derived this session; asks the occupant's override family, then the mover |
+| `BotPathPolicy.IgnoreDoors:68` | `p is IBotActor` — the door gate |
+| `LiveMapSnapshot.KindOf:533` | `is PlayerBot` **before** `.Player`, so a bot does not draw as an account |
+| `BotSpeechResponder.cs:119` | `!(speaker is PlayerMobile) \|\| speaker is PlayerBot` — the echo-chamber guard |
+| `BotSession.cs:386-387` | `is PlayerMobile && !(is PlayerBot) && .Player` — is a real human near |
+| `PlayerBotBehavior.cs:450-451` | the same three-part test, and both halves are load-bearing |
+| `VocabularySnapshot.cs:155` | `typeof(PlayerBot)`, deliberately not `typeof(PlayerMobile)` |
+| ~200 further `as PlayerBot` sites | the bot layer asking about its own kind; `as` plus skip, never a hard cast |
+
+**REVIEW.md section 4's second half was already closed before this session.** It reported that
+`Describe`'s *"`Player` plus null-NetState classification also labels a disconnected player as a
+PlayerBot"*. That split is gone: `Describe:633` reads `mobile is PlayerMobile || mobile.Player` and
+its comment says *"Connected or not, staff or not. A link-dead player is a player."* **No test
+anywhere in `Scripts/Custom/` now uses Player-flag-plus-null-`NetState` to mean "bot"** — verified
+by the sweep, and the negative results below are part of that verification.
+
+#### (b) Fixed in this session
+
+| Site | Was | Now |
+| --- | --- | --- |
+| `NavWalker.DescribeMobiles` | its own three-branch copy of `Describe`, whose middle test `other.Player && !(other is BaseCreature)` was the pre-swap formulation | calls `NavWalkFailures.Describe`. **One vocabulary instead of two**, and `NavWalker.cs` left `Nav.Actor`'s type-test ledger as a result |
+| `RestrictedZoneSystem.ShouldWarn` | every test passed for a bot, so a bot would be counted down by a gump that goes nowhere and then jailed | excludes `IBotActor`. One chokepoint covers `OnEnter`, `OnResurrect` and the jail — `RestrictedZoneRegion.cs:55,69,104` needed no edit of their own |
+| `JailSystem.GetRefusalReason:130` | `!player.Player` passes a bot, so `[Jail <bot>` would jail one | refuses `IBotActor` with its own message |
+| `JailCommands` name lookup `:248` | walks `World.Mobiles` for `is PlayerMobile`, so `[JailInfo Elowen` could resolve to a bot of that name | skips `IBotActor` |
+| `ResetQuestCommands` both targets | `targeted as PlayerMobile` accepted a bot | refuses `IBotActor` in each of the two target classes |
+| `OldMarta.OnMovement:129` | `!(m is PlayerMobile)` let bots trigger her greeting **and spend its cooldown**, so the next real player got silence | excludes `IBotActor` |
+
+Two of those are worth more than a row.
+
+**`ResetQuestCommands` was a persistence leak, not a cosmetic one.** `PlayerMobile.Quests` is not a
+field: the getter is `MondainQuestData.GetQuests(this)`, which **inserts an empty list for anyone it
+is asked about**, and the save writes every entry it holds (CLAUDE.md §11). So targeting a bot
+minted a quest-data entry for a mobile `BotStartupPurge` deletes at the next boot, orphaning it in
+`Saves/Quests/MLQuests.bin` with nothing left to point at it.
+
+**The restricted-zone guard is the minimum fix for a mobile that cannot see the warning, and is
+NOT a ruling that bots are exempt from zones.** Whether a bot should be subject to them — turned
+back at the boundary, walked out, or given some consequence that does not need a client — is an
+**open owner question** and nothing in the code settles it. Measured before the guard was written:
+**`restricted-zones.json` holds an empty zone list**, so there is no zone for a bot to enter, no
+overlap with bot territory and no bot route that reaches one. This has never fired. It is a guard
+against the day somebody authors a zone near a bot road, not a repair of something that happened.
+
+#### (c) Proved not to need it, with the reason
+
+- **Protected by their source rather than by a type test.** Anything fed from `NetState.Instances`
+  — `AutoCollectSystem.cs:123`, `JailStatusSystem.cs:61`, `BotChatProbe.cs:430`,
+  `NavWalker.cs:2528`, `NavigationSystem.cs:1088`, `DailyLifeSystem.cs:437`,
+  `RestrictedZoneSystem.cs:498`, `RequestPoller.cs:1099` — enumerates the online client list, and a
+  bot has no `NetState`, so it cannot appear. Likewise anything gated on `NetState != null` before
+  it acts: `ReportGump.cs:165`, `JailCommands.cs:49`, `JailStatusGump.cs:54`,
+  `RestrictedZoneCountdownGump.cs:77`, `NavigationCommands.cs:588`, `NavWalkAudit.cs:1257`.
+  **Recorded rather than changed — but recorded, because the protection is incidental.** Each of
+  those is one refactor away from being a bug, and the sweep is where that is written down.
+- **Intentional: the site wants a bot to qualify, and says so.** `BankSitterBehavior.cs:576`
+  (`!mobile.Player` skips non-bots — bots deliberately pass), `BotDeathProbe.cs:173` (mirrors
+  `ReportMurderer`'s own flag test, which is the point of the probe), `BotSmoke.cs:621` (asserts the
+  flag is set so party invites work), `LiveMapSnapshot.cs:312` (`!mobile.Player` skips bots in the
+  sector sweep because `KindOf` has already added them).
+- **Unreachable by construction.** `ResetQuestCommands.cs:229`'s `state as PlayerMobile` is the
+  confirm-gump callback, reached only after the target it came from has already refused a bot.
+  `NavActor.cs:540`'s `mobile as PlayerMobile` is the factory choosing an adapter, and a bot
+  landing there is correct — that branch exists for it.
+- **Access-level tests are not kind tests.** `AccessLevel.Player` in a `CommandSystem.Register`
+  call or an `AccessLevel > Player` staff check answers a different question and is left alone
+  throughout.
+
+#### Negative results, which are part of the answer
+
+- `HasNetState` — **zero** occurrences under `Scripts/Custom/`.
+- `.Account == null` / `!= null` — **zero**. The only `.Account` read is `ConsoleTap.cs:264`, for a
+  username in a log line, on a path a bot cannot reach.
+- `is BaseCreature` as a *runtime* test — **zero**; every `BaseCreature` test in `Custom/` is the
+  `as` form, which is what makes `Nav.Actor`'s regex ledger countable.
+- `Controlled` as a test — **zero** in `Custom/`. Its only occurrences are probe construction
+  (`NavAudit.cs:477`, `NavMovement.cs:127`, both `Controlled = true` so the probe is not refused as
+  an uncontrolled creature) and `ControlMaster` use in the pack-animal code.
+
+**The item in the table above is closed.** What replaces it is this list, and the rule it leaves
+behind: a kind test in `Custom/` either asks an interface, or is protected by a source that cannot
+carry a bot, or carries a comment saying why a bot belongs in its answer.
 
 ### The locomotion adapter
 

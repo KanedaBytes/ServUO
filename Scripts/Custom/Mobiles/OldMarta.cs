@@ -126,7 +126,11 @@ namespace Server.Custom
         /// </summary>
         public override void OnMovement(Mobile m, Point3D oldLocation)
         {
-            if (!m.Alive || m.Hidden || !(m is PlayerMobile))
+            // IBotActor as well as the PlayerMobile test, because since the class swap of 12
+            // September 2026 a bot satisfies `is PlayerMobile` and she was greeting the fleet.
+            // Not merely noise: the greeting below is on a cooldown, so a bot walking past spent
+            // it and the next real player to arrive got silence from her.
+            if (!m.Alive || m.Hidden || !(m is PlayerMobile) || m is IBotActor)
             {
                 return;
             }

@@ -132,6 +132,21 @@ namespace Server.Custom
                 return "That is not a player.";
             }
 
+            // A BOT PASSES THE FLAG TEST ABOVE, and has done since the class swap of 12 September
+            // 2026: a PlayerBot is an accountless PlayerMobile with Player = true. Refused
+            // separately rather than by tightening that test, because the two refusals mean
+            // different things and the message should say which.
+            //
+            // Why refuse rather than allow: a jail record is durable and keyed to the character,
+            // and a bot is not - BotStartupPurge deletes every one of them at boot. A sentence
+            // served by a mobile that will not exist after the next restart is a record that
+            // outlives its subject, and the escalation count it carries would be inherited by
+            // whoever next rolls that name out of the pool.
+            if (player is IBotActor)
+            {
+                return "That is a bot, not a player.";
+            }
+
             if (player.AccessLevel > AccessLevel.Player)
             {
                 return "You cannot jail staff members.";

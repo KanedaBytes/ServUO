@@ -132,6 +132,19 @@ namespace Server.Custom
                     return;
                 }
 
+                // AND NOT A BOT, WHICH WOULD LEAVE A RECORD BEHIND IT. A bot satisfies the cast
+                // above since the class swap of 12 September 2026, and PlayerMobile.Quests is not
+                // a field: the getter is MondainQuestData.GetQuests(this), which INSERTS an empty
+                // list for anyone it is asked about, and the save writes every entry it holds
+                // (CLAUDE.md section 11). So targeting a bot would mint a quest-data entry for a
+                // mobile that BotStartupPurge deletes at the next boot, orphaning it inside
+                // Saves/Quests/MLQuests.bin with nothing left to point at it.
+                if (player is IBotActor)
+                {
+                    from.SendMessage(0x35, "That is a bot, not a player.");
+                    return;
+                }
+
                 bool wasInProgress = CancelInstance(from, player, m_Quest);
                 bool wasCompleted = ClearRecord(player, m_Quest);
 
@@ -181,6 +194,15 @@ namespace Server.Custom
                 if (player == null)
                 {
                     from.SendMessage(0x35, "That is not a player.");
+                    return;
+                }
+
+                // Not a bot, for the reason the single-quest target above gives: reading
+                // PlayerMobile.Quests would insert a MondainQuestData entry for an ephemeral
+                // mobile, and this command reads it twice.
+                if (player is IBotActor)
+                {
+                    from.SendMessage(0x35, "That is a bot, not a player.");
                     return;
                 }
 

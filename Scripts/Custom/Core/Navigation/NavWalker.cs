@@ -1644,26 +1644,19 @@ namespace Server.Custom
                         continue;
                     }
 
-                    // IBotActor FIRST, for the reason NavWalkFailures.Describe puts it first:
-                    // the test below reads "Player-flagged and not a BaseCreature" and was
-                    // written when that meant a real player. A bot is Player-flagged and is no
-                    // longer a BaseCreature, so without this line every bot in a wedge log is
-                    // labelled "player" - and a wedge log that cannot tell the fleet from the
-                    // people it is meant to yield to is worse than no log.
-                    string kind;
-
-                    if (other is IBotActor)
-                    {
-                        kind = "PlayerBot";
-                    }
-                    else if (other.Player && !(other is BaseCreature))
-                    {
-                        kind = "player";
-                    }
-                    else
-                    {
-                        kind = other.GetType().Name;
-                    }
+                    // ONE VOCABULARY, NOT TWO. This used to carry its own three-branch version
+                    // of Describe - IBotActor, then "Player-flagged and not a BaseCreature", then
+                    // the raw type name - and the middle branch was the pre-swap formulation,
+                    // correct only because the IBotActor line above it got there first. A second
+                    // copy of a rule that had already drifted once is the fault this session
+                    // exists to clear, so the copy is gone rather than repaired.
+                    //
+                    // What the log gains by asking Describe: "walk-probe", "daily-life",
+                    // "animal", "vendor" and "npc" as well, which are exactly the distinctions a
+                    // reader of a wedge entry wants and which the type name only sometimes gave.
+                    // And it loses the drift: the ordering, the link-dead-player rule and the
+                    // reason each test is a type now live in one place with one set of comments.
+                    string kind = NavWalkFailures.Describe(other);
 
                     parts.Add(String.Format(
                         "{0} ({1}) at {2},{3}",

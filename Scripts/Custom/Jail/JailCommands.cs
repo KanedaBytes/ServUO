@@ -245,7 +245,13 @@ namespace Server.Custom
             // too - which is what lets [JailInfo and [Unjail work on someone who is logged out.
             foreach (Mobile m in World.Mobiles.Values)
             {
-                if (m is PlayerMobile && !m.Deleted && Insensitive.Equals(m.Name, name))
+                // NOT a bot. This walks World.Mobiles to find offline characters, and a bot
+                // is both a PlayerMobile and in that dictionary - so `[JailInfo Elowen` would
+                // resolve to whichever bot happened to have rolled that name, in preference to
+                // nobody at all. NamePool draws from the same kind of name list a player would
+                // pick from, so the collision is likely rather than theoretical.
+                if (m is PlayerMobile && !(m is IBotActor)
+                    && !m.Deleted && Insensitive.Equals(m.Name, name))
                 {
                     matches.Add(m);
                 }
