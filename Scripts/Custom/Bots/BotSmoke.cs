@@ -426,6 +426,13 @@ namespace Server.Custom
             // Ok so the chain stays green while the defect stays on the record. See the file.
             BotDeathProbe.Run(map, location);
 
+            // Also synchronous, and it uses its own anchors rather than this location: the
+            // pathfinder door gate can only be asked at a real doorway, and it reports as
+            // Nav.Doors because what it asserts is a navigation contract. It has already run once
+            // at ServerStarted; re-running it here is what makes [BotSmoke a full re-assertion
+            // rather than a partial one.
+            BotDoorCheck.Run();
+
             // Asynchronous by nature - a bot answers an invitation on a delay, on purpose - so it
             // reports separately through Bots.Party rather than holding this result open.
             RunPartyProbe(map, location);
