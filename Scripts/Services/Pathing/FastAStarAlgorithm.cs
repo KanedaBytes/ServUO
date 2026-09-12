@@ -76,6 +76,12 @@ namespace Server.PathAlgorithms.FastAStar
 
             BaseCreature bc = p as BaseCreature;
 
+            // CUSTOM SHARD EDIT - Scripts/Custom/MODIFICATIONS.md entry 6.
+            // A PlayerBot is a PlayerMobile and misses the cast above, so its routes were never
+            // planned through a closed door. Hoisted out of the loop below so the per-iteration
+            // cost is unchanged; null means "not ours", and the BaseCreature branch keeps priority.
+            bool? botDoors = Server.Custom.BotPathPolicy.IgnoreDoors(p);
+
             int pathCount, parent;
             int backtrack = 0, depth = 0;
 
@@ -92,6 +98,12 @@ namespace Server.PathAlgorithms.FastAStar
                 {
                     MoveImpl.AlwaysIgnoreDoors = bc.CanOpenDoors;
                     MoveImpl.IgnoreMovableImpassables = bc.CanMoveOverObstacles;
+                }
+                else if (botDoors.HasValue)
+                {
+                    // CUSTOM SHARD EDIT - Scripts/Custom/MODIFICATIONS.md entry 6.
+                    // IgnoreMovableImpassables is deliberately not granted; see BotPathPolicy.
+                    MoveImpl.AlwaysIgnoreDoors = botDoors.Value;
                 }
 
                 MoveImpl.Goal = goal;
