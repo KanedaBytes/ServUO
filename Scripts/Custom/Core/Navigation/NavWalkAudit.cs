@@ -63,6 +63,18 @@ namespace Server.Custom
     /// <summary>One edge or arrival, walked.</summary>
     public sealed class NavWalkAuditRow
     {
+        /// <summary>
+        /// Which probe class walked this row - "creature" or "bot".
+        ///
+        /// ADDITIVE, and that is load-bearing for the editor. tools/editor/problems.test.js
+        /// scrapes this file's rows writer and asserts seventeen field names are still emitted, so
+        /// a rename or a removal fails the editor suite; a new field is ignored by
+        /// tools/editor/js/problems.js, which is the only reader of individual rows. The rows array
+        /// also stays FLAT for the same reason - nesting it per class would break every one of
+        /// walkAuditRows, walkAuditFor and walkAuditSummary at once.
+        /// </summary>
+        public string ProbeClass;
+
         /// <summary>"edge" or "arrival".</summary>
         public string Kind;
 
@@ -261,14 +273,153 @@ namespace Server.Custom
         ///   against the straight line is the ratio the whole re-base argument rests on.
         /// </summary>
         /// <summary>
+        /// What this audit needs of a probe, whatever class the probe is.
+        ///
+        /// THE AUDIT WALKS TWO CLASSES NOW, and this interface is how it does so without Core
+        /// naming a bot class. The surface is tiny because the audit's demands are: everything
+        /// else it touches - Deleted, MoveToWorld, Location, X/Y/Z, Delete - is on Mobile and is
+        /// reached through the handle below.
+        ///
+        /// Steps is here rather than derived because nothing else counts them. NavWalker knows
+        /// hops, not steps, and steps against the straight line is the ratio the whole re-base
+        /// argument rests on.
+        /// </summary>
+        public interface IWalkAuditProbe
+        {
+            /// <summary>The probe itself. Named Mobile rather than Self so it reads like INavActor's.</summary>
+            Mobile Mobile { get; }
+
+            /// <summary>Tiles moved since the last ResetSteps.</summary>
+            int Steps { get; }
+
+            void ResetSteps();
+        }
+
+        /// <summary>
+        /// One class of probe the audit knows how to walk, and how to make one.
+        ///
+        /// A REGISTRY RATHER THAN A TYPE TEST, and the reason is a rule this folder holds
+        /// elsewhere: Core does not know that bots exist. Nav.Doors is registered from Bots for
+        /// the same reason, and NavActorCheck's own ledger exists to stop BaseCreature leaking
+        /// back in here. So Core registers its own BaseCreature probe below, Bots registers the
+        /// PlayerBot-derived one at Initialize, and nothing under Core/Navigation names either.
+        /// </summary>
+        public sealed class ProbeClass
+        {
+            /// <summary>What `[WalkAudit &lt;key&gt;` and the row's probeClass field say.</summary>
+            public string Key;
+
+            /// <summary>What a human reads in the report headline.</summary>
+            public string Label;
+
+            public Func<IWalkAuditProbe> Create;
+        }
+
+        /// <summary>
+        /// The classes to walk, in registration order.
+        ///
+        /// The BaseCreature probe is first and is registered here rather than from outside,
+        /// because it is this file's own instrument and always exists. It is also the one that
+        /// measures NavCreatureActor, which the three daily-life walkers use and which nothing
+        /// else exercises - so it stays whatever else is added beside it.
+        /// </summary>
+        private static readonly List<ProbeClass> _probeClasses = new List<ProbeClass>
+        {
+            new ProbeClass
+            {
+                Key = "creature",
+                Label = "BaseCreature",
+                Create = () => new WalkAuditProbe()
+            }
+        };
+
+        /// <summary>Every registered probe class, for the command's usage line and the reports.</summary>
+        public static IEnumerable<ProbeClass> ProbeClasses
+        {
+            get { return _probeClasses; }
+        }
+
+        /// <summary>
+        /// Add a probe class. Idempotent by key, so a second Initialize pass cannot double it -
+        /// which matters because ScriptCompiler calls every public static Initialize it finds.
+        /// </summary>
+        public static void RegisterProbeClass(string key, string label, Func<IWalkAuditProbe> create)
+        {
+            if (String.IsNullOrEmpty(key) || create == null)
+            {
+                return;
+            }
+
+            foreach (ProbeClass existing in _probeClasses)
+            {
+                if (Insensitive.Equals(existing.Key, key))
+                {
+                    return;
+                }
+            }
+
+            _probeClasses.Add(new ProbeClass { Key = key, Label = label ?? key, Create = create });
+        }
+
+        /// <summary>"creature, bot" - for a usage line and for the unknown-class error.</summary>
+        public static string ProbeKeyList()
+        {
+            var keys = new List<string>();
+
+            foreach (ProbeClass cls in _probeClasses)
+            {
+                keys.Add(cls.Key);
+            }
+
+            return String.Join(", ", keys.ToArray());
+        }
+
+        /// <summary>"BaseCreature + PlayerBot" - the class list for a log line or a headline.</summary>
+        private static string DescribeClasses(Job job)
+        {
+            var labels = new List<string>();
+
+            foreach (ProbeClass cls in job.Classes)
+            {
+                labels.Add(cls.Label);
+            }
+
+            return labels.Count == 0 ? "none" : String.Join(" + ", labels.ToArray());
+        }
+
+        private static ProbeClass ProbeClassFor(string key)
+        {
+            foreach (ProbeClass candidate in _probeClasses)
+            {
+                if (Insensitive.Equals(candidate.Key, key))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// PUBLIC so the shove contract probe can spawn the REAL instrument rather than a
         /// look-alike. That probe asserts the diagnostic's verdict against the engine's for
         /// every ordered pair of actors, and a stand-in BaseCreature declared next to it would
         /// be testing a second instrument's collision rules - which is the exact fault this
         /// class's own comment above records having had.
+        ///
+        /// The declaration line is pinned by tools/editor/problems.test.js, which asserts both
+        /// `class WalkAuditProbe : BaseCreature, IBotMover` and the body of CheckShove - so a
+        /// change here fails the editor suite rather than going quiet. IWalkAuditProbe is appended
+        /// rather than inserted for exactly that reason.
         /// </summary>
-        public class WalkAuditProbe : BaseCreature, IBotMover
+        public class WalkAuditProbe : BaseCreature, IBotMover, IWalkAuditProbe
         {
+            /// <summary>Itself. The audit reaches every Mobile member through this.</summary>
+            public Mobile Mobile
+            {
+                get { return this; }
+            }
+
             private int _steps;
 
             public WalkAuditProbe()
@@ -410,6 +561,9 @@ namespace Server.Custom
         /// <summary>One thing to walk: from a tile, to a tile, and what to call it.</summary>
         private sealed class Item
         {
+            /// <summary>Which probe class walks this one. See ProbeClass.</summary>
+            public string ProbeKey;
+
             public string Kind;
             public string From;
             public string To;
@@ -435,7 +589,18 @@ namespace Server.Custom
         /// <summary>A probe and the item it is currently walking.</summary>
         private sealed class Runner
         {
-            public WalkAuditProbe Probe;
+            public IWalkAuditProbe Probe;
+
+            /// <summary>
+            /// The class of the probe currently held, so Begin can tell when it has to swap.
+            ///
+            /// A runner keeps its probe across items - spawning one per walk would be 2,510
+            /// constructions - so the only time it rebuilds is when the work list crosses from one
+            /// class to the next. The list is grouped by class for that reason: interleaved, every
+            /// runner would rebuild on almost every item.
+            /// </summary>
+            public string ProbeKey;
+
             public NavWalker Walker;
             public Item Item;
             public long StartedTick;
@@ -482,6 +647,9 @@ namespace Server.Custom
             public readonly List<NavWalkAuditRow> Rows = new List<NavWalkAuditRow>();
             public readonly List<Runner> Runners = new List<Runner>();
 
+            /// <summary>The probe classes this job walks, in the order the list is grouped.</summary>
+            public readonly List<ProbeClass> Classes = new List<ProbeClass>();
+
             public int Skipped;
             public int Total;
             public long StartedTick;
@@ -511,6 +679,28 @@ namespace Server.Custom
         /// </summary>
         public static bool TryStart(Mobile caller, int probes, bool selfTest, out string error)
         {
+            return TryStart(caller, probes, selfTest, null, out error);
+        }
+
+        /// <summary>
+        /// As above, walking only the probe class <paramref name="probeKey"/> names - or every
+        /// registered class when it is null, which is the default and is what an acceptance run
+        /// wants.
+        ///
+        /// BOTH CLASSES BY DEFAULT, and that is the rebaseline. Until 12 September 2026 this audit
+        /// had one probe, a BaseCreature, which has always taken the pathfinder's `bc != null`
+        /// branch and always planned through doors - so on the day a bot's routes stopped planning
+        /// through them, this sweep was green over 2,510 legs while the fleet's terminal failures
+        /// went up tenfold. A green audit was a real guarantee about the graph and about the
+        /// BaseCreature adapter; it was never a guarantee about bots.
+        ///
+        /// The answer is two probes rather than one swapped, because the three daily-life
+        /// BaseCreature walkers would otherwise have no instrument of their own class and
+        /// NavCreatureActor would go unmeasured. See the Navigation README.
+        /// </summary>
+        public static bool TryStart(
+            Mobile caller, int probes, bool selfTest, string probeKey, out string error)
+        {
             error = null;
 
             if (_job != null)
@@ -525,16 +715,61 @@ namespace Server.Custom
                 return false;
             }
 
-            var job = new Job { Caller = caller, SelfTest = selfTest, StartedTick = Core.TickCount };
+            var classes = new List<ProbeClass>();
 
-            if (selfTest)
+            if (String.IsNullOrEmpty(probeKey))
             {
-                AddSelfTest(job);
+                classes.AddRange(_probeClasses);
             }
             else
             {
-                BuildWorkList(job);
+                ProbeClass only = ProbeClassFor(probeKey);
 
+                if (only == null)
+                {
+                    error = "unknown probe class '" + probeKey + "'; known: " + ProbeKeyList();
+                    return false;
+                }
+
+                classes.Add(only);
+            }
+
+            var job = new Job { Caller = caller, SelfTest = selfTest, StartedTick = Core.TickCount };
+
+            job.Classes.AddRange(classes);
+
+            // GROUPED BY CLASS, AND SHUFFLED WITHIN EACH GROUP. The shuffle is so twelve probes
+            // spread over the facet instead of queueing through one plaza; the grouping is so a
+            // runner swaps its probe once rather than on nearly every item. Both matter, and they
+            // pull in opposite directions if the whole list is shuffled at once.
+            //
+            // The list is rebuilt per class rather than copied, because Begin fills PathTiles in
+            // on the Item and the two classes must not share one.
+            foreach (ProbeClass cls in classes)
+            {
+                var items = new List<Item>();
+
+                if (selfTest)
+                {
+                    AddSelfTest(items);
+                }
+                else
+                {
+                    BuildWorkList(job, items, ReferenceEquals(cls, classes[0]));
+                }
+
+                foreach (Item item in items)
+                {
+                    item.ProbeKey = cls.Key;
+                }
+
+                Shuffle(items);
+
+                job.Pending.AddRange(items);
+            }
+
+            if (!selfTest)
+            {
                 // THE APPROACH TILES, before a single probe is spawned.
                 //
                 // Engine-only and synchronous, unlike everything below it, and it belongs here
@@ -560,11 +795,6 @@ namespace Server.Custom
 
             job.Total = job.Pending.Count;
 
-            // Shuffled, so twelve concurrent probes are spread over the facet rather than queued
-            // behind one another through a single plaza. The work list comes out of the store in
-            // graph order, which is very nearly geographic order.
-            Shuffle(job.Pending);
-
             int count = Math.Min(probes > 0 ? probes : Probes, job.Pending.Count);
 
             for (int i = 0; i < count; i++)
@@ -578,7 +808,10 @@ namespace Server.Custom
             WriteSnapshot(job, false);
 
             Log.Info(
-                "Walk audit starting: {0} walk(s) over {1} probe(s).", job.Total, job.Runners.Count);
+                "Walk audit starting: {0} walk(s) over {1} probe(s), class(es): {2}.",
+                job.Total,
+                job.Runners.Count,
+                DescribeClasses(job));
 
             job.Poll = Timer.DelayCall(PollInterval, PollInterval, () => Step(job));
 
@@ -596,7 +829,7 @@ namespace Server.Custom
         /// inside the hop cap: an arrival that only one approach can reach is a one-way trip from
         /// every other, and "does this arrival work" has as many answers as it has approaches.
         /// </summary>
-        private static void BuildWorkList(Job job)
+        private static void BuildWorkList(Job job, List<Item> into, bool countSkipped)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -626,8 +859,8 @@ namespace Server.Custom
                     continue;
                 }
 
-                job.Pending.Add(EdgeItem(a, b));
-                job.Pending.Add(EdgeItem(b, a));
+                into.Add(EdgeItem(a, b));
+                into.Add(EdgeItem(b, a));
             }
 
             foreach (NavDestination destination in NavigationSystem.Store.Destinations)
@@ -642,7 +875,14 @@ namespace Server.Custom
                 // and a list everybody skims is a list with the real warning hidden in it.
                 if (destination.HasTag(NavigationSystem.PendingRoadTag))
                 {
-                    job.Skipped += destination.ArrivalList == null ? 1 : destination.ArrivalList.Count;
+                    // Counted for the first class only. The work list is built once per class,
+                    // so adding it every time would report the same skipped destinations twice.
+                    if (countSkipped)
+                    {
+                        job.Skipped +=
+                            destination.ArrivalList == null ? 1 : destination.ArrivalList.Count;
+                    }
+
                     continue;
                 }
 
@@ -660,7 +900,7 @@ namespace Server.Custom
 
                     foreach (NavWaypoint approach in ApproachesFor(destination, arrival))
                     {
-                        job.Pending.Add(ArrivalItem(destination, arrival, approach));
+                        into.Add(ArrivalItem(destination, arrival, approach));
                     }
                 }
             }
@@ -812,14 +1052,14 @@ namespace Server.Custom
         /// leaves a road through a wall in the shard's data. The work list is the only thing that
         /// needs to know, so it is the only thing that is told.
         /// </summary>
-        private static void AddSelfTest(Job job)
+        private static void AddSelfTest(List<Item> into)
         {
             Map map = Map.Trammel;
 
             // MUST FAIL. Open water under the Trinsic pier, with no standable neighbour.
             var drowned = new Point3D(2072, 2865, NavWalker.ResolveZ(map, new Point3D(2072, 2865, -15)));
 
-            job.Pending.Add(new Item
+            into.Add(new Item
             {
                 Kind = "arrival",
                 From = "selftest-pier",
@@ -835,7 +1075,7 @@ namespace Server.Custom
             // standable and reachable from every one of its eight neighbours.
             var road = new Point3D(1849, 2711, NavWalker.ResolveZ(map, new Point3D(1849, 2711, 11)));
 
-            job.Pending.Add(new Item
+            into.Add(new Item
             {
                 Kind = "arrival",
                 From = "selftest-road",
@@ -862,36 +1102,78 @@ namespace Server.Custom
         /// </summary>
         private static string SelfTestVerdict(Job job)
         {
-            bool seedFailed = false;
-            bool controlPassed = false;
-            string seedCause = "(the seed row is missing)";
+            // PER CLASS, AND THE AGGREGATE VERSION OF THIS WAS WRONG THE MOMENT A SECOND CLASS
+            // EXISTED. It set seedFailed from each matching row in turn, so with two classes it
+            // was last-row-wins: one class could PASS the unwalkable seed - a broken instrument,
+            // the exact thing this exists to catch - and the verdict would still read OK because
+            // the other class's row came later. Every class proves itself now, and the first one
+            // that cannot is named.
+            var broken = new List<string>();
+            var causes = new List<string>();
 
-            foreach (NavWalkAuditRow row in job.Rows)
+            foreach (ProbeClass cls in job.Classes)
             {
-                if (row.Destination == SelfTestMustFail)
+                bool seedFailed = false;
+                bool controlPassed = false;
+                bool sawSeed = false;
+                bool sawControl = false;
+                string seedCause = "(the seed row is missing)";
+
+                foreach (NavWalkAuditRow row in job.Rows)
                 {
-                    seedFailed = !row.Pass;
-                    seedCause = row.Cause ?? "passed, which it must not";
+                    if (!Insensitive.Equals(row.ProbeClass, cls.Key))
+                    {
+                        continue;
+                    }
+
+                    if (row.Destination == SelfTestMustFail)
+                    {
+                        sawSeed = true;
+                        seedFailed = !row.Pass;
+                        seedCause = row.Cause ?? "passed, which it must not";
+                    }
+                    else if (row.Destination == SelfTestMustPass)
+                    {
+                        sawControl = true;
+                        controlPassed = row.Pass;
+                    }
                 }
-                else if (row.Destination == SelfTestMustPass)
+
+                if (!sawSeed || !sawControl)
                 {
-                    controlPassed = row.Pass;
+                    broken.Add(String.Format(
+                        "{0}: one of its two rows is missing, so it proved nothing", cls.Label));
+                    continue;
                 }
+
+                if (seedFailed && controlPassed)
+                {
+                    causes.Add(cls.Label + " '" + seedCause + "'");
+                    continue;
+                }
+
+                broken.Add(String.Format(
+                    "{0}: seed {1} (cause '{2}'), control {3}",
+                    cls.Label,
+                    seedFailed ? "failed as required" : "PASSED and must not have",
+                    seedCause,
+                    controlPassed ? "passed" : "FAILED and should not have"));
             }
 
-            if (seedFailed && controlPassed)
+            if (broken.Count == 0 && causes.Count > 0)
             {
                 return String.Format(
-                    "SELF-TEST OK: the unwalkable seed failed with '{0}' and the control passed.",
-                    seedCause);
+                    "SELF-TEST OK for {0} class(es): the unwalkable seed failed and the control "
+                    + "passed for each ({1}).",
+                    causes.Count,
+                    String.Join("; ", causes.ToArray()));
             }
 
             return String.Format(
-                "SELF-TEST BROKEN: seed {0} (cause '{1}'), control {2}. "
-                + "Do not trust a walk audit until this reads OK.",
-                seedFailed ? "failed as required" : "PASSED and must not have",
-                seedCause,
-                controlPassed ? "passed" : "FAILED and should not have");
+                "SELF-TEST BROKEN - {0}. Do not trust a walk audit until this reads OK.",
+                broken.Count == 0
+                    ? "no class produced a seed or a control row at all"
+                    : String.Join(" | ", broken.ToArray()));
         }
 
         // ---- driving ----------------------------------------------------------------------------
@@ -973,11 +1255,34 @@ namespace Server.Custom
 
         private static void Begin(Job job, Runner runner, Item item)
         {
-            if (runner.Probe == null || runner.Probe.Deleted)
+            // A PROBE PER CLASS, SWAPPED AT THE BOUNDARY. The runner keeps its probe across
+            // items, because one construction per walk would be 2,510 of them; it rebuilds only
+            // when the work list crosses from one class to the next, which the grouping in
+            // BuildWorkList makes happen once per runner rather than on nearly every item.
+            //
+            // The walker is rebuilt with it, and has to be: NavActor.For dispatches on the class,
+            // so a NavPlayerActor over a BaseCreature probe - or the reverse - would be the exact
+            // instrument-with-its-own-rules fault this file's own comments record having had.
+            if (runner.Probe == null
+                || runner.Probe.Mobile.Deleted
+                || !Insensitive.Equals(runner.ProbeKey, item.ProbeKey))
             {
-                runner.Probe = new WalkAuditProbe();
+                if (runner.Probe != null && !runner.Probe.Mobile.Deleted)
+                {
+                    runner.Probe.Mobile.Delete();
+                }
 
-                runner.Walker = new NavWalker(NavActor.For(runner.Probe));
+                if (runner.Walker != null)
+                {
+                    runner.Walker.Stop();
+                }
+
+                ProbeClass cls = ProbeClassFor(item.ProbeKey) ?? _probeClasses[0];
+
+                runner.Probe = cls.Create();
+                runner.ProbeKey = cls.Key;
+
+                runner.Walker = new NavWalker(NavActor.For(runner.Probe.Mobile));
 
                 // The whole reason this property exists. See NavWalker.Ledger.
                 runner.Walker.Ledger = false;
@@ -995,7 +1300,7 @@ namespace Server.Custom
             runner.StartedTick = Core.TickCount;
 
             runner.Probe.ResetSteps();
-            runner.Probe.MoveToWorld(item.Start, item.Map);
+            runner.Probe.Mobile.MoveToWorld(item.Start, item.Map);
 
             // THE ENGINE'S OWN ROUTE, asked once, from the start tile, before anything moves.
             //
@@ -1015,7 +1320,7 @@ namespace Server.Custom
             }
             else
             {
-                var path = new MovementPath(runner.Probe, item.Goal);
+                var path = new MovementPath(runner.Probe.Mobile, item.Goal);
 
                 if (path.Success && path.Directions != null)
                 {
@@ -1036,7 +1341,7 @@ namespace Server.Custom
                 runner.FailCause = cause;
 
                 // BEFORE THE TELEPORT, which is the whole reason this seam is raised where it is.
-                runner.StoppedAt = runner.Probe.Location;
+                runner.StoppedAt = runner.Probe.Mobile.Location;
                 runner.HaveStopped = true;
             };
 
@@ -1107,12 +1412,13 @@ namespace Server.Custom
                     bool unstandable;
 
                     cause = NavWalkFailures.CauseFor(
-                        runner.Probe, item.Map, item.Goal, item.Range, out unstandable);
+                        runner.Probe.Mobile, item.Map, item.Goal, item.Range, out unstandable);
                 }
             }
 
             var row = new NavWalkAuditRow
             {
+                ProbeClass = item.ProbeKey,
                 Kind = item.Kind,
                 From = item.From,
                 To = item.To,
@@ -1130,9 +1436,9 @@ namespace Server.Custom
                 GoalX = item.Goal.X,
                 GoalY = item.Goal.Y,
                 GoalZ = item.Goal.Z,
-                StopX = runner.HaveStopped ? runner.StoppedAt.X : runner.Probe.X,
-                StopY = runner.HaveStopped ? runner.StoppedAt.Y : runner.Probe.Y,
-                StopZ = runner.HaveStopped ? runner.StoppedAt.Z : runner.Probe.Z,
+                StopX = runner.HaveStopped ? runner.StoppedAt.X : runner.Probe.Mobile.X,
+                StopY = runner.HaveStopped ? runner.StoppedAt.Y : runner.Probe.Mobile.Y,
+                StopZ = runner.HaveStopped ? runner.StoppedAt.Z : runner.Probe.Mobile.Z,
                 Range = item.Range,
                 Cause = cause,
                 Rungs = DescribeRungs(walker),
@@ -1225,9 +1531,9 @@ namespace Server.Custom
                 // the deletion is here and the whole method is wrapped.
                 foreach (Runner runner in job.Runners)
                 {
-                    if (runner.Probe != null && !runner.Probe.Deleted)
+                    if (runner.Probe != null && !runner.Probe.Mobile.Deleted)
                     {
-                        runner.Probe.Delete();
+                        runner.Probe.Mobile.Delete();
                     }
 
                     if (runner.Walker != null)
@@ -1283,6 +1589,97 @@ namespace Server.Custom
         // ---- reporting ---------------------------------------------------------------------------
 
         /// <summary>The one-line answer, in the shape [NavAudit's summary uses.</summary>
+        /// <summary>
+        /// What one probe class walked. The gate is read off these, per class.
+        /// </summary>
+        private sealed class ClassTally
+        {
+            public string Key;
+            public string Label;
+            public int Walked;
+            public int Failed;
+            public int Fragile;
+            public int Contested;
+        }
+
+        /// <summary>
+        /// One tally per class the job walked, in the job's own class order.
+        ///
+        /// PER CLASS RATHER THAN TOTAL, and that is the point of the rebaseline: a sweep that
+        /// reported 5,020 walks and 0 failures would hide a BaseCreature probe passing a leg its
+        /// bot counterpart failed, which is exactly the difference the door regression consisted
+        /// of. Where a row differs between the two classes, the difference has to be explained by
+        /// a cell of the collision table or by MODIFICATIONS entry 6 - or it is a finding.
+        ///
+        /// Classes with no rows yet are still listed, so a sweep in progress shows both.
+        /// </summary>
+        private static List<ClassTally> Tallies(Job job)
+        {
+            var tallies = new List<ClassTally>();
+
+            foreach (ProbeClass cls in job.Classes)
+            {
+                tallies.Add(new ClassTally { Key = cls.Key, Label = cls.Label });
+            }
+
+            foreach (NavWalkAuditRow row in job.Rows)
+            {
+                ClassTally tally = null;
+
+                foreach (ClassTally candidate in tallies)
+                {
+                    if (Insensitive.Equals(candidate.Key, row.ProbeClass))
+                    {
+                        tally = candidate;
+                        break;
+                    }
+                }
+
+                if (tally == null)
+                {
+                    continue;
+                }
+
+                tally.Walked++;
+
+                if (!row.Pass)
+                {
+                    tally.Failed++;
+                    continue;
+                }
+
+                if (row.RungTotal > 0)
+                {
+                    tally.Fragile++;
+                }
+
+                if (row.Occupied != null || row.RungTotal > 0)
+                {
+                    tally.Contested++;
+                }
+            }
+
+            return tallies;
+        }
+
+        /// <summary>The per-class gate line: what a reader checks against 2,510 / 0 / 0.</summary>
+        private static string DescribeTallies(Job job)
+        {
+            var parts = new List<string>();
+
+            foreach (ClassTally tally in Tallies(job))
+            {
+                parts.Add(String.Format(
+                    "{0} {1} walked / {2} failed / {3} fragile",
+                    tally.Label,
+                    tally.Walked,
+                    tally.Failed,
+                    tally.Fragile));
+            }
+
+            return parts.Count == 0 ? "no classes" : String.Join("; ", parts.ToArray());
+        }
+
         private static string Summarise(Job job)
         {
             int edges = 0, edgesFailed = 0, arrivals = 0, arrivalsFailed = 0, occupied = 0;
@@ -1335,8 +1732,11 @@ namespace Server.Custom
                 }
             }
 
+            // PER CLASS FIRST, because it is the gate and the totals below it are not. A
+            // reader checking 2,510 / 0 / 0 needs it per class or the two probes' results are
+            // added together and a difference between them disappears into a sum.
             return String.Format(
-                "{0} edge walk(s): {1} failed. {2} arrival walk(s): {3} failed, {4} skipped "
+                "{9}. {0} edge walk(s): {1} failed. {2} arrival walk(s): {3} failed, {4} skipped "
                 + "(pending-road). {5} failure(s) had somebody on the next-step tile. "
                 + "Worst detour {6}. {7:F1}s over {8} probe(s)."
                 + (job.Cliffs == null ? "" : " Approach tiles: " + job.Cliffs.Summary),
@@ -1352,7 +1752,8 @@ namespace Server.Custom
                         "{0:F2} ({1} tiles of road for {2}) on {3}",
                         worst.Ratio, worst.PathTiles, worst.Tiles, worst.Label),
                 (Core.TickCount - job.StartedTick) / 1000.0,
-                job.Runners.Count);
+                job.Runners.Count,
+                DescribeTallies(job));
         }
 
         /// <summary>
@@ -1605,13 +2006,37 @@ namespace Server.Custom
 
             builder.Append(",\n");
 
+            // PER CLASS, beside the totals rather than instead of them. Additive: the editor's
+            // only reader of this file (tools/editor/js/problems.js) takes `rows`, the header
+            // counters and nothing else, so a new sibling object cannot break it - and `rows`
+            // itself stays a flat array carrying a probeClass per row for the same reason.
+            builder.Append("  \"classes\": [\n");
+
+            List<ClassTally> tallies = Tallies(job);
+
+            for (int i = 0; i < tallies.Count; i++)
+            {
+                ClassTally tally = tallies[i];
+
+                builder.Append("    {\"key\":").Append(Json.Quote(tally.Key));
+                builder.Append(",\"label\":").Append(Json.Quote(tally.Label));
+                builder.Append(",\"walked\":").Append(tally.Walked);
+                builder.Append(",\"failed\":").Append(tally.Failed);
+                builder.Append(",\"fragile\":").Append(tally.Fragile);
+                builder.Append(",\"contested\":").Append(tally.Contested);
+                builder.Append("}").Append(i == tallies.Count - 1 ? "\n" : ",\n");
+            }
+
+            builder.Append("  ],\n");
+
             builder.Append("  \"rows\": [\n");
 
             for (int i = 0; i < job.Rows.Count; i++)
             {
                 NavWalkAuditRow row = job.Rows[i];
 
-                builder.Append("    {\"kind\":").Append(Json.Quote(row.Kind));
+                builder.Append("    {\"probeClass\":").Append(Json.Quote(row.ProbeClass));
+                builder.Append(",\"kind\":").Append(Json.Quote(row.Kind));
                 builder.Append(",\"from\":").Append(Json.Quote(row.From));
 
                 if (row.To != null)

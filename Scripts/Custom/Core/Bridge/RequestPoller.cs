@@ -277,30 +277,51 @@ namespace Server.Custom
                 // "started", and reads `status` out of walk-audit.json - which is written once at
                 // the start with "running" for exactly that.
                 //
-                // Body: a probe count, or "selftest" for the one hop the audit must fail.
+                // Body: any of a probe count, "selftest" for the one hop the audit must fail,
+                // and a probe class key ("creature" or "bot"), in any order. No key means every
+                // registered class, which is what an acceptance run wants.
+                //
+                // THE SAME PARSE AS THE COMMAND, and it has to be: a headless run reaches the
+                // audit only through this token, so a class argument the command understood and
+                // the token did not would make one of the two classes unreachable without a
+                // client.
                 case "walk-audit":
                 {
-                    string first = FirstWord(body);
-                    bool selfTest = Insensitive.Equals(first, "selftest");
+                    bool selfTest = false;
+                    int probes = 0;
+                    string probeKey = null;
 
-                    int probes;
-
-                    if (selfTest || !Int32.TryParse(first, out probes))
+                    foreach (string word in (body ?? "").Split(
+                        new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
                     {
-                        probes = 0;
+                        int parsed;
+
+                        if (Insensitive.Equals(word, "selftest"))
+                        {
+                            selfTest = true;
+                        }
+                        else if (Int32.TryParse(word, out parsed))
+                        {
+                            probes = parsed;
+                        }
+                        else
+                        {
+                            probeKey = word;
+                        }
                     }
 
                     string auditError;
 
-                    if (!NavWalkAudit.TryStart(null, probes, selfTest, out auditError))
+                    if (!NavWalkAudit.TryStart(null, probes, selfTest, probeKey, out auditError))
                     {
                         message = "walk audit not started: " + auditError;
                         return false;
                     }
 
                     message = String.Format(
-                        "walk audit started{0}; watch {1} for status",
+                        "walk audit started{0}{1}; watch {2} for status",
                         selfTest ? " (self-test)" : "",
+                        probeKey == null ? "" : " (" + probeKey + " only)",
                         NavWalkAudit.SnapshotPath);
                     return true;
                 }

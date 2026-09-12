@@ -176,6 +176,35 @@ namespace Server.Custom
         /// is derived, so there is exactly one thing to be wrong: a bot is exempt because it is a
         /// fixture, and it is a fixture because its Role says so.
         /// </summary>
+        /// <summary>
+        /// Whether this is an INSTRUMENT wearing a bot's class rather than a bot.
+        ///
+        /// FALSE FOR EVERY REAL BOT, and true only for the walk audit's PlayerBot-derived probe.
+        /// It exists because a subclass cannot suppress either of the two things it gates:
+        ///
+        ///   THE MOUNT ROLL is queued by this class's constructor as
+        ///   Timer.DelayCall(TimeSpan.Zero, BotMovement.RollMount, this), and a timer already on
+        ///   the queue cannot be cancelled from a subclass constructor that runs after it was
+        ///   queued. RollMount reads this instead.
+        ///
+        ///   THE STEP CENSUS is called from OnLocationChange AFTER base, so an override that
+        ///   wanted PlayerMobile's behaviour without the census would have to skip a level, which
+        ///   C# does not allow.
+        ///
+        /// Everything else an instrument has to stay out of goes through LiveRegistry - the
+        /// behaviour tick, the lifecycle roller, the session curve, the crowd counts, the live map
+        /// and all three population censuses read LiveRegistry.Snapshot() and nothing else - so a
+        /// single Unregister in the subclass constructor covers all of them and needs no flag.
+        ///
+        /// Deliberately NOT a general "is this real" switch. Two call sites, both named above; if
+        /// a third wants it, the question to ask first is whether that site should be reading
+        /// LiveRegistry.
+        /// </summary>
+        public virtual bool IsInstrument
+        {
+            get { return false; }
+        }
+
         public bool LifecycleExempt
         {
             get { return Role == BotRole.Fixed; }
@@ -790,6 +819,15 @@ namespace Server.Custom
         protected override void OnLocationChange(Point3D oldLocation)
         {
             base.OnLocationChange(oldLocation);
+
+            // Not for an instrument. The walk audit's PlayerBot-derived probe walks 2,510 legs in
+            // a few minutes, which would swamp a census whose denominator is bot-seconds in a
+            // phase and whose whole purpose is to say how much a real bot moves and why. See
+            // IsInstrument for why this is a flag rather than an override.
+            if (IsInstrument)
+            {
+                return;
+            }
 
             BotStepCensus.Note(this, oldLocation);
         }

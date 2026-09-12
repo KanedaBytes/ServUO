@@ -254,6 +254,111 @@ test('only the failures become rows - a sweep is mostly passes and they are not 
     assert.match(rows[0].reason, /short-of-goal \(teleport\)/);
 });
 
+test('a row with no probeClass reads exactly as it did before there were two probes', () => {
+    // The guard on the whole two-class change. Every sweep number recorded in the Navigation
+    // README was taken with one probe class, and a walk-audit.json written before 12 September
+    // 2026 has no probeClass on its rows - so the absence of the field has to mean the absence of
+    // the tag, not "undefined".
+    const [row] = problems.walkAuditRows({
+        rows: [walkRow({ pass: false, cause: 'short-of-goal', endedBy: 'teleport' })]
+    });
+
+    assert.strictEqual(row.label, 'uo-wp-174 -> uo-wp-173-s1');
+    assert.ok(!row.label.includes('['), `no class tag expected, got ${row.label}`);
+});
+
+test('a failing row names WHICH probe class failed it', () => {
+    // The same edge can fail for the PlayerBot probe and pass for the BaseCreature one, and that
+    // difference is the door regression itself. A Problems row that did not say which would point
+    // at a road when the answer is a class.
+    const [row] = problems.walkAuditRows({
+        rows: [walkRow({
+            pass: false,
+            cause: 'short-of-goal',
+            endedBy: 'teleport',
+            probeClass: 'bot'
+        })]
+    });
+
+    assert.strictEqual(row.label, 'uo-wp-174 -> uo-wp-173-s1 [bot]');
+});
+
+test('an arrival row carries its class too, after the (arrival) marker', () => {
+    const [row] = problems.walkAuditRows({
+        rows: [walkRow({
+            kind: 'arrival',
+            to: null,
+            destination: 'brit-bank',
+            pass: false,
+            cause: 'arrived-no-stand-tile',
+            endedBy: 'teleport',
+            probeClass: 'creature'
+        })]
+    });
+
+    assert.strictEqual(row.label, 'uo-wp-174 -> brit-bank (arrival) [creature]');
+});
+
+test('the per-record walk line names the class of the row it picked', () => {
+    const failed = problems.walkAuditFor({
+        rows: [walkRow({
+            pass: false,
+            cause: 'goal-unstandable',
+            endedBy: 'teleport',
+            probeClass: 'bot'
+        })]
+    }, 'uo-wp-174');
+
+    assert.match(failed, /^FAILED \[bot\] goal-unstandable/);
+
+    const passed = problems.walkAuditFor({
+        rows: [walkRow({ probeClass: 'creature' })]
+    }, 'uo-wp-174');
+
+    assert.match(passed, /\[creature\]/);
+});
+
+test('the header reports each class against its own gate, not the two added together', () => {
+    // 5,020 walked / 0 failed would be true and useless: the gate is 2,510 / 0 per class, and a
+    // sum is exactly where one probe passing a leg the other failed disappears.
+    const summary = problems.walkAuditSummary({
+        status: 'done',
+        skipped: 0,
+        seconds: 240,
+        probes: 12,
+        classes: [
+            { key: 'creature', label: 'BaseCreature', walked: 2510, failed: 0 },
+            { key: 'bot', label: 'PlayerBot', walked: 2510, failed: 3 }
+        ],
+        rows: [walkRow({ probeClass: 'creature' })]
+    });
+
+    assert.match(summary, /BaseCreature 2510\/0/);
+    assert.match(summary, /PlayerBot 2510\/3/);
+});
+
+test('a one-class sweep does not grow a per-class clause', () => {
+    const summary = problems.walkAuditSummary({
+        status: 'done',
+        skipped: 0,
+        seconds: 240,
+        probes: 12,
+        classes: [{ key: 'creature', label: 'BaseCreature', walked: 2510, failed: 0 }],
+        rows: [walkRow({ probeClass: 'creature' })]
+    });
+
+    assert.ok(!summary.includes('BaseCreature'), `expected no class clause, got ${summary}`);
+});
+
+test('NavWalkAudit still emits probeClass on every row', () => {
+    // The same pin the seventeen other field names have, for the field the two-class report is
+    // read through. Renaming it on the shard side would leave the editor silently untagged.
+    const cs = fs.readFileSync(NAV_WALK_AUDIT_CS, 'utf8');
+
+    assert.match(cs, /"probeClass\\":/,
+        'NavWalkAudit stopped emitting probeClass, so a two-class sweep is unreadable');
+});
+
 test('a walk row jumps to where the walk DIED, not to the goal', () => {
     // The goal is already on the map as the record itself, so jumping there shows the place that
     // is fine. 2026,2832 is the tile the README's ladder-drift trail ends on, and it is the tile

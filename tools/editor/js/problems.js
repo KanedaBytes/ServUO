@@ -105,13 +105,29 @@ export function edgeRows(problems, labelFor) {
  * between a road nobody can use and a road that was busy for ten seconds, so it has to be visible
  * on the row rather than inferred from a count somewhere else.
  */
+/**
+ * " [bot]" - which probe class walked this row, or nothing at all.
+ *
+ * CONDITIONAL ON PURPOSE. [WalkAudit walked one class until 12 September 2026 and every recorded
+ * sweep in the Navigation README is a one-class number, so a file written before the rebaseline has
+ * no probeClass on its rows and must still read exactly as it did. Absent field, absent tag.
+ *
+ * It matters once two classes walk the same graph: the same edge can fail for the PlayerBot probe
+ * and pass for the BaseCreature one - that difference IS the door regression, and it is the whole
+ * reason there are two probes - so a Problems row that did not say which probe failed would point
+ * at a road when the answer is a class.
+ */
+function classTag(row) {
+    return row && row.probeClass ? ` [${row.probeClass}]` : '';
+}
+
 export function walkAuditRows(walkAudit) {
     const rows = (walkAudit && walkAudit.rows) || [];
 
     return rows.filter((row) => !row.pass).map((row) => {
-        const label = row.kind === 'arrival'
+        const label = (row.kind === 'arrival'
             ? `${row.from} -> ${row.destination} (arrival)`
-            : `${row.from} -> ${row.to}`;
+            : `${row.from} -> ${row.to}`) + classTag(row);
 
         const blocked = row.occupied
             ? `; next step blocked by ${row.occupied}`
@@ -220,7 +236,7 @@ export function walkAuditFor(walkAudit, id) {
     if (failed.length > 0) {
         const worst = failed[0];
 
-        return `FAILED ${worst.cause} (${worst.endedBy})`
+        return `FAILED${classTag(worst)} ${worst.cause} (${worst.endedBy})`
             + `, stopped ${worst.stopX},${worst.stopY}`;
     }
 
@@ -234,6 +250,7 @@ export function walkAuditFor(walkAudit, id) {
 
     return `${worst.steps} step(s) / ${worst.tiles} tile(s) = ${worst.ratio.toFixed(2)}`
         + `, ${worst.seconds.toFixed(1)}s`
+        + classTag(worst)
         + (worst.rungTotal > 0 ? ` - after ${worst.rungTotal} rung(s)` : '');
 }
 
@@ -264,7 +281,19 @@ export function walkAuditSummary(walkAudit) {
         }
     }
 
+    // PER CLASS WHERE THE SHARD REPORTED IT, because the gate is per class and a sum hides
+    // the one thing two probes exist to show. Older files have no `classes` block and read as
+    // before.
+    const classes = Array.isArray(walkAudit.classes) ? walkAudit.classes : [];
+
+    const perClass = classes.length > 1
+        ? ' - ' + classes
+            .map((cls) => `${cls.label || cls.key} ${cls.walked || 0}/${cls.failed || 0}`)
+            .join(', ')
+        : '';
+
     return `${rows.length} walked, ${failed} failed, ${walkAudit.skipped || 0} skipped`
+        + perClass
         + (worst ? `, worst ratio ${worst.ratio.toFixed(2)}` : '')
         + (walkAudit.fragile ? `, ${walkAudit.fragile} passed only after rungs` : '')
         + (walkAudit.contested ? `, ${walkAudit.contested} contested` : '')

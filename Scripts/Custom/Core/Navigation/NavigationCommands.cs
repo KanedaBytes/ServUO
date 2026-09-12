@@ -984,29 +984,50 @@ namespace Server.Custom
 
         // ---- [WalkAudit ----
 
-        [Usage("WalkAudit [probes | selftest]")]
+        [Usage("WalkAudit [probes] [selftest] [class]")]
         [Description(
             "Walks every edge in both directions and every arrival from each of its approach "
-            + "waypoints with real probe walkers, and reports what actually happened. "
-            + "'selftest' walks one hop the audit is required to fail.")]
+            + "waypoints with real probe walkers, and reports what actually happened - per probe "
+            + "class, and by default with EVERY class. 'selftest' walks one hop the audit is "
+            + "required to fail. A class key ('creature' or 'bot') narrows it to one.")]
         private static void WalkAudit_OnCommand(CommandEventArgs e)
         {
             Mobile from = e.Mobile;
 
+            // THREE ARGUMENTS IN ANY ORDER, because there is no natural order between them and a
+            // positional rule would make `[WalkAudit bot selftest` a usage error for no reason.
+            // Each word is a probe count, or the word selftest, or a registered class key.
             string argument = e.ArgString == null ? "" : e.ArgString.Trim();
-            bool selfTest = Insensitive.Equals(argument, "selftest");
 
+            bool selfTest = false;
             int probes = 0;
+            string probeKey = null;
 
-            if (!selfTest && argument.Length > 0 && !Int32.TryParse(argument, out probes))
+            foreach (string word in argument.Split(new[] { ' ', '\t' },
+                StringSplitOptions.RemoveEmptyEntries))
             {
-                from.SendMessage(0x35, "Usage: [WalkAudit [probes | selftest]");
-                return;
+                int parsed;
+
+                if (Insensitive.Equals(word, "selftest"))
+                {
+                    selfTest = true;
+                }
+                else if (Int32.TryParse(word, out parsed))
+                {
+                    probes = parsed;
+                }
+                else
+                {
+                    // Not validated here: TryStart owns the class list and reports an unknown key
+                    // with the known ones listed, so validating twice would mean two messages to
+                    // keep in step.
+                    probeKey = word;
+                }
             }
 
             string error;
 
-            if (!NavWalkAudit.TryStart(from, probes, selfTest, out error))
+            if (!NavWalkAudit.TryStart(from, probes, selfTest, probeKey, out error))
             {
                 from.SendMessage(0x35, "Walk audit not started: " + error);
                 return;

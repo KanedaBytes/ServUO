@@ -166,6 +166,16 @@ namespace Server.Custom
                 return;
             }
 
+            // An instrument is never mounted. The walk audit's PlayerBot-derived probe sets its
+            // own pace through StepDelaySeconds and must measure the pace it was given rather than
+            // a horse's, and a mount would also put a second mobile in the world per probe. The
+            // constructor's zero-delay timer cannot be cancelled from a subclass, so it is refused
+            // here - see PlayerBot.IsInstrument.
+            if (bot.IsInstrument)
+            {
+                return;
+            }
+
             if (Utility.RandomDouble() >= MountChance)
             {
                 return;

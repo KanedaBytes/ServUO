@@ -61,26 +61,67 @@ namespace Server.Custom
         /// than the one it moves - which is the failure the PlayerMobile implementation can
         /// actually have, and the reason this assertion is worth writing down at all.
         ///
-        /// The probe is NavWalkAudit's own, not a look-alike, for the reason that class records:
-        /// a stand-in declared here would be a second instrument with its own collision rules. It
-        /// is blessed, hidden, never wanders, and consents to everything. It must NOT be frozen -
-        /// unlike Nav.Movement's rat, which only ever asks CheckMovement, this one really steps,
-        /// and Mobile.Move refuses a frozen mobile (Mobile.cs:3130).
+        /// The probes are NavWalkAudit's own, not look-alikes, for the reason that file records:
+        /// a stand-in declared here would be a second instrument with its own collision rules.
+        /// They are blessed, hidden, never wander, and must NOT be frozen - unlike Nav.Movement's
+        /// rat, which only ever asks CheckMovement, these really step, and Mobile.Move refuses a
+        /// frozen mobile (Mobile.cs:3130).
+        ///
+        /// RUN ONCE PER PROBE CLASS, from 12 September 2026, and that is the whole reason this
+        /// check was worth revisiting. There are two adapters - NavCreatureActor over BaseAI and
+        /// NavPlayerActor over a PathFollower - and until the audit grew a second probe this
+        /// check only ever spawned a BaseCreature, so NavPlayerActor, which is what the entire
+        /// bot fleet walks on, had no contract test at all. It went in on the class swap and
+        /// passed this check unedited, because the check could not see it.
+        ///
+        /// The classes come from NavWalkAudit's registry rather than from a list here, so Core
+        /// still names no bot class - the rule NavActorCheck's own type-test ledger exists to
+        /// enforce.
         /// </summary>
         public static bool StepsAgreeWithEngine(out string detail)
+        {
+            var details = new List<string>();
+
+            foreach (NavWalkAudit.ProbeClass cls in NavWalkAudit.ProbeClasses)
+            {
+                string one;
+
+                if (!StepsAgreeForClass(cls, out one))
+                {
+                    detail = cls.Label + ": " + one;
+                    return false;
+                }
+
+                details.Add(cls.Label + ": " + one);
+            }
+
+            if (details.Count == 0)
+            {
+                detail = "no probe classes are registered, so no adapter was exercised";
+                return false;
+            }
+
+            detail = String.Join(" | ", details.ToArray());
+            return true;
+        }
+
+        /// <summary>
+        /// The three assertions above, for one probe class and therefore for one adapter.
+        /// </summary>
+        private static bool StepsAgreeForClass(NavWalkAudit.ProbeClass cls, out string detail)
         {
             Map map = Map.Trammel;
 
             Point3D from = NavMovement.SolidFrom;
             Point3D wall = NavMovement.SolidTile;
 
-            var probe = new NavWalkAudit.WalkAuditProbe();
+            NavWalkAudit.IWalkAuditProbe probe = cls.Create();
 
             try
             {
-                probe.MoveToWorld(from, map);
+                probe.Mobile.MoveToWorld(from, map);
 
-                INavActor actor = NavActor.For(probe);
+                INavActor actor = NavActor.For(probe.Mobile);
 
                 if (actor == null)
                 {
@@ -93,13 +134,14 @@ namespace Server.Custom
                 // Mobile.Move steps only when the mobile ALREADY faces d, and returns true for the
                 // turn otherwise (Mobile.cs:3120). Facing it first is what makes the next call a
                 // step rather than a turn, and it is the same thing the Sidestep rung relies on.
-                probe.Direction = into;
+                probe.Mobile.Direction = into;
 
                 int newZ;
-                bool engineAllows = Movement.Movement.CheckMovement(probe, map, from, into, out newZ);
+                bool engineAllows =
+                    Movement.Movement.CheckMovement(probe.Mobile, map, from, into, out newZ);
 
-                Point3D before = probe.Location;
-                bool adapterStepped = actor.Step(into) && probe.Location != before;
+                Point3D before = probe.Mobile.Location;
+                bool adapterStepped = actor.Step(into) && probe.Mobile.Location != before;
 
                 if (adapterStepped != engineAllows)
                 {
@@ -126,7 +168,7 @@ namespace Server.Custom
                 // everything above.
                 string moved;
 
-                if (!TryStepSomewhere(actor, probe, map, out moved))
+                if (!TryStepSomewhere(actor, probe.Mobile, map, out moved))
                 {
                     detail = String.Format(
                         "a step onto the sandstone wall at {0},{1} is refused by both the adapter "
@@ -149,7 +191,7 @@ namespace Server.Custom
             }
             finally
             {
-                probe.Delete();
+                probe.Mobile.Delete();
             }
         }
 
