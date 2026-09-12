@@ -1738,66 +1738,21 @@ namespace Server.Custom
         /// Open the closed door in the way, the way a player's client does when they walk into
         /// one.
         ///
-        /// Translated from uo-offline-server's DoorHelper, including the two rules its comments
-        /// were written to record. ONLY closed doors are touched, because Use() toggles and
-        /// calling it on an open door slams it shut on whoever is walking through - and a step
-        /// can fail for reasons that have nothing to do with the door, another mobile in the
-        /// doorway being the common one. And it goes through Use() rather than setting Open,
-        /// because Use() carries the rules with it: a locked door stays shut, and a house door
-        /// runs its own access check, so this cannot walk an NPC into someone's locked home.
+        /// THE SCAN ITSELF LIVES IN Core/DoorHelper.cs, and did not always: it was inlined here
+        /// until PlayerBot needed the same question answered from inside Move. Both callers open
+        /// doors for the same reason and must obey the same two rules - only closed doors, and
+        /// always through Use() - so there is one scan and two entry points rather than two
+        /// copies, one of which would eventually drift. See that file for the rules in full.
+        ///
+        /// The rung takes the wider of the two entry points. By the time the ladder gets here the
+        /// walker no longer knows which direction it was refused in, so a door diagonally
+        /// adjacent is as likely to be the obstruction as the one straight ahead.
+        ///
+        /// The NavStep is unused and always was; it is kept so the rung switch reads uniformly.
         /// </summary>
         private bool TryOpenBlockingDoor(NavStep step)
         {
-            Map map = _mobile.Map;
-
-            if (map == null || map == Map.Internal || !_mobile.CheckAlive())
-            {
-                return false;
-            }
-
-            // Doors within a tile of the mobile, plus the tile it is trying to reach. Anything
-            // further away is not what is blocking this step.
-            IPooledEnumerable<Item> items = map.GetItemsInRange(_mobile.Location, 1);
-
-            try
-            {
-                foreach (Item item in items)
-                {
-                    BaseDoor door = item as BaseDoor;
-
-                    if (door == null || door.Open)
-                    {
-                        continue;
-                    }
-
-                    // The same vertical window the client's open-door macro uses, so a door on
-                    // the floor above is not reachable from down here.
-                    if (door.Z + door.ItemData.Height <= _mobile.Z || _mobile.Z + 16 <= door.Z)
-                    {
-                        continue;
-                    }
-
-                    if (!_mobile.CanSee(door) || !_mobile.InLOS(door))
-                    {
-                        continue;
-                    }
-
-                    door.Use(_mobile);
-
-                    // Use() is a no-op on a door this mobile cannot open, so report what actually
-                    // happened rather than that it was tried.
-                    if (door.Open)
-                    {
-                        return true;
-                    }
-                }
-            }
-            finally
-            {
-                items.Free();
-            }
-
-            return false;
+            return DoorHelper.TryOpenAdjacent(_mobile);
         }
 
         /// <summary>
