@@ -253,13 +253,30 @@ namespace Server.Custom
         private static readonly Dictionary<string, int> AllowedTypeTests =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
+                // The factory's `mobile as BaseCreature`. Choosing the implementation is the whole
+                // job; this is the seam, not a leak through it.
+                { "NavActor.cs", 1 },
                 { "NavWalker.cs", 1 },
                 { "NavWalkFailures.cs", 1 },
             };
 
         /// <summary>
-        /// Drives the mobile, so it must not be here at all: after the extraction the only route to
-        /// an AI is through INavActor.
+        /// The one file where knowing the class is the point.
+        ///
+        /// The rule this guard enforces is NOT "nothing under Navigation/ touches BaseAI" - the
+        /// BaseCreature implementation has to, or it could not drive a creature. It is the
+        /// stronger and more useful claim that the coupling lives in EXACTLY ONE FILE: AIObject
+        /// appears in the adapter and nowhere else, so a twelfth touchpoint cannot be added
+        /// anywhere that matters without this going red.
+        ///
+        /// Which is a rule this check learned the hard way - its first run failed on the adapter
+        /// itself, which is the file it exists to protect.
+        /// </summary>
+        private const string AdapterFile = "NavActor.cs";
+
+        /// <summary>
+        /// Drives the mobile. Allowed in the adapter, which is what an adapter is for; anywhere
+        /// else under Navigation/ it means the walker has been re-coupled to BaseCreature.
         /// </summary>
         private static readonly Regex AiObject = new Regex(@"\bAIObject\b", RegexOptions.Compiled);
 
@@ -315,6 +332,8 @@ namespace Server.Custom
             var faults = new List<string>();
             var tests = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
+            int adapterDrives = 0;
+
             for (int i = 0; i < files.Length; i++)
             {
                 string name = Path.GetFileName(files[i]);
@@ -342,8 +361,17 @@ namespace Server.Custom
 
                     if (AiObject.IsMatch(code))
                     {
-                        faults.Add(String.Format(
-                            "{0}:{1} reaches for AIObject - the walker drives INavActor now", name, n + 1));
+                        if (String.Equals(name, AdapterFile, StringComparison.OrdinalIgnoreCase))
+                        {
+                            adapterDrives++;
+                        }
+                        else
+                        {
+                            faults.Add(String.Format(
+                                "{0}:{1} reaches for AIObject - only {2} may, and everything else "
+                                + "goes through INavActor",
+                                name, n + 1, AdapterFile));
+                        }
                     }
 
                     // A class declaration is a probe that has to be a creature, not a coupling.
@@ -389,6 +417,16 @@ namespace Server.Custom
                 }
             }
 
+            // At least one, not a pinned count: the adapter IS the BaseAI implementation, so zero
+            // here would mean it had stopped driving one - which is a change worth hearing about
+            // even though it is the opposite of the leak this guard was built for.
+            if (adapterDrives == 0)
+            {
+                faults.Add(String.Format(
+                    "{0} no longer touches AIObject at all - the BaseCreature actor has stopped "
+                    + "driving BaseAI", AdapterFile));
+            }
+
             if (faults.Count > 0)
             {
                 detail = String.Join("; ", faults.ToArray());
@@ -396,10 +434,11 @@ namespace Server.Custom
             }
 
             detail = String.Format(
-                "{0} source(s) under {1}: no AIObject, and the {2} diagnostic BaseCreature test(s) "
-                + "the ledger allows and no more (NavWalker.DescribeMobiles, "
-                + "NavWalkFailures.Describe - both inverted at the class swap)",
-                files.Length, SourceDirectory, AllowedTypeTests.Count);
+                "{0} source(s) under {1}: AIObject appears in {2} and nowhere else ({3} site(s)), "
+                + "and the BaseCreature type tests are the {4} the ledger allows - the factory's, "
+                + "plus NavWalker.DescribeMobiles and NavWalkFailures.Describe, which invert at "
+                + "the class swap",
+                files.Length, SourceDirectory, AdapterFile, adapterDrives, AllowedTypeTests.Count);
 
             return true;
         }
