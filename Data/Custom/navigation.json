@@ -1009,7 +1009,9 @@
     {"id":"brit-tan-1","map":"Trammel","x":1429,"y":1610,"z":20,"arrivalRange":0,"tags":"town road"},
     {"id":"brit-carp-2","map":"Trammel","x":1431,"y":1611,"z":20,"arrivalRange":0,"tags":"town road"},
     {"id":"brit-but-4","map":"Trammel","x":1449,"y":1723,"z":6,"arrivalRange":0,"tags":"town road"},
-    {"id":"brit-mage-east-1","map":"Trammel","x":1592,"y":1660,"z":10,"arrivalRange":0,"tags":"town road"}
+    {"id":"brit-mage-east-1","map":"Trammel","x":1592,"y":1660,"z":10,"arrivalRange":0,"tags":"town road"},
+    {"id":"brit-tanner-street","map":"Trammel","x":1440,"y":1612,"z":20,"arrivalRange":0,"tags":"town road"},
+    {"id":"brit-tanner-shopfront","map":"Trammel","x":1439,"y":1612,"z":20,"arrivalRange":0,"tags":"town road"}
   ],
   "edges": [
     {"from":"brit-plaza-4","to":"brit-plaza-7","kind":"walk","tags":"road"},
@@ -2158,13 +2160,15 @@
     {"from":"brit-bake-1","to":"uo-virtue-path-1-s1","kind":"walk","tags":"road"},
     {"from":"brit-plaza-7","to":"uo-brit-plaza-4-s1","kind":"walk","tags":"road"},
     {"from":"brit-prov-1","to":"uo-britain-gem-shop-s2","kind":"walk","tags":"road"},
-    {"from":"brit-tan-1","to":"uo-rec-2-1","kind":"walk","tags":"road"},
     {"from":"brit-jew-1","to":"uo-britain-gem-shop","kind":"walk","tags":"road"},
     {"from":"town-7","to":"uo-virtue-path-4-s1","kind":"walk","tags":"road"},
     {"from":"brit-north-b","to":"uo-brit-north-d-s1","kind":"walk","tags":"road"},
     {"from":"brit-plaza-4","to":"uo-central-britain-road-s1","kind":"walk","tags":"road"},
     {"from":"brit-north-4","to":"uo-wp-146","kind":"walk","tags":"road"},
-    {"from":"brit-but-4","to":"uo-wp-43-s1","kind":"walk","tags":"road"}
+    {"from":"brit-but-4","to":"uo-wp-43-s1","kind":"walk","tags":"road"},
+    {"from":"uo-rec-2-1","to":"brit-tanner-street","kind":"walk","tags":""},
+    {"from":"brit-tanner-street","to":"brit-tanner-shopfront","kind":"walk","tags":""},
+    {"from":"brit-tanner-shopfront","to":"brit-tan-1","kind":"walk","tags":""}
   ],
   "destinations": [
     {"id":"brit-bank","name":"First Bank Of Britain","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded britain","waypoints":"uo-britain-bank-se-intersection-s3 uo-britain-bank"},
