@@ -112,7 +112,7 @@ namespace Server.Custom
             CommandSystem.Register("NavHopProbe", AccessLevel.Administrator, OnCommand);
         }
 
-        [Usage("NavHopProbe gen [count] [class] | NavHopProbe validate [count] [class] | NavHopProbe <x,y,z> <x,y,z> ... [class]")]
+        [Usage("NavHopProbe gen [count] [budget <n>] [class] | NavHopProbe validate [count] [class] | NavHopProbe <x,y,z> <x,y,z> ... [class]")]
         [Description(
             "Plan hops three ways - stock, the stock copy, and the copy with FastAStarAlgorithm's "
             + "dead-end break changed to continue - and report success, route length and node "
@@ -163,6 +163,8 @@ namespace Server.Custom
             string mode = "gen";
             string probeKey = null;
             int count = 0;
+            int budget = 0;
+            bool wantBudget = false;
             var explicitPoints = new List<Point3D>();
             Map facet = Map.Trammel;
 
@@ -192,7 +194,23 @@ namespace Server.Custom
 
                 if (Int32.TryParse(word, out parsed))
                 {
-                    count = parsed;
+                    // The number after `budget` is the budget; any other number is the count.
+                    if (wantBudget)
+                    {
+                        budget = parsed;
+                        wantBudget = false;
+                    }
+                    else
+                    {
+                        count = parsed;
+                    }
+
+                    continue;
+                }
+
+                if (Insensitive.Equals(word, "budget"))
+                {
+                    wantBudget = true;
                     continue;
                 }
 
@@ -276,6 +294,12 @@ namespace Server.Custom
                 summary = "no hops to plan - is the graph loaded for " + facet + "?";
                 return false;
             }
+
+            // Both copies run at the same budget, always: the whole point of the pair is that ONE
+            // token differs between them, so a run where they also differed in budget would answer
+            // nothing. FastAStarAlgorithm's own 300 is the default.
+            _breakCopy.MaxExpansions = budget > 0 ? budget : 300;
+            _continueCopy.MaxExpansions = _breakCopy.MaxExpansions;
 
             var rows = new List<NavHopProbeRow>(work.Count * classes.Count);
             long startedTick = Core.TickCount;
@@ -380,7 +404,9 @@ namespace Server.Custom
             row.ContinueMs = went.Milliseconds;
             row.ContinueOutcome = went.Outcome.ToString();
 
-            row.Divergence = Compare(stock, broke.Directions);
+            // Only meaningful at 300: above it the copy is deliberately a different search from
+            // stock, and reporting that as a divergence would cry wolf on every raised-budget run.
+            row.Divergence = _breakCopy.MaxExpansions == 300 ? Compare(stock, broke.Directions) : null;
             row.Divergent = row.Divergence != null;
 
             return row;
@@ -651,9 +677,13 @@ namespace Server.Custom
 
             summary = String.Format(
                 CultureInfo.InvariantCulture,
-                "Hop probe '{0}' on {1}: {2} row(s) in {3:F2}s. Copy divergence: {4}.",
-                mode, facet, rows.Count, seconds,
-                divergent == 0 ? "NONE - the copy is stock" : divergent + " ROW(S) - DO NOT QUOTE THE EXPANSION FIGURES");
+                "Hop probe '{0}' on {1} at budget {2}: {3} row(s) in {4:F2}s. Copy divergence: {5}.",
+                mode, facet, _breakCopy.MaxExpansions, rows.Count, seconds,
+                divergent == 0
+                    ? (_breakCopy.MaxExpansions == 300
+                        ? "NONE - the copy is stock"
+                        : "not comparable at a raised budget - stock runs 300")
+                    : divergent + " ROW(S) - DO NOT QUOTE THE EXPANSION FIGURES");
 
             lines.Add(summary);
 

@@ -576,6 +576,29 @@ namespace Server.Custom
                 // engine's own uncontrolled-mover condition, which MayBotPass mirrors rather than
                 // paraphrases. See the note above for why the number moved.
                 { "NavWalkFailures.cs", 2 },
+
+                // ONE, added with the pathfinder instrument, and it is a COPIED test rather than a
+                // written one. NavStockCopy reproduces FastAStarAlgorithm so that node expansions
+                // can be counted at all - every scratch array on the real one is private static
+                // and MaxDepth is a private const, so there is no seam to instrument through
+                // (MODIFICATIONS entry 6 says the same thing about the door flag). Its whole value
+                // is that it is byte-equivalent to the engine, which [NavHopProbe validate asserts
+                // against real routes; `BaseCreature bc = p as BaseCreature;` is
+                // FastAStarAlgorithm.cs:77 verbatim, and :97-101 is the only place a mover's CLASS
+                // decides its door and furniture policy.
+                //
+                // WHY IT IS NOT HIDDEN BEHIND A PREDICATE the way BotPathPolicy hides the bot
+                // branch. It could be - a Custom/-side FlagsFor(IPoint3D) outside this folder
+                // would answer both flags and this file would name no class. That would move the
+                // test rather than remove it, which the note above calls out as still being a type
+                // test; and it would put an indirection at the exact site where a divergence from
+                // the engine would be invisible and would change every route the instrument
+                // measures. Fidelity wins here, and the ledger is where the cost is declared.
+                //
+                // IT SHOULD GO WHEN THE INSTRUMENT DOES. This file is a measurement, not a
+                // shipping pathfinder; if the pathfinder evaluation ends with "keep stock", delete
+                // NavPathfinder.cs and this entry with it.
+                { "NavPathfinder.cs", 1 },
             };
 
         /// <summary>

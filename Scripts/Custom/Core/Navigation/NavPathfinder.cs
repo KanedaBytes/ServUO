@@ -170,7 +170,28 @@ namespace Server.Custom
     /// </summary>
     public sealed class NavStockCopy
     {
-        private const int MaxDepth = 300;
+        /// <summary>
+        /// FastAStarAlgorithm.cs:26's `private const int MaxDepth = 300`, made settable.
+        ///
+        /// A KNOB RATHER THAN A CONSTANT BECAUSE THE MEASUREMENT DEMANDED ONE, and the demand was
+        /// a surprise. The session went in expecting the dead-end break at :118 to be what costs
+        /// the fleet routes; over 2,904 real hops it fired ZERO times. What actually fails is this
+        /// number: 18 of the 32 failed searches in the synthetic set stopped at exactly 301
+        /// expansions, including a nine-tile flat hop, and three of the four arrivals with no
+        /// engine route at all are budget exhaustion rather than absence of a road.
+        ///
+        /// So "stock with only the budget changed" - which is a memo option that needs an upstream
+        /// edit to ship, because the real one is a private const on a class whose every scratch
+        /// array is private static - can be priced here first, for nothing, against real routes.
+        /// ModernUO's descendant of this same file runs 1000 and makes it a settable property with
+        /// a config key (BitmapAStarAlgorithm.cs:69, :98-106), which is where that number comes
+        /// from.
+        ///
+        /// 300 is the default and nothing changes it unless a measurement asks.
+        /// </summary>
+        public int MaxExpansions { get; set; }
+
+        private const int DefaultMaxExpansions = 300;
         private const int AreaSize = 38;
         private const int PlaneOffset = 128;
         private const int PlaneCount = 13;
@@ -194,6 +215,11 @@ namespace Server.Custom
         private int _openList;
         private Point3D _goal;
         private int _probes;
+
+        public NavStockCopy()
+        {
+            MaxExpansions = DefaultMaxExpansions;
+        }
 
         /// <summary>
         /// False is stock: a cell with no successors ends the search. True is ModernUO's
@@ -272,7 +298,7 @@ namespace Server.Custom
             {
                 int bestNode = FindBest(_openList);
 
-                if (++depth > MaxDepth)
+                if (++depth > MaxExpansions)
                 {
                     result.Outcome = NavSearchOutcome.BudgetExhausted;
                     break;
@@ -592,10 +618,17 @@ namespace Server.Custom
         public double TotalMilliseconds;
         public double WorstMilliseconds;
 
-        public NavPathfinderAlgorithm(NavPathfinderMode mode)
+        /// <summary>The budget the copy is running at, so a report can say which one it measured.</summary>
+        public int Budget
+        {
+            get { return _copy.MaxExpansions; }
+        }
+
+        public NavPathfinderAlgorithm(NavPathfinderMode mode, int budget)
         {
             Mode = mode;
             _copy.DeadEndContinue = mode == NavPathfinderMode.DeadEndFix;
+            _copy.MaxExpansions = budget;
         }
 
         /// <summary>
@@ -682,12 +715,82 @@ namespace Server.Custom
         public static int Reinstalls { get; private set; }
 
         /// <summary>
-        /// The mode named by Config/Custom.cfg. Read per call rather than cached, so [CoreSmoke
-        /// after a config edit reports what the file says and not what boot happened to see.
+        /// A mode asked for at runtime, which lasts until the process ends. Null means "use the
+        /// config".
+        ///
+        /// WHY THIS EXISTS AND WHY IT IS TRANSIENT. The three audits this instrument was built for
+        /// - Off, Mirror, DeadEndFix - are only comparable if they walk the same graph against the
+        /// same live population, and Config is read once at boot (Server/Config.cs), so taking
+        /// them from the config would mean three restarts and three different populations. A
+        /// transient override lets one boot answer all three.
+        ///
+        /// It is deliberately NOT a Config.Set: the file stays the authority for what the shard
+        /// BOOTS with, so the worst a forgotten override can do is survive until the next restart,
+        /// and Nav.Pathfinder says loudly that one is in force. A persisted setting written from
+        /// outside is exactly the global-state hazard REVIEW.md:89 warns about.
         /// </summary>
-        public static NavPathfinderMode Mode
+        private static NavPathfinderMode? _sessionMode;
+
+        /// <summary>What Config/Custom.cfg asks for. What the shard boots with.</summary>
+        public static NavPathfinderMode ConfiguredMode
         {
             get { return Config.GetEnum("Custom.NavPathfinder", NavPathfinderMode.Off); }
+        }
+
+        /// <summary>What is in force now - the session override if one was asked for, else the config.</summary>
+        public static NavPathfinderMode Mode
+        {
+            get { return _sessionMode ?? ConfiguredMode; }
+        }
+
+        private static int? _sessionBudget;
+
+        /// <summary>
+        /// The node budget the installed copy runs at. FastAStarAlgorithm's own is 300 and that is
+        /// the default; ModernUO's identical algorithm runs 1000. Raising it here measures memo
+        /// option (b) - "stock with only the budget changed" - without the upstream edit shipping
+        /// it would need.
+        /// </summary>
+        public static int ConfiguredBudget
+        {
+            get { return Math.Max(1, Config.Get("Custom.NavPathfinderBudget", 300)); }
+        }
+
+        public static int Budget
+        {
+            get { return _sessionBudget ?? ConfiguredBudget; }
+        }
+
+        /// <summary>True while a runtime override is masking the configured mode or budget.</summary>
+        public static bool Overridden
+        {
+            get
+            {
+                return (_sessionMode.HasValue && _sessionMode.Value != ConfiguredMode)
+                    || (_sessionBudget.HasValue && _sessionBudget.Value != ConfiguredBudget);
+            }
+        }
+
+        /// <summary>Ask for a budget for the rest of this boot, or null to go back to the config.</summary>
+        public static void SetSessionBudget(int? budget)
+        {
+            _sessionBudget = budget;
+            _installed = null;
+            Reset();
+            Apply();
+        }
+
+        /// <summary>
+        /// Ask for a mode for the rest of this boot, or pass null to go back to the config.
+        /// Resets the counters, because a mode change starts a new measurement whether or not the
+        /// caller remembered to say so.
+        /// </summary>
+        public static void SetSessionMode(NavPathfinderMode? mode)
+        {
+            _sessionMode = mode;
+            _installed = null;
+            Reset();
+            Apply();
         }
 
         public static NavPathfinderAlgorithm Installed
@@ -737,14 +840,17 @@ namespace Server.Custom
                 return false;
             }
 
-            if (_installed == null || _installed.Mode != mode)
+            int budget = Budget;
+
+            if (_installed == null || _installed.Mode != mode || _installed.Budget != budget)
             {
-                _installed = new NavPathfinderAlgorithm(mode);
+                _installed = new NavPathfinderAlgorithm(mode, budget);
                 MovementPath.OverrideAlgorithm = _installed;
 
                 Log.Info(
-                    "Pathfinder instrument installed in {0} mode ({1}).",
+                    "Pathfinder instrument installed in {0} mode at budget {1} ({2}).",
                     mode,
+                    budget,
                     mode == NavPathfinderMode.Meter
                         ? "pass-through over stock, every caller"
                         : "the stock copy, bot subjects only; everything else delegates");
@@ -797,9 +903,20 @@ namespace Server.Custom
         {
             NavPathfinderMode mode = Mode;
 
+            string prefix = Overridden
+                ? String.Format(
+                    "{0} at budget {1} (RUNTIME OVERRIDE; Custom.cfg says {2} at {3})",
+                    mode, Budget, ConfiguredMode, ConfiguredBudget)
+                : String.Format("{0} at budget {1}", mode, Budget);
+
             if (mode == NavPathfinderMode.Off)
             {
-                return "off; MovementPath.OverrideAlgorithm "
+                // The budget is not in play with nothing installed, so it is left out rather than
+                // printed as a number that decides nothing.
+                return (Overridden
+                        ? String.Format("Off (RUNTIME OVERRIDE; Custom.cfg says {0})", ConfiguredMode)
+                        : "off")
+                    + "; MovementPath.OverrideAlgorithm "
                     + (MovementPath.OverrideAlgorithm == null ? "null" : "NOT NULL");
             }
 
@@ -807,7 +924,7 @@ namespace Server.Custom
 
             if (alg == null)
             {
-                return String.Format("{0}; nothing installed", mode);
+                return String.Format("{0}; nothing installed", prefix);
             }
 
             double mean = alg.Calls > 0 ? alg.TotalMilliseconds / alg.Calls : 0.0;
@@ -815,7 +932,7 @@ namespace Server.Custom
             return String.Format(
                 "{0}; {1} call(s), {2} delegated, {3} ok, {4} no route, {5} out of box; "
                 + "{6:F3} ms mean, {7:F3} ms worst; {8} expansion(s), {9} reinstall(s)",
-                mode, alg.Calls, alg.Delegated, alg.Succeeded, alg.Failed, alg.Refused,
+                prefix, alg.Calls, alg.Delegated, alg.Succeeded, alg.Failed, alg.Refused,
                 mean, alg.WorstMilliseconds, alg.TotalExpansions, Reinstalls);
         }
 
@@ -850,7 +967,7 @@ namespace Server.Custom
                     }
                 }
 
-                return HealthResult.Ok(Describe());
+                return Overridden ? HealthResult.Warn(Describe()) : HealthResult.Ok(Describe());
             }
 
             bool reinstalled = Apply();
@@ -870,7 +987,9 @@ namespace Server.Custom
                     + "one health interval.");
             }
 
-            return HealthResult.Ok(Describe());
+            // Never Ok while something other than the config is in force: an instrument left
+            // installed is the one state that would make a later measurement lie.
+            return HealthResult.Warn(Describe());
         }
     }
 }

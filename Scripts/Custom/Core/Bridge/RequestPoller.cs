@@ -769,6 +769,22 @@ namespace Server.Custom
                     return true;
                 }
 
+                // The graph planner's admissibility test - NavGraph's A* against a plain Dijkstra
+                // on hand-built graphs with stacked cost-tag discounts and a gate edge. Reports
+                // only; the live graph is not touched and nothing is fixed by running it.
+                case "nav-planner":
+                {
+                    IList<string> plannerReport;
+
+                    bool agreed = NavPlannerCheck.Run(out plannerReport);
+
+                    warnings = plannerReport;
+                    message = agreed
+                        ? "A* matched Dijkstra on every case"
+                        : "A* and Dijkstra DISAGREE - see the lines below";
+                    return true;
+                }
+
                 // The whole-loop sampler: "on", "off", or "reset" to open a fresh window.
                 // A token rather than only a config key, because a measurement window has to be
                 // opened against a shard that is already warm - a restart to turn a sampler on
@@ -799,15 +815,58 @@ namespace Server.Custom
                     return true;
                 }
 
-                // The pathfinder instrument's counters. "reset" opens a fresh window; an empty
-                // body just reports. It cannot CHANGE the mode - that is Config/Custom.cfg's, and
-                // a token that could swap the shard's pathfinder from outside is precisely the
-                // global-state hazard REVIEW.md:89 warns about.
+                // The pathfinder instrument. An empty body reports; "reset" opens a fresh
+                // counter window; a mode name - off, meter, mirror, deadendfix - asks for that
+                // mode FOR THE REST OF THIS BOOT, and "config" hands control back to Custom.cfg.
+                //
+                // A runtime mode rather than a config edit, because the three audits this
+                // instrument exists for are only comparable on one boot against one live
+                // population, and Config is read once at startup. It is transient by design: the
+                // file stays the authority for what the shard BOOTS with, so a forgotten override
+                // dies at the next restart, and Nav.Pathfinder reports Warn for as long as one is
+                // in force rather than letting an installed instrument look like the shipping
+                // state. Nothing here writes to Config.
                 case "nav-pathfinder":
                 {
-                    if (Insensitive.Equals(FirstWord(body), "reset"))
+                    string pathWord = FirstWord(body);
+
+                    if (Insensitive.Equals(pathWord, "reset"))
                     {
                         NavPathfinder.Reset();
+                    }
+                    else if (Insensitive.Equals(pathWord, "config"))
+                    {
+                        NavPathfinder.SetSessionMode(null);
+                        NavPathfinder.SetSessionBudget(null);
+                    }
+                    else if (Insensitive.Equals(pathWord, "budget"))
+                    {
+                        string[] budgetWords = (body ?? "").Split(
+                            new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
+
+                        int wantedBudget;
+
+                        if (budgetWords.Length < 2 || !Int32.TryParse(budgetWords[1], out wantedBudget)
+                            || wantedBudget < 1)
+                        {
+                            message = "nav-pathfinder budget needs a positive node count";
+                            return false;
+                        }
+
+                        NavPathfinder.SetSessionBudget(wantedBudget);
+                    }
+                    else if (!String.IsNullOrEmpty(pathWord))
+                    {
+                        NavPathfinderMode wanted;
+
+                        if (!Enum.TryParse(pathWord, true, out wanted))
+                        {
+                            message = "nav-pathfinder takes reset, config, or one of "
+                                + String.Join(", ", Enum.GetNames(typeof(NavPathfinderMode)));
+                            return false;
+                        }
+
+                        NavPathfinder.SetSessionMode(wanted);
                     }
 
                     message = NavPathfinder.Describe();
