@@ -154,7 +154,7 @@ Where a fresh session should start, in order:
    under **History** is a dated finding rather than a statement about now.
 2. **`REVIEW.md`**, the read-only architectural review of 11 September 2026. Required reading
    before changing this layer: it is where the open defects are named and prioritised. F1 fixed,
-   **F2 reproduced and deliberately not fixed**, F3 interim only, F4 fixed; F5, F6, the save
+   **F2 fixed by the PlayerMobile class swap**, F3 interim only, F4 fixed; F5, F6, the save
    acknowledgement and the full F3 request identity are scheduled before 7f. Its section 11 was
    the documentation discrepancy list and is now closed.
 3. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
@@ -171,15 +171,21 @@ Where a fresh session should start, in order:
    is walk → life → chat → work. Each probe's result line says what it measured and, for the life
    probe, the window it derived and the route that set it. `Bots.Cadence` on `[CoreSmoke` is the
    guard on the behaviour ticker: one timer, at the rate `Custom.BotTickSeconds` names.
+   **`Bots.Death` no longer reports an expected failure**: the class swap of 12 September 2026
+   closed REVIEW.md F2, and that probe now asserts a clean reportable death and fails if the cast
+   comes back.
 
-What a bot is, in one paragraph: a `BaseCreature` flagged `Player`, with a class, tier, personality
+What a bot is, in one paragraph: an accountless `PlayerMobile` flagged `Player`, with a class, tier, personality
 and a **home town** rolled at creation. It picks destinations from `navigation.json` weighted by
 `bots.json` - class × kind, times 2.5 for its home town, with a distance term only on work sites -
 walks them on `NavWalker`, and hands off to a visit behaviour on arrival. A 60-second roller
 transitions it between `Traveler` and `Idle` when its phase expires and it is not mid-walk. **Nothing
-about it survives a restart** — `Deserialize` ends in `Timer.DelayCall(Delete)` — and what does
-survive is the spawner file it came from, which is rebuilt into spawners by `[GG_Reimport` and
-filled at `ServerStarted`.
+about it survives a restart** — `BotStartupPurge` sweeps every bot out of the world save at boot and
+says how many, which is upstream's mechanism and replaced a `Timer.DelayCall(Delete)` at the tail of
+`Deserialize` — and what does survive is the spawner file it came from, which is rebuilt into
+spawners by `[GG_Reimport` and filled at `ServerStarted`. The `GG_` spawners needed no regeneration
+for the class swap: XmlSpawner resolves a spawn by **type name** (`XmlSpawner2.cs:9262`), and the
+name did not change.
 
 A bot is one of two things, and it is the difference the whole population layer turns on. A
 **lifecycle** bot has a session: it rolls behaviours, plays for one to four hours, says goodbye and
@@ -192,12 +198,14 @@ carried across.
 
 Rules in force for bots and occupied tiles, each with its row in the README's Deviations table:
 
-- **A bot walks through every occupant but a real player** - uo-offline's `CheckShove => true`, with
-  the reason recorded (the engine's full-stamina rule jammed their plazas). A `BaseCreature` is
-  refused before its `CheckShove` is asked, so the *shoved* side consents through `BotShove`, and
-  `BaseCreature.OnMoveOver` routes every stock creature - a vendor, a guard, an animal - through it
-  too (MODIFICATIONS entry 5). **A bot still yields to a real player**: `PlayerMobile.OnMoveOver` is
-  upstream and untouched, and a player shoving a bot pays the player rule.
+- **A bot walks through every occupant — including, since 12 September 2026, a real player.**
+  uo-offline's `CheckShove => true`, with the reason recorded (the engine's full-stamina rule jammed
+  their plazas). The *shoved* side consents through `BotShove`, and `BaseCreature.OnMoveOver` routes
+  every stock creature - a vendor, a guard, an animal - through it too (MODIFICATIONS entry 5), which
+  is still what carries the walk-audit probe. **The "a bot still yields to a real player" half is
+  gone, and nobody chose to spend it**: `PlayerMobile.OnMoveOver` refuses a mover only when it is an
+  uncontrolled `BaseCreature`, and a bot is no longer one, so it falls through to the mover's own
+  `CheckShove`. `Bots.Shove` fails on exactly that pair and names it. Session 3 owns the decision.
 - **The reverse pass is narrower, on purpose**: a bot lets through another bot, the walk probe and a
   daily-life actor, and a stock vendor still jams against it. `BotShove.MayBotPass` answers the
   forward question and `ConsentsToBotPass` the reverse one; they were one predicate until 7e, which

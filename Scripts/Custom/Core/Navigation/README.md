@@ -55,10 +55,25 @@ read when it was. **Where the two disagree, this section is the one that has bee
   eleven that differ - `ForceStayHome`, `AIObject`, `NextMove`, `MoveTo`, `TransformMoveDelay`,
   `CurrentSpeed`, `Home`, plus `Step` and `PlaceAt` (`Mobile`-level, but a `PlayerMobile` must move
   its own step clock inside a sidestep and drop its own `PathFollower` on a rescue) and `HasMover`.
-  **`NavCreatureActor` is the only implementation today** and is `BaseAI` exactly as the walker
-  drove it inline; `NavActor.For` is the one place a second implementation is chosen. `Nav.Actor`
-  holds the adapter's verdict on a step against the engine's, and guards that `AIObject` appears in
-  the adapter and nowhere else under this folder.
+  **There are two implementations.** `NavCreatureActor` is `BaseAI` exactly as the walker drove it
+  inline, and still drives the three daily-life `BaseCreature` users. `NavPlayerActor`, added with
+  the bot class swap on 12 September 2026, is `BaseAI.MoveTo`'s own structure (`BaseAI.cs:2621-2669`)
+  over a plain `PathFollower` - direct step first, path only on refusal, goal compared by reference -
+  with the two things `BaseAI` did for free done by hand: the step clock, advanced inside every step
+  and clamped forward as `DoMoveImpl` does (`BaseAI.cs:2349-2353`), and the cached path, dropped on
+  `PlaceAt` because a rescue that left a follower walking to the old goal from the old tile would
+  spend the next hop walking back. `NavActor.For` is the one place either is chosen, and the class
+  swap added exactly one branch there and changed none of the eight construction sites.
+- **For a `PlayerMobile`, the two delay members are equal by construction**, and that costs an
+  instrument. `NavCreatureActor` distinguishes the pace a creature was *given* (`CurrentSpeed`) from
+  the pace the engine *steps on* (`TransformMoveDelay`, which runs it through `SpeedInfo`).
+  `NavPlayerActor` deliberately has no `SpeedInfo` in the path - it would clamp toward
+  `MaxDelayWild` the moment a bot took damage - so the two are the same number. `[BotPace` exists to
+  tell them apart and, for a bot, no longer can.
+- **`Nav.Actor`** holds the adapter's verdict on a step against the engine's, and guards that
+  `AIObject` appears in the adapter and nowhere else under this folder. It passed the class swap
+  **unedited**: the new branch is an `as PlayerMobile`, which its `BaseCreature` regex does not
+  match, so the ledger is still 1 each for `NavActor.cs`, `NavWalker.cs` and `NavWalkFailures.cs`.
 - **An authored hop may be at most `Custom.NavHopMaxTiles` (12) tiles**, because
   `FastAStarAlgorithm` searches a 38x38 box and returns no path *silently* beyond it. A walker may
   stop `NavWalker.ArrivalRangeFor` (2) tiles short and plan the next hop from there, so a new
@@ -1517,6 +1532,40 @@ under the Trinsic pier — `CanFit` false, `TryResolveZ` no, all eight neighbour
 one it **must** pass, and it prints `SELF-TEST OK` or `SELF-TEST BROKEN` rather than leaving a
 reader to invert the verdict themselves. It seeds the *work list*, never `navigation.json`, so
 there is no seed to remove and no window in which a road through a wall could be committed.
+
+### And then a PlayerMobile started walking
+
+*12 September 2026.* Step 2 of the migration, the session after the one below. `NavActor.For` gained
+its one branch and `NavPlayerActor` became the second implementation; **nothing else under
+`Navigation/` changed for the class swap itself**, which is what the extraction below was for.
+
+The adapter is `BaseAI.MoveTo`'s own structure (`BaseAI.cs:2621-2669`) with its two
+`BaseCreature`-only clauses removed, over a plain `PathFollower` — which takes a `Mobile`
+(`PathFollower.cs:18`) and needs nothing from `BaseAI`. Two things `BaseAI` did for free had to be
+done by hand, and they are exactly the two members the extraction put on the interface *for this
+reason* rather than for tidiness:
+
+- **The step clock.** `DoMoveImpl` advances `NextMove` inside the step and clamps a stale one
+  forward to now (`BaseAI.cs:2349-2353`). Here that is one private method every step goes through,
+  including the recovery ladder's sidestep and the `PathFollower`'s own `Mover` — set deliberately,
+  because leaving `Mover` null lets `PathFollower` call `Mobile.Move` behind the clock
+  (`PathFollower.cs:44`) and step at the shared timer's rate instead of at the pace.
+- **The cached path.** `BaseAI.OnTeleported` force-repaths (`:2612-2619`); `PlaceAt` drops the
+  follower outright, which is the same guarantee one step stronger.
+
+**`Nav.Actor` passed unedited**, and that was the point of writing it as a ledger of `BaseCreature`
+type tests rather than as a ban: the new branch is an `as PlayerMobile`, which its regex does not
+match, so 1/1/1 still holds. Its `AIObject` half also held at four sites in the adapter and none
+outside — though the swap did find one `AIObject` reader the guard was never scoped to see,
+`LiveMapSnapshot`, which is in `Core/Bridge` rather than under this folder and which now reads the
+pace field instead.
+
+**What the swap cost this layer, measured:** terminal walk failures went from roughly 0.5 to 5.23
+per 100 walks, because `FastAStarAlgorithm.cs:77,93` gates `MoveImpl.AlwaysIgnoreDoors` on a
+`BaseCreature` cast and a bot no longer satisfies it — so routes stopped planning through closed
+doors, and the failing edges are interior shop arrivals. The walk audit, whose probes *are*
+`BaseCreature`s, walked all 2,510 legs with zero failures at the same time, which is how the two
+halves were told apart.
 
 ### The walker stopped taking a BaseCreature
 

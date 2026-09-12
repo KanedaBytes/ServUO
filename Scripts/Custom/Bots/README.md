@@ -46,23 +46,42 @@ a source line. Most of this file is dated narrative - how a rule was arrived at 
 find out. **Where the two disagree, this section is the one that has been re-checked**; see
 [History](#history) for the rule about which is which.
 
-- **A bot is a `BaseCreature` with `Player = true`**, not a `PlayerMobile`. The flag is what gets it
-  past the party gate and onto the live map, and it is also why it ghosts rather than vanishing on
-  death. The identity decision is TAKEN: PlayerMobile, accountless now, an Account per
-  persistent economic bot later - see CLASS-DECISION.md, which is the evidence and the
-  migration order. REVIEW.md section 3 is the question it answers.
-- **A bot walks through every occupant except a real player**, and the reverse pass is narrower.
-  `BotShove.MayBotPass` answers the forward question, mirroring `BaseCreature.OnMoveOver`'s three
-  branches; `ConsentsToBotPass` answers the reverse one, where a stock vendor still jams against a
-  bot. Two predicates, on purpose - they were one until 7e, and that is what made the rung log call a
-  stock NPC unpushable about a step the engine allows. `Bots.Shove` asserts the diagnostic against
-  the engine's own `OnMoveOver` for every ordered pair of actors.
-- **A reportable bot death throws, and is deliberately not fixed.** `ReportMurdererGump` casts the
-  victim to `PlayerMobile` (`ReportMurderer.cs:43`) under `Core.SE` with a reportable player
-  aggressor - a cast a `PlayerBot` cannot satisfy, and a bot killing a bot meets the condition
-  because both are `Player`-flagged. `Bots.Death` reproduces it on every `[BotSmoke` and reports `Ok`
-  saying EXPECTED FAILURE, because a permanently red check is one nobody reads. The repair is the
-  class decision, not a patch to an upstream file that is correct about every mobile ServUO ships.
+- **A bot is an accountless `PlayerMobile` with `Player = true`**, as upstream runs it. The class
+  changed on 12 September 2026; `CLASS-DECISION.md` is the evidence Sean decided on and REVIEW.md
+  section 3 the question it answers. The flag is still what gets a bot past the party gate and onto
+  the live map, and still why it ghosts rather than vanishing on death - that was never the class.
+- **An accountless bot owns nothing durable, and that is a crash guard rather than a preference.**
+  `BaseHouse.HandleDeletion` returns early on zero houses (`BaseHouse.cs:3531`) and then reads
+  `acct.Length` with no null check (`:3534-3537`), reached from `PlayerMobile.OnAfterDelete`
+  (`:5250`) - which every bot deletion now goes through. An accountless bot that owns a house and is
+  deleted therefore throws a `NullReferenceException` **on the game thread**; as a `BaseCreature` it
+  never reached that call and merely orphaned the house. No houses, no player vendors, no durable
+  property until a bot has an `Account`, which is a decision `CLASS-DECISION.md` defers to the
+  session where something is actually owned.
+- **A bot now walks through every occupant INCLUDING a real player, and nobody decided that.**
+  This is the one thing the class swap changed that was not on anybody's list, and it is written
+  here as a contract bullet because it silently spends a named deviation. `PlayerMobile.OnMoveOver`
+  refuses a mover only at `m is BaseCreature && !Controlled` (`PlayerMobile.cs:3488-3491`); a bot
+  mover is no longer a `BaseCreature`, so it falls through to `Mobile.OnMoveOver` -> the mover's own
+  `CheckShove`, which a bot answers `true`. Measured, not inferred: `Bots.Shove` fails on exactly
+  this pair - *"Elowen onto Bot Shove Probe Player: the engine says True, MayBotPass says False"*.
+  It matches upstream, whose bots phase through players too, but this port held the other half
+  deliberately and the decision is Sean's to retake. **Session 3 owns it.**
+- **The reverse pass is unchanged and still narrower.** `BotShove.OnMoveOver`'s `IsSymmetricMover`
+  branch runs before the base call, so a bot, the walk probe and a daily-life actor still pass; and
+  a stock vendor still jams against a bot, because `PlayerMobile.OnMoveOver` carries the *identical*
+  uncontrolled-creature refusal `BaseCreature.OnMoveOver` did. `ConsentsToBotPass` is type-interface
+  based and needed no change at all. `Bots.Shove` asserts both directions against the engine's own
+  `OnMoveOver` for every ordered pair of actors.
+- **A reportable bot death completes. REVIEW.md F2 is closed**, by the class rather than by a patch
+  to an upstream file that was correct about every mobile ServUO ships. `ReportMurdererGump` casts
+  the victim to `PlayerMobile` (`ReportMurderer.cs:43`) and a bot now satisfies it. `Bots.Death`
+  turned round with the swap: a clean reportable death is the PASS, and the cast coming back is a
+  FAIL naming F2 as regressed. **What it does not assert, and must not be read as asserting:** the
+  gump is delivered to a client and the count is awarded inside its `OnResponse` (`:112`,
+  `killer.Kills++` at `:122`), so a clientless victim still awards nobody a murder count. Upstream
+  answers that with an adapter run before `base.OnDeath` (`BotMurderReport.OnBotDeath`); it is not
+  ported, and it carries a shard policy question about whether bot-on-bot kills should count at all.
 - **One behaviour timer**, at `Custom.BotTickSeconds` (2 s). The guard is inside
   `BotTickManager.Initialize` and not in its caller, because `ScriptCompiler` reflects over every
   `public static void Initialize()` and calls it as well; the explicit call from `BotSystem` is kept
@@ -79,31 +98,68 @@ find out. **Where the two disagree, this section is the one that has been re-che
 - **The population target is 60**, in `bots.json`, a measured starting point rather than upstream's
   1600. `Bots.Recipe` reports the tick cost beside the live count so the next value is arithmetic.
 
-## The constraint everything else follows from
+## The constraint everything else followed from, and what it cost to spend
 
-**A bot is a `BaseCreature`, not a `PlayerMobile`.** Upstream it is a `PlayerMobile`, and that one
-change drives most of the differences in this folder.
-
-Four reasons, in the order of what they cost to work around otherwise:
+**A bot was a `BaseCreature`, not a `PlayerMobile`, and as of 12 September 2026 it is one.** That
+single divergence drove most of the differences in this folder, so most of this file is about a
+premise that no longer holds. The four reasons it rested on, and where each of them went:
 
 1. ~~**`NavWalker` takes a `BaseCreature`**~~ — **spent, 11 September 2026.** It took a
    `BaseCreature`, drove `BaseAI.DoMove` and worked around `ForceStayHome` and `Home`, and this
    shard has exactly one walker on purpose, so a `PlayerMobile` could not use it. It now takes an
-   `INavActor` (`Core/Navigation/NavActor.cs`), with `NavCreatureActor` as the only implementation
-   and `NavActor.For` as the single place a second one is chosen. **This reason no longer holds**,
-   which is step 1 of the migration `CLASS-DECISION.md` records; the three below still stand until
-   their own sessions. See the Deviations row *Locomotion is an interface, not a per-behaviour step
+   `INavActor` (`Core/Navigation/NavActor.cs`), and as of the class swap there are two
+   implementations - `NavCreatureActor` and `NavPlayerActor` - chosen in the one place,
+   `NavActor.For`. See the Deviations row *Locomotion is an interface, not a per-behaviour step
    timer*.
-2. **Doors.** `FastAStarAlgorithm.cs:93` sets `MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors`,
-   and only for a `BaseCreature` — a `PlayerMobile` bot treats every closed door as a wall.
-   `CanOpenDoors` defaults true for a humanoid body (`BaseCreature.cs:1924`). Upstream had to patch
-   its pathfinder to get this; here it is free.
-3. **The `PlayerMobile` dependency was shallow** — 15 overrides upstream, and `OpenTrade`,
-   `ApplyNameSuffix`, `CheckShove` and `ShouldCheckStatTimers` are all virtual on `Mobile` anyway.
-4. **It matches the actor pattern already running here** — `DailyLifeTownsfolk` is a `BaseCreature`
-   with a stand-aside AI.
+2. **Doors — STILL OWED, and now a debt rather than a saving.** `FastAStarAlgorithm.cs:77,93` sets
+   `MoveImpl.AlwaysIgnoreDoors` from `bc.CanOpenDoors` and only for a `BaseCreature`, resetting it
+   after every `GetSuccessors` call (`:102`), so nothing on the `Custom/` side survives one loop
+   iteration. A bot's routes therefore no longer **plan** through a closed door. `PlayerBot.Move`
+   recovers the step once a route has already aimed at one - upstream's own answer
+   (`PlayerBot.cs:611-620`), through the shared `Core/DoorHelper.cs` - but that is half the problem.
+   **It is measured**: terminal walk failures went from ~0.5 to **6.6 per 100 walks**, and the edges
+   that fail are interior shop arrivals - the inn, the alchemist, the tailor. The pathfinder half is
+   an upstream edit and belongs to its own session. Upstream needed two engine patches for it.
+3. ~~**The `PlayerMobile` dependency was shallow**~~ — **spent, and it was.** About sixteen
+   overrides upstream, most of them virtual on `Mobile` anyway. The ledger of which we adopted, which
+   we already had, which we did not need and which are deferred is in *What we took from upstream's
+   overrides* below.
+4. ~~**It matches the actor pattern already running here**~~ — **spent.** `DailyLifeTownsfolk` is
+   still a `BaseCreature` with a stand-aside AI and still works, because the walker stopped caring
+   which class it drives before the bots changed. That is the whole point of doing step 1 first.
 
-## Where a `BaseCreature` reads as an NPC, and what was done about it
+## What we took from upstream's overrides
+
+*Added 12 September 2026, with the class swap.* Upstream's `PlayerBot : PlayerMobile` carries
+sixteen overrides. "We follow them except where named" is only checkable if the list is written
+down, so here it is, in their file order.
+
+| Upstream (`uo-offline PlayerBot.cs`) | Here |
+| --- | --- |
+| `OnGuildChange` :170 | **Deferred — guilds session.** `Guild`, `GuildTitle` and `DisplayGuildTitle` are `Mobile`-level and already work; there is no guild layer here to hook |
+| `ShouldCheckStatTimers => false` :585 | **Adopted.** Worth having for what it does rather than what it sounds like — it is consulted at exactly one site, `Mobile.Deserialize:6205`, while the `Hits`/`Stam`/`Mana` setters call `CheckStatTimers` for every mobile regardless (`:9718,:9747,:9774`). Not a standing saving; what it buys is sixty save records not each starting three regen timers during `World.Load` |
+| `CheckShove => true` :595 | **Already had it** (`PlayerBot.cs`), ported in session 1 of this layer |
+| `Move(Direction)` :611 | **Adopted**, through the shared `Core/DoorHelper.cs`. Half the door problem — see reason 2 above |
+| `CriminalAction` :633 | **Not needed.** Its whole body is `BotGrayWatch.Note`, a telemetry system not ported |
+| `IsHarmfulCriminal` :639 | **Deferred — combat/PK session.** It exempts faction war and bot duels; we have neither |
+| `ApplyNameSuffix` :655 | **Not needed.** It appends a tag from `BotGuilds`, which their own header calls an explicit fake and which was deliberately not ported |
+| `OnAfterSpawn` :683 | **Have our own**, different content and for a named reason: XmlSpawner calls `OnAfterSpawn` *before* it applies the spawn string (`XmlSpawner2.cs:9337` against `:9345`), so the seed is properties on the bot rather than a spawner subclass |
+| `HandlesOnSpeech` / `OnSpeech` :851,854 | **Already had them.** Both re-based by the swap: `HandlesOnSpeech`'s `base` went from `BaseCreature.cs:4621`, which ANDed in `RangePerception`, to `Mobile.cs:7614`, which is a flat false — so the `ListenRange` test is now the whole rule, which is what it was always written to be |
+| `OnBeforeDeath` :860 | **Not adopted, deliberately.** Theirs dismounts there; ours releases in `OnDeath`, because `OnBeforeDeath` returns `bool` and a `false` from it — or from `Region.OnBeforeDeath` one line above — cancels the death outright, which would strip the mount off a bot that then does not die. That note used to carry an escape clause: *if the F2 cast ever had to be lived with, move cleanup there*. F2 is closed, so the clause is spent and the original choice stands on its own |
+| `OpenTrade` :874 | **Deferred — economy session (7f).** ServUO's `SecureTrade` is already null-safe for a clientless participant (`SecureTrade.cs:25-29,166,173,196-197`), so unlike ModernUO no engine patch will be needed. There is simply nothing to trade yet — seams 6 and 12 |
+| `OnDeath` :882 | **Have our own.** The half we do not have is the **murder-report adapter** (`BotMurderReport.OnBotDeath`, run before `base.OnDeath`) — deferred to the PK session, and carrying a policy question about whether bot-on-bot kills should award counts at all |
+| `OnAfterDelete` :937 | **Have the equivalent** at `OnDelete`, which already releases mount and pack animal, frees the name and unregisters, and calls `base.OnDelete()`. ServUO puts `BaseHouse.HandleDeletion` in `PlayerMobile.OnAfterDelete` (`:5250`) instead, which is where the crash-guard rule bites |
+| `Serialize` / `Deserialize` :1055,1071 | **Have our own**, ServUO `GenericWriter`/`GenericReader` rather than ModernUO's `IGenericWriter`. Version ladder stays at v1; theirs runs to v7 carrying `BotGuildIndex` and `GuildBound`, neither of which exists here yet |
+
+## Where a `BaseCreature` read as an NPC, and what was done about it
+
+> **Historical, 12 September 2026.** Every row below describes a surface a `BaseCreature` exposed
+> and a `PlayerMobile` does not. `InitialInnocent` and `CanTeach` are **deleted**, not re-ported:
+> `Notoriety.cs:441-443` only falls through to `CanBeAttacked` for a `BaseCreature`, and
+> `BaseCreature.GetContextMenuEntries` (`:4574`) is what offered Rename, Tame and Teach. A bot now
+> reads blue and shows a player's context menu with nothing done. The Party and Name/guild rows were
+> always about the `Player` flag and `Mobile`, and are unchanged. Kept because a reader of an older
+> diff will find these overrides and should know why they went.
 
 | Surface | As a plain `BaseCreature` | Here |
 | --- | --- | --- |
@@ -198,17 +254,51 @@ exists.
 > than changes: bots are still transient, and now so is nothing else — the spawners that make them
 > are rebuilt from a file on every import. See **Population**.
 
-**Bots never survive a restart**, and unlike upstream this shard has to do something about it.
+**Bots never survive a restart**, and this shard has to do something about it — *and so does
+upstream*, which this section used to get wrong.
 
-ModernUO writes player characters through their **account**, so an accountless bot was never in the
-world save at all — upstream got the guarantee for free. ServUO's
-`StandardSaveStrategy.SaveMobiles` (`Server/Persistence/StandardSaveStrategy.cs:74-76`) writes
-**every** mobile in `World.Mobiles`, with no account filter. Verified rather than assumed: a save
-taken with three bots standing grew `Saves/Mobiles/Mobiles.bin` by ~144 KB.
+It said ModernUO writes player characters through their **account**, so an accountless bot "was
+never in the world save at all — upstream got the guarantee for free". The first half is true; the
+conclusion is not. Their own `BotStartupManager.PurgeStaleBots` (`:92-119`) sweeps `World.Mobiles`
+at boot and deletes every non-permanent `PlayerBot`, with the comment *"any that appear in a fresh
+load are stale remnants and must be cleared so they don't accumulate"*. **They pay for it too.**
 
-The answer is the same ephemeral idiom the daily-life actors use — `Timer.DelayCall(Delete)` at the
-tail of `Deserialize` (ServUO has no `[AfterDeserialization]`). Also verified: that save reloaded
-24,928 mobiles and stood at 24,925 moments later. Exactly three.
+On ServUO there is nothing free about it at all: `StandardSaveStrategy.SaveMobiles`
+(`Server/Persistence/StandardSaveStrategy.cs:74-76`) writes **every** mobile in `World.Mobiles`
+with no account filter, so an accountless bot *is* in the save here.
+
+**The answer is now upstream's, and it used to be ours.** Until the class swap it was
+`Timer.DelayCall(Delete)` at the tail of `Deserialize`, the same ephemeral idiom the daily-life
+actors still use. It is now a single boot sweep, `BotStartupPurge`. Two reasons, neither of them
+correctness — the old one worked, measured at 2,871 bot-owned items in a save and not one of them
+orphaned afterwards:
+
+- **It reports a count.** The rule is a line in the boot log — *"Purged 61 stale bot(s) from the
+  world save"* — instead of something inferred after the fact from an orphan census that had to join
+  on item serials because the parent was already gone.
+- **It is not a side effect of serialization.** `base.Deserialize` is now roughly 440 lines of
+  `PlayerMobile` housekeeping — an account lookup at `PlayerMobile.cs:4902`, `CheckAtrophies` at
+  `:4925`, a `Timer.DelayCall` at `:4934` — all of it running on a mobile on its way to a line whose
+  only job was to schedule its destruction.
+
+**A boot-time `World.Mobiles` walk is not a breach of CLAUDE.md §15.** That rule prefers
+`NetState.Instances` or `LiveRegistry`, and it is about work on a **timer**. This runs once, in
+`Initialize`, before any timer exists — and `LiveRegistry` could not answer it anyway, because
+`Deserialize` deliberately does not register a bot it is about to lose.
+
+**The ordering that makes it safe is the same fact the old idiom rested on, read from the other
+end**: the Timer thread does not start until after `World.Load` *and* after `Initialize`
+(`Server/Main.cs`, CLAUDE.md §3), so the purge is strictly earlier than the first timer slice and a
+loaded bot never gets a tick — while still running after every item has been attached, so
+`Mobile.Delete` cascades through the backpack and bank box as it always did.
+
+**Verified across the swap, on a save that actually contained 61 `PlayerMobile` bots owning 3,102
+items**: the reload reported zero deserialize errors, the purge line read 61, `[BotOrphans` found
+172 orphaned items of which **0 of 172 serials appear anywhere in the 1,763 bot-owned serials** the
+census recorded, and the composition is still 86 `Backpack` + 86 `Gold` pairs. That last detail is
+worth keeping: SHARD.md attributes those pairs to `BaseCreature.AddLoot`/`PackGold`, and bots no
+longer run either — so the class swap is an accidental controlled experiment that **confirms** they
+were never the bots'.
 
 `LiveRegistry` registration follows the ephemeral rule too — **from the constructor, never from
 `Deserialize`**, or a bot that is about to delete itself would sit on the editor's live map for one
@@ -1008,7 +1098,7 @@ reader of an older diff will find their markers and should not go looking for wh
 | 2 | `EquipmentTable.AddMarkedRune` | A blank `RecallRune`. Upstream marked it from its `DestinationCatalog`; nothing routes yet, and a rune marked to somewhere no bot can walk is a lie in the pack | Travel session — wires to `Nav.Destinations(...)` |
 | ~~3~~ | `EquipmentTable.SeedCrafterStarterProps`, `EquipCrafterTool` | ~~Empty. Both read `CrafterProfiles`~~ | **Done (7e)**, minus the gold in upstream's `StarterProps` — seeding a purse for a purse system that does not exist would be inventing an economy one item at a time. That half is 7f |
 | 4 | `EquipmentTable` → `BotItemFactory` | **Not severed** — pulled in as a leaf, since it is self-contained and the outfit roller cannot work without it | n/a |
-| 5 | **`BotAI`'s base class** | `: VendorAI` — the right stand-aside for a bot that only stands still | Combat session — becomes `MeleeAI`, `MageAI` or a purpose-built `BaseAI` |
+| ~~5~~ | ~~**`BotAI`'s base class**~~ | ~~`: VendorAI`~~ | **Closed 12 September 2026, by deletion rather than by the combat session that was scheduled to replace it.** A `PlayerMobile` has no AI, so `BotAI` and `ForcedAI` both went: their two overrides existed only to stop `BaseAI.DoActionWander` fighting the walker and to stop `SpeedInfo` re-inflating a pace the bot had been given. `IBotActor` outlived the file it lived in and is now `IBotActor.cs` |
 | 6 | `BankSitterBehavior` Hawker's **WTS** half | Only `wtb`. Upstream's hawker shouts a line `BotShop` builds from a real item in its pack, so "WTS GM halberd 5k" means there *is* one and 5k buys it. A WTS from a bot holding nothing is the lie this system exists not to tell | Economy session, with `BotShop` |
 | 7 | `BankSitterBehavior`'s **three macro roles** | `ResistMacro`, `HidingMacro` and `StealthMacro` roll as `Regular`. Their **weights are kept** in `RollRole` behind markers, so restoring them is deleting three redirects rather than re-deriving upstream's distribution | Combat session, which brings spellcasting and `Hidden` toggling |
 | 8 | Gossip, and `PlayerBotBehavior`'s `GossipShare` branch | A marker comment. `Gossip/` is copied but never scanned, and its `{actor}`/`{other}`/`{when}` tokens are registered unwired — so the lines are doubly unreachable | Event-journal session, with `BotEventJournal` |
@@ -1018,10 +1108,12 @@ reader of an older diff will find their markers and should not go looking for wh
 | 12 | The **gold half of the hand-over** | The load moves, the coin does not. Upstream paid 2–4gp a unit from the crafter's purse and refused the sale when it was broke; the crafter's three-minute counter restock went with it | Economy session (7f) |
 | 13 | A gatherer **under attack** | Downs tools and travels. Upstream swapped to a defender `AdventurerBehavior` — "the tool is a real axe" — and there is no Adventurer here yet | Combat session |
 
-**Seam 5 is a discipline, not a stub.** `BotAI.cs` is the only file in the tree permitted to name
-`VendorAI` — no cast, no type test, no call to a `VendorAI` member anywhere else. `PlayerBot`
-reaches its AI only through `ForcedAI` and the `Commuting` flag. Keep `BotAI` thin: anything that
-is really bot logic belongs on `PlayerBot` or in a behaviour, where it survives the swap.
+**Seam 5 was a discipline, and the discipline is what made it cheap to close.** `BotAI.cs` was the
+only file in the tree permitted to name `VendorAI` — no cast, no type test, no call to a `VendorAI`
+member anywhere else — and `PlayerBot` reached its AI only through `ForcedAI` and the `Commuting`
+flag. So when the AI went, one file went with it and nothing else in the tree had to be found first.
+The rule it was written under is the transferable part: *anything that is really bot logic belongs
+on `PlayerBot` or in a behaviour, where it survives the swap.* It did.
 
 ## The engine writes skills behind you
 
@@ -1055,10 +1147,18 @@ The log had **107 records — 92 of them bots**, in three families:
 | 32 | a shield | `Halberd` / `BattleAxe` / `ExecutionersAxe` | TwoHanded | weapon and shield rolled independently |
 | 5 | `HalfApron` | `HalfApron` | Waist | a guard that tested the wrong layer, on classes it excluded |
 
-**Everything now goes through `BaseCreature.SetWearable`** (`:5706`), which `PlayerBot` already
-inherited: it runs `CheckEquip` and `PackItem`s the loser instead of ghosting it. `EquipmentTable`'s
-`Add` and `AddArmor` carried about thirty call sites straight to `AddItem`; they carry them here
-instead. Stock `BaseVendor.InitOutfit` dresses every vendor the same way.
+**Everything goes through `PlayerBot.SetWearable`**: it runs `CheckEquip` and packs the loser
+instead of ghosting it. `EquipmentTable`'s `Add` and `AddArmor` carried about thirty call sites
+straight to `AddItem`; they carry them here instead, and stock `BaseVendor.InitOutfit` dresses every
+vendor the same way.
+
+**It used to be `BaseCreature.SetWearable` (`:5722`), inherited for free, and the class swap had to
+re-port it line for line** — there is no `PlayerMobile` or `Mobile` equivalent. All four members it
+uses (`CheckEquip`, `OnEquip`, `item.OnEquip`, and `AddToBackpack` in place of `PackItem`) are
+`Mobile`-level, so the port is exact rather than approximate, and the repair surface was three
+methods rather than sixty call sites because everything already funnelled through two private
+helpers. Verified after the swap: a `[BotSmoke` audit of seventeen classes at Grandmaster logged
+**no layer conflicts at all**.
 
 That is also the only thing that knows a shield and a halberd cannot share a bot, because
 **`Layer` is not knowable from a `Type`**: clothing takes it as a constructor argument
@@ -3096,6 +3196,73 @@ no longer exists *and* sits where a reader goes looking for current behaviour. A
 explains the shape of something still in force stays where it is and carries a date line instead,
 because moving it would separate it from the thing it explains. Both kinds are dated; neither is
 shortened. The dates are the commit that landed the investigation, from `git log`.
+
+### The class swap, and the two numbers it moved
+
+*12 September 2026.* Step 2 of the migration `CLASS-DECISION.md` records: `PlayerBot : PlayerMobile`,
+accountless. What follows is what was measured rather than what was expected, because the two
+differed in both directions.
+
+**The transition itself had to be planned, and the danger was not the class.** The save held 61
+`PlayerBot` records written by `BaseCreature.Serialize`, and the new binary would read them with
+`PlayerMobile.Deserialize`. `World.Load` asserts `reader.Position == entry.Position + entry.Length`
+after every mobile (`World.cs:618-621`), and on failure it **breaks out of the mobile loop** — items,
+guilds and custom data are all gated on `!failedMobiles` (`:643`, `:689`, `:732`), so nothing else
+loads at all, and it then prompts on the console and throws. Delete-on-deserialize could not have
+protected it: the tail runs *after* the read. So the bots were removed on the old binary first, with
+`[XmlUnLoad Spawns/Custom GG_` — which deletes every `GG_` spawner from the world regardless of what
+is on disk and cascades to its spawned mobiles (`XmlSpawner2.cs:2167`) — and proved gone by counting
+index records rather than by trusting a command: **61 `Server.Custom.PlayerBot` entries in
+`Mobiles.idx` before, 0 after.** The type name survives in `Mobiles.tdb` either way, because that
+table is not pruned; it is the index that decides what gets constructed.
+
+**No spawner regeneration was needed, and this is worth knowing before somebody plans one.**
+XmlSpawner resolves a spawn by **type name** (`XmlSpawner2.cs:9262` → `ScriptCompiler.FindTypeByName`),
+and `PlayerBot` is still `PlayerBot`. The 43 `GG_BotPop` slots constructed the new class unchanged.
+
+**THE TICK COST DID NOT DROP, AND THE PREDICTION THAT IT WOULD WAS MEASURING THE WRONG THING.**
+`CLASS-DECISION.md` §6 is right that a `PlayerMobile` is cheaper: a `BaseCreature` carried one
+`AITimer` at `TimerPriority.FiftyMS` (`BaseAI.cs:3046`), and `Timer.TimerThread` walks that whole
+bucket every 50 ms (`Timer.cs:332-343`) — 1,200 due-checks and 150 `OnThink` passes a second at 60
+bots, all of which is now zero. **But none of that was ever in this number.** The behaviour tick's
+stopwatch measures its own callback, which is what this file has always said about it, and that
+callback *gained* work in the swap: `BotParty.CheckInvite` moved into it from `OnThink`, which had
+no driver left. Measured at 61 bots: **0.8 ms mean / 19 ms max over 475 passes**, and 1.0 / 27 over
+a shorter 200-pass sample, against a baseline of 0.7 / 15 at 51 bots. Per bot that is 0.013 ms
+against 0.014 — flat, while absorbing work. The saving is real and lives on the Timer thread, where
+this instrument cannot see it, and anyone wanting it quantified should measure `Core.AverageCPS` or
+the timer bucket rather than this.
+
+**AND THE WALK FAILURES ROSE TENFOLD, WHICH WAS PREDICTED AND IS DOORS.** From roughly 0.5 terminal
+failures per 100 walks to **5.23**, on a fleet of 61. `FastAStarAlgorithm.cs:77` casts the pathing
+mobile to `BaseCreature` and `:93` sets `MoveImpl.AlwaysIgnoreDoors` only then, resetting it after
+every `GetSuccessors` call (`:102`) so no `Custom/`-side assignment survives a loop iteration. A bot
+therefore no longer **plans** a route through a closed door. The ledger says so plainly: of 68
+failures, 67 were bots and one a daily-life `BaseCreature`; 47 had nobody standing anywhere near;
+and the edges at the top of the list are interior shop arrivals — `brit-inn-1`,
+`uo-britain-between-inn-and-alchemist`, `uo-britain-tailor-se-corner → brit-tail-1`.
+`PlayerBot.Move` recovers the *step* once a route has aimed at a door, which is upstream's own
+answer, but it cannot make the pathfinder willing to route through one. That is an upstream edit and
+it is the door session's. **Two red probes, `Bots.Life` and `Bots.Shift`, are this one cause**: both
+failed on a teleport, which is the top of the recovery ladder.
+
+**What went green that could not before.** `Bots.Death` — REVIEW.md F2 — turned from a deliberate
+reproduction into a real assertion and passed on the first run. `Bots.Smoke` audited seventeen
+classes at Grandmaster with **no layer conflicts logged at all**, which is the `SetWearable` re-port
+proved rather than assumed. `[WalkAudit` walked 2,510 legs with 0 failed, 0 fragile and 0 contested
+in 187.6 s against a 188.97 s baseline — the probes are `BaseCreature`s, so that proves the graph
+and the *other* adapter untouched, which is exactly what it was for. `Nav.Actor` passed **unedited**:
+the new branch is an `as PlayerMobile` and its guard counts `BaseCreature` tests, so the ledger never
+moved.
+
+**The one thing nobody had on the list.** `Bots.Shove` failed on a single pair — *"Elowen onto Bot
+Shove Probe Player: the engine says True, `MayBotPass` says False"* — and the probe is right. A bot
+now walks through real players, because `PlayerMobile.OnMoveOver` refuses a mover only when it is an
+uncontrolled `BaseCreature` and a bot is not one any more. That is upstream's rule, but this port
+held the opposite half deliberately and had a README bullet and a MODIFICATIONS paragraph saying so.
+**A class change spent a named deviation, silently, and the only reason it was caught is that a probe
+asserts the diagnostic against the engine for every ordered pair.** That is the argument for that
+probe, made better than any of its own comments make it.
 
 ### The behaviour ticker started twice, and every per-pass number was against half its interval
 

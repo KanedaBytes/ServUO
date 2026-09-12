@@ -5,9 +5,9 @@ systems) are in `SHARD.md`. The upstream-edit log is `Scripts/Custom/MODIFICATIO
 
 **`REVIEW.md` is required reading** - the read-only architectural review of 11 September 2026, and
 where this shard's open defects are named and prioritised. Status: **F1 fixed** (the behaviour
-ticker started twice), **F2 reproduced and deliberately NOT fixed** (a reportable bot death throws
-in the murder report; `Bots.Death` reproduces it on every `[BotSmoke` and reports `Ok` saying so,
-because the repair is the `PlayerMobile` identity decision rather than a patch to an upstream file),
+ticker started twice), **F2 fixed** (12 September 2026, by the `PlayerMobile` class swap rather
+than by a patch to an upstream file; `Bots.Death` turned round with it and now fails if the cast
+ever comes back),
 **F3 interim only** (one pending token per operation; requests still have no durable identity),
 **F4 fixed** (a cached route no longer outlives the edge health it was built from). **F5** (delivery
 reports success after destroying the load), **F6** (a custom save overwrites the last good file

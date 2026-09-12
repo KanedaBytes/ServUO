@@ -172,8 +172,23 @@ combat layer here yet for a narrower rule to serve. Revisit with the combat sess
 Bots README is the place it will be felt first.
 
 **What it deliberately does not change.** `Scripts/Mobiles/PlayerMobile.cs:3487-3494` is untouched,
-so **a bot still yields to a real player**, and a real player shoving a bot still pays the engine's
-full-stamina rule. That half of the deviation was always the right half.
+and a real player shoving a bot still pays the engine's full-stamina rule.
+
+> **CORRECTION, 12 September 2026.** This paragraph also used to say *"a bot still yields to a real
+> player"*, and that stopped being true the day `PlayerBot` became a `PlayerMobile` — without this
+> file changing, which is exactly why the correction is recorded here rather than left implicit.
+> `PlayerMobile.OnMoveOver` refuses a mover only at `m is BaseCreature && !((BaseCreature)m).Controlled`;
+> a bot mover no longer satisfies that, so it falls through to `Mobile.OnMoveOver` → the mover's own
+> `CheckShove`, which a bot answers `true`. **A bot now walks through players.** `Bots.Shove` fails
+> on that one pair and names it, the Bots README carries it as a contract bullet, and the decision
+> whether to keep upstream's rule or restore ours belongs to the collision session.
+>
+> **The edit below is still load-bearing, for a different reason than when it was written.** A bot
+> mover no longer needs it — a `PlayerMobile` stepping onto a stock creature reaches
+> `Mobile.OnMoveOver` → `CheckShove` → true on its own. What still needs it is `[WalkAudit`'s probe,
+> which is a plain `BaseCreature` `IBotMover` and would otherwise be refused by every occupant class
+> a real bot walks through: `[WalkAudit selftest` read `SELF-TEST BROKEN` before this edit existed.
+> So entry 5 stays, and the class swap did not remove an upstream edit after all.
 
 **What travels under it, as of the walk-audit fix.** The guard calls
 `BotShove.OnMoveOver(this, m)`, and that method's mover test is now `mover as IBotMover` rather
