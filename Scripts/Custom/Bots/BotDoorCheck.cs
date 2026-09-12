@@ -218,8 +218,8 @@ namespace Server.Custom
                         + "only for a BaseCreature unless the bot branch is there.",
                         anchor.Name,
                         botPath.Directions.Length,
-                        door.X,
-                        door.Y));
+                        doorTile.X,
+                        doorTile.Y));
                 }
 
                 // ---- half two: a plain player's route must not ----
@@ -239,8 +239,8 @@ namespace Server.Custom
                         + "gate has been widened past bots - BotPathPolicy.IgnoreDoors must answer "
                         + "null for anything that is not an IBotActor, or every player gets a "
                         + "route through doors they still have to open by hand.",
-                        door.X,
-                        door.Y));
+                        doorTile.X,
+                        doorTile.Y));
                 }
 
                 // ---- the leak named in entry 6 ----
@@ -265,8 +265,8 @@ namespace Server.Custom
                     return Fail(String.Format(
                         "the door tile {0},{1} is the route's own start tile, so there is no step "
                         + "onto it to walk. The anchor needs moving.",
-                        door.X,
-                        door.Y));
+                        doorTile.X,
+                        doorTile.Y));
                 }
 
                 Point2D stand = botTiles[index - 1];
@@ -288,7 +288,16 @@ namespace Server.Custom
                 bool moved = bot.Move(step);
                 openedIt = door.Open;
 
-                if (!moved || bot.X != door.X || bot.Y != door.Y)
+                // AGAINST THE TILE THE DOOR WAS FOUND ON, not against door.X/door.Y.
+                //
+                // BaseDoor.Open MOVES the item by its Offset (BaseDoor.cs:88-94) - which is why a
+                // door occupies one tile shut and its neighbour open, the same mechanism that made
+                // a doorway's CanSpawnMobile answer last only seconds and that arrival scatter now
+                // refuses both tiles of. So the moment the step succeeds, the live door is no
+                // longer on the tile the bot was walking onto, and comparing against it reports a
+                // working engine as a broken one. It did, once: "it is standing at 1464,1524, the
+                // door is open" was a PASS being printed as a failure.
+                if (!moved || bot.X != doorTile.X || bot.Y != doorTile.Y)
                 {
                     return Fail(String.Format(
                         "the bot planned a route through the door at {0},{1} and then could not "
@@ -296,8 +305,8 @@ namespace Server.Custom
                         + "at {5},{6}, the door is {7}). The two halves of the door fix have come "
                         + "apart: PlayerBot.Move opens the tile ahead through DoorHelper, and that "
                         + "is what makes a planned route walkable.",
-                        door.X,
-                        door.Y,
+                        doorTile.X,
+                        doorTile.Y,
                         stand.X,
                         stand.Y,
                         moved,
@@ -306,12 +315,21 @@ namespace Server.Custom
                         door.Open ? "open" : "still shut"));
                 }
 
+                if (!door.Open)
+                {
+                    return Fail(String.Format(
+                        "the bot stepped onto the door tile {0},{1} but the door is still shut. "
+                        + "The step went through without DoorHelper - check PlayerBot.Move.",
+                        doorTile.X,
+                        doorTile.Y));
+                }
+
                 var detail = String.Format(
                     "{0}: a bot routes through the closed door at {1},{2} in {3} step(s) and opens "
                     + "it on the step, a plain PlayerMobile {4}",
                     anchor.Name,
-                    door.X,
-                    door.Y,
+                    doorTile.X,
+                    doorTile.Y,
                     botPath.Directions.Length,
                     playerPath.Success ? "routes around it" : "cannot route at all");
 
