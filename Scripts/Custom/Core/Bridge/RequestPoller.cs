@@ -672,7 +672,13 @@ namespace Server.Custom
                 // walkable" and "where is the nearest road". Body is
                 //   "verify x1,y1 x2,y2 [x3,y3 x4,y4 ...]"  - pairs, each a hop
                 //   "snap x,y"                              - one point to pull onto a road
+                //   "bot" | "creature"                      - which class walks it, default bot
                 // Both may appear. Answers go to Data/Live/nav-hop.json.
+                //
+                // THE DEFAULT IS THE FLEET'S CLASS. It used to be a BaseCreature and could not be
+                // anything else, so the verify token answered about a walker more permissive than
+                // the one that walks arrivals - see NavCorridor.ProbeHops. `creature` is still
+                // there for the daily-life walkers, which really are BaseCreatures.
                 case "nav-hop":
                 {
                     string[] words = (body ?? "").Split(
@@ -681,6 +687,19 @@ namespace Server.Custom
                     var pairs = new List<Point3D>();
                     Point3D? snap = null;
                     bool snapping = false;
+
+                    // The fleet's class unless the body says otherwise. Resolved from the walk
+                    // audit's registry so `bot` means the same probe [WalkAudit bot walks with.
+                    NavWalkAudit.ProbeClass probeClass = null;
+
+                    foreach (NavWalkAudit.ProbeClass candidate in NavWalkAudit.ProbeClasses)
+                    {
+                        if (Insensitive.Equals(candidate.Key, "bot"))
+                        {
+                            probeClass = candidate;
+                            break;
+                        }
+                    }
 
                     foreach (string word in words)
                     {
@@ -691,7 +710,42 @@ namespace Server.Custom
 
                         if (word.IndexOf(',') < 0)
                         {
-                            snapping = word.Equals("snap", StringComparison.OrdinalIgnoreCase);
+                            if (word.Equals("snap", StringComparison.OrdinalIgnoreCase))
+                            {
+                                snapping = true;
+                                continue;
+                            }
+
+                            snapping = false;
+
+                            // "verify" is the word the editor writes and means nothing beyond "not
+                            // snap", so it falls through rather than being rejected. A class name
+                            // is matched before that, because until this branch existed a bare
+                            // "bot" was swallowed here and silently ignored.
+                            if (word.Equals("verify", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            NavWalkAudit.ProbeClass named = null;
+
+                            foreach (NavWalkAudit.ProbeClass candidate in NavWalkAudit.ProbeClasses)
+                            {
+                                if (Insensitive.Equals(candidate.Key, word))
+                                {
+                                    named = candidate;
+                                    break;
+                                }
+                            }
+
+                            if (named == null)
+                            {
+                                message = "no such probe class '" + word + "'; known: "
+                                    + NavWalkAudit.ProbeKeyList();
+                                return false;
+                            }
+
+                            probeClass = named;
                             continue;
                         }
 
@@ -728,7 +782,17 @@ namespace Server.Custom
                         }
                     }
 
-                    string json = NavCorridor.ProbeHops(Map.Trammel, pairs, snap);
+                    if (probeClass == null)
+                    {
+                        // The bot class registers from Scripts/Custom/Bots. If it is absent this
+                        // is not the shard the token is for, and quietly answering on a creature
+                        // would be answering a different question.
+                        message = "the 'bot' probe class is not registered; known: "
+                            + NavWalkAudit.ProbeKeyList();
+                        return false;
+                    }
+
+                    string json = NavCorridor.ProbeHops(Map.Trammel, pairs, snap, probeClass);
                     string hopWriteError;
 
                     if (!AtomicFile.Write("Data/Live/nav-hop.json", json, out hopWriteError))
@@ -738,7 +802,8 @@ namespace Server.Custom
                     }
 
                     message = String.Format(
-                        "{0} hop(s) probed{1}", pairs.Count / 2, snap == null ? "" : ", snap answered");
+                        "{0} hop(s) probed as {1}{2}", pairs.Count / 2, probeClass.Key,
+                        snap == null ? "" : ", snap answered");
                     return true;
                 }
 

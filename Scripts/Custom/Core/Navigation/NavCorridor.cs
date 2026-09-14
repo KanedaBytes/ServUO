@@ -741,23 +741,39 @@ namespace Server.Custom
         ///
         /// Both are things only the shard can answer - the browser has no map data and no movement
         /// rules - and both are asked while somebody is dragging, so they are one cheap request
-        /// rather than a re-walk of the whole road. Verification drives the same real BaseCreature
-        /// the proposal was built with, so a hop that passes here passes for the same reason.
+        /// rather than a re-walk of the whole road.
+        ///
+        /// IT WALKS THE FLEET'S CLASS BY DEFAULT, WHICH IT DID NOT USED TO. The probe was always a
+        /// CorridorProbe, and a CorridorProbe is a BaseCreature: FastAStarAlgorithm grants that
+        /// branch IgnoreMovableImpassables from CanMoveOverObstacles (:97-101) while the IBotActor
+        /// branch beside it withholds it on purpose (:102-107, and BotPathPolicy). So the probe
+        /// walked through the crates and barrels a bot has to go round, and answered OK about hops
+        /// the fleet cannot walk - 297 expansions and success against 301 and failure on
+        /// uo-brit-west-rd-1-s2 -> brit-shop-provisioner-south, same tiles, same stock budget. The
+        /// gap is systematic INSIDE BUILDINGS, which is where arrival points live.
+        ///
+        /// The classes come from NavWalkAudit's registry rather than being declared here, so `bot`
+        /// means the same PlayerBot-derived probe the walk audit walks with. `creature` is still
+        /// selectable and still right for the daily-life walkers, which really are BaseCreatures -
+        /// and it is still what the road-AUTHORING paths use, because a road they reject is a road
+        /// those walkers lose. This is the verify token only.
         /// </summary>
-        public static string ProbeHops(Map map, IList<Point3D> pairs, Point3D? snapNear)
+        public static string ProbeHops(Map map, IList<Point3D> pairs, Point3D? snapNear,
+            NavWalkAudit.ProbeClass probeClass)
         {
             var builder = new StringBuilder(512);
 
             builder.Append("{\n  \"utc\": \"").Append(DateTime.UtcNow.ToString("o"));
-            builder.Append("\",\n  \"hops\": [");
+            builder.Append("\",\n  \"probeClass\": \"");
+            builder.Append(probeClass.Key).Append("\",\n  \"hops\": [");
 
-            CorridorProbe probe = null;
+            NavWalkAudit.IWalkAuditProbe probe = null;
 
             try
             {
                 if (map != null && map != Map.Internal)
                 {
-                    probe = new CorridorProbe();
+                    probe = probeClass.Create();
 
                     for (int i = 0; pairs != null && i + 1 < pairs.Count; i += 2)
                     {
@@ -771,7 +787,7 @@ namespace Server.Custom
 
                         builder.Append("{\"ax\":").Append(a.X).Append(",\"ay\":").Append(a.Y);
                         builder.Append(",\"bx\":").Append(b.X).Append(",\"by\":").Append(b.Y);
-                        builder.Append(",\"ok\":").Append(Pathable(map, probe, a, b) ? "true" : "false");
+                        builder.Append(",\"ok\":").Append(Pathable(map, probe.Mobile, a, b) ? "true" : "false");
                         builder.Append("}");
                     }
                 }
@@ -795,9 +811,9 @@ namespace Server.Custom
             }
             finally
             {
-                if (probe != null)
+                if (probe != null && probe.Mobile != null && !probe.Mobile.Deleted)
                 {
-                    probe.Delete();
+                    probe.Mobile.Delete();
                 }
             }
 
@@ -1021,7 +1037,7 @@ namespace Server.Custom
         /// diagonal tile and answered NO ROUTE both ways, while 1884,2646 -> 1886,2645, two tiles
         /// away past the same fixtures, answered OK. The nearer pair failing is the tell.
         /// </summary>
-        private static bool Pathable(Map map, CorridorProbe probe, Point3D a, Point3D b)
+        private static bool Pathable(Map map, Mobile probe, Point3D a, Point3D b)
         {
             if (Utility.InRange(a, b, 1))
             {
