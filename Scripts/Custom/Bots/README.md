@@ -58,6 +58,17 @@ find out. **Where the two disagree, this section is the one that has been re-che
   never reached that call and merely orphaned the house. No houses, no player vendors, no durable
   property until a bot has an `Account`, which is a decision `CLASS-DECISION.md` defers to the
   session where something is actually owned.
+- **A bot owns a bank box only if it has actually banked something**, and as of 14 September 2026
+  nothing else may cause one to exist. `Mobile.BankBox` is a *creating* getter
+  (`Server/Mobile.cs:10498-10516`), so reading it is a mutation, and the only code entitled to read
+  it is `BotWorkDelivery.Bank` (`BotWorkDelivery.cs:333`) — a laden gatherer storing an unsold haul
+  where no buyer was found, which is storage and never a balance (`:322-324`). A `BankSitter` does
+  **not** need one: the bank crowd is theatre, `bankBoxShare` (`BotLifeConfig.cs:117`) is a
+  gesture-mix dial spending on `bot.Animate(32, …)` (`BankSitterBehavior.cs:540-544`), and bank
+  speech cannot reach a `Banker` by construction (`PlayerBot.cs:1163-1174`). Anything that merely
+  *inspects* a bot must use `FindBankNoCreate()` (`Server/Mobile.cs:10518-10528`) or read
+  `Mobile.Items`, which already contains the box when there is one. `Core.SaveIntegrity` enforces
+  the save-path half of this; see [The census was not a passive observer](#ephemerality).
 - **A bot walks through every occupant, a real player included, and that is now Sean's decision
   rather than an accident.** It matches upstream (`uo-offline CustomBots/PlayerBot.cs:595`). The
   class swap spent that deviation silently and `Bots.Shove` is what caught it; the decision of 12
@@ -310,6 +321,47 @@ were never the bots'.
 `Deserialize`**, or a bot that is about to delete itself would sit on the editor's live map for one
 tick. `OnAfterSpawn` also registers, harmlessly (`Register` no-ops on a duplicate), so the spawner
 path the population session adds is already covered.
+
+### The census was not a passive observer — corrected 14 September 2026
+
+Every bot-owned-item figure above and in SHARD.md's orphan section came from
+`BotOrphans.WriteCensus`, and **the census had two defects of its own**. Both are fixed; the
+conclusions they were quoted in are not affected, but the arithmetic was.
+
+**It created a bank box on every bot, at every world save.** `Collect(bot.BankBox, serials)` read
+`Mobile.BankBox`, which is a *creating* getter (`Server/Mobile.cs:10498-10516`, the allocation at
+`:10511`). Running that from an `EventSink.WorldSave` handler minted a `BankBox` on every bot that
+had none, **during** the save — which is what printed 1,796
+`Attempted to add 0x... "BankBox" during world save` warnings across 11 and 12 September 2026,
+every one of them with the same single caller in `world-save-errors.log`. It began with the census
+itself (`e06f9a81`, 11 September) and is **not** a consequence of the `PlayerMobile` class swap the
+following day: `Mobile.BankBox` exists on every `Mobile`, so a `BaseCreature` bot minted one too.
+
+No save was ever inconsistent, and that is measured rather than assumed: `EventSink.WorldSave`
+fires at `Server/World.cs:1170`, *after* the strategy has serialized every mobile — including
+`Server/Mobile.cs:6539`, `writer.Write(m_Items)`, which is where a dangling reference would have
+lived — and the new items are deferred onto `_addQueue` and only drained at `:1187`. Of the 56
+serials minted during the 12 September 20:53 save, **0 of 56** appear in that save's item index,
+which itself tiles exactly: 219,617 records, no gap, no overlap, no duplicate serial. The real cost
+was one surplus item per bot in every save, reaped at the next boot by the cascade above, and a
+1.5 MB log.
+
+**And it counted every pack item twice.** `Mobile.Items` already holds the Backpack
+(`Layer.Backpack`) and the bank box (`Layer.Bank`), so `Collect(bot.Backpack, …)` and
+`Collect(bot.BankBox, …)` were both redundant with the `foreach (Item worn in bot.Items)` loop
+beneath them. Measured on 14 September before the fix: **2,632 reported against 1,491 real, a 77%
+inflation**. So *"3,102 items"* and *"1,763 bot-owned serials"* above, and *"2,871"* in SHARD.md,
+are all inflated by roughly that factor. After the fix, on 57 bots: **1,519 serials, zero
+duplicates**.
+
+**What does not change is the finding.** The orphans are still not the bots — that rests on the
+composition (`Backpack`+`Gold` pairs, with no bank box among them) and on `Mobile.Delete`'s
+cascade, neither of which the count touches. A ratio of *zero* orphaned bot-owned items is zero
+whatever the denominator.
+
+`Core.SaveIntegrity` (`Scripts/Custom/Core/SaveIntegrity.cs`) now fails `[CoreSmoke` if anything on
+the save path constructs an entity again. It was proven red on the pre-fix binary before the fix
+landed.
 
 ## Deviations from uo-offline
 
@@ -1853,6 +1905,12 @@ separates an island from an exclusive arrival that is merely reserved right now.
 A `BankSitter` sets `Home` a few tiles off its arrival point and `RangeHome` to 2, and the stock
 wander does the milling. It faces the nearest person occasionally and now and then bends over the
 bank box. **No speech this session** - the hook is marked in `Tick` and fills in 7d.
+
+> **Two sentences of that are out of date** (noted 14 September 2026, left in place because this is
+> dated narrative). `RangeHome` is now 0 with a tolerance (`BankSitterBehavior.cs:38-58`), and the
+> speech did land in 7d (`:266`, and the table under *The voice*). The bend itself is still exactly
+> what it says — `bot.Animate(32, 5, 1, true, false, 0)` at `:540-544`, and **no bank box is opened
+> or needed**; see the bank-box row in [Current contract](#current-contract).
 
 **A behaviour that sets `Home` must clear it.** `PlayerBot`'s constructor sets it to zero and
 everything downstream assumes that: `WalkRandomInHome` special-cases a zero `Home` into a *free*

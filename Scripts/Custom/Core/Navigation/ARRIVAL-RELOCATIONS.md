@@ -10,7 +10,13 @@ reading, and **every affected hop was planned in both directions** with `[NavHop
 stock 300-node budget. That second half is the rule the tanner waypoint bought: `7c3db49d` put
 `brit-tanner-shopfront` on a closed door because the tiles were probed and the edges were not.
 
-Four records change, in three places. Nothing is added and nothing is deleted.
+**Seven records change, in three places.** Nothing is added and nothing is deleted:
+
+| place | records |
+| --- | --- |
+| `trinsic-forge` | arrivals `:2337` (moved + repointed), `:2339`, `:2340` (repointed), destination `:2213` |
+| `brit-inn-central` | arrival `:2360` (moved + repointed), destination `:2228` |
+| `brit-shop-provisioner-south` | arrival `:2370` (moved) |
 
 ---
 
@@ -25,10 +31,42 @@ the difference between a pass and a fail:
 | `[NavHopProbe 1424,1739,20 1414,1748,10 budget 300 creature` | 297 | **success** |
 | `[NavHopProbe 1424,1739,20 1414,1748,10 budget 300 bot` | 301 | **failure** |
 
-Four nodes apart on identical geometry. The bot expands more because MODIFICATIONS entry 6 gives
-`IBotActor` the door branch in `FastAStarAlgorithm`, so a bot's search opens nodes behind closed
-doors that a creature's does not — and here that is exactly enough to run it off the end of the
-budget. `nav-hop` therefore reports this edge **OK**, and has been reporting it OK all along.
+Four nodes apart on identical geometry — and the reason is that **the probe is given a permission
+the fleet does not have.** `FastAStarAlgorithm`'s two branches are not symmetric:
+
+```csharp
+if (bc != null)                                          // FastAStarAlgorithm.cs:97-101
+{
+    MoveImpl.AlwaysIgnoreDoors       = bc.CanOpenDoors;
+    MoveImpl.IgnoreMovableImpassables = bc.CanMoveOverObstacles;
+}
+else if (botDoors.HasValue)                              // MODIFICATIONS entry 6, :102-107
+{
+    // IgnoreMovableImpassables is deliberately not granted; see BotPathPolicy.
+    MoveImpl.AlwaysIgnoreDoors = botDoors.Value;
+}
+```
+
+Both ignore doors. Only the creature ignores **movable impassables** — and `CorridorProbe`
+overrides `CanOpenDoors => true` (`NavCorridor.cs:281`) while inheriting
+`CanMoveOverObstacles => Core.AOS || Body.IsMonster` (`BaseCreature.cs:1926`), which on this shard
+is **true**, because `Config/Expansion.cfg` is `EJ`. So `nav-hop`'s probe walks straight through the
+crates, barrels and furniture a bot has to go round.
+
+That makes it **strictly more permissive than the fleet**, and systematically so *inside shops* —
+which is exactly where the arrivals in this list are. `nav-hop` reports this edge **OK**, and has
+been reporting it OK all along.
+
+A full `[WalkAudit` on 14 September shows the same split in its own rows — 5,028 walks, 12 probes,
+both classes over the identical graph:
+
+| no-route arrival rows (`kind:"arrival"`, `tiles > 1`, `pathTiles: 0`) | |
+| --- | --- |
+| `BaseCreature` | **3** |
+| `PlayerBot` | **4** |
+
+The extra one is the provisioner. That is `PATHFINDER-DECISION.md` §1's *"arrivals with no route
+(real) — 3 / 4"* row, and this is what is behind it.
 
 **Use `[NavHopProbe … bot` to verify an arrival the fleet walks.** `nav-hop` remains right for the
 daily-life walkers, which really are `BaseCreature`s.
@@ -39,8 +77,9 @@ daily-life walkers, which really are `BaseCreature`s.
 
 All four still report `pass: true`. `PathFollower.Follow` falls back to stepping blindly at the
 goal when there is no path (`PathFollower.cs:134-145`) and the walker shoves its way round, so the
-fleet arrives and nothing is counted. The column to read after these edits is **`arrivals with no
-route`** in `Data/Live/walk-audit.json`, never `pass`.
+fleet arrives and nothing is counted. `arrivals`.`failed` reads **0** as well, for the same reason.
+The field that tells the truth is **`pathTiles`** on each row of `Data/Live/walk-audit.json` — see
+step 6.
 
 ---
 
@@ -50,6 +89,14 @@ route`** in `Data/Live/walk-audit.json`, never `pass`.
 
 **One record is the whole of items 3 and 4 in the memo.** Both failing pairs point at the same
 arrival.
+
+One detail worth knowing before you judge how urgent this is: on the `uo-trinsic-forge-s1` pair the
+walk audit records **`steps: 0`** and stops where it started, at 1884,2646. The walker never tries,
+because `range: 2` already covers 1884,2644 from the waypoint tile — so it counts as arrived
+without moving. The `uo-wp-221` pair is the one that really walks: 18 steps, ending at 1886,2648,
+four tiles off the goal. The reason to fix the record anyway is the **stand-tile** picker, which
+ranks tiles inside the arrivals' ranges for a crafting station (`BotWorkSites.cs:1042`) — an
+unreachable tile in that set is a candidate a smith can be sent to and cannot occupy.
 
 `Data/Custom/navigation.json:2337`
 
@@ -107,10 +154,11 @@ these four arrivals are the forge apron and scatter must not move them.
 
 ## 2. `trinsic-forge` — repoint the three arrivals that ride on `uo-wp-221`
 
-`uo-wp-221` (`navigation.json:218`, 1896,2666) is **21–22 tiles** from all four forge arrivals,
-against `Custom.NavHopMaxTiles = 12` (`Config/Custom.cfg:37`). Three arrivals name it anyway.
+`uo-wp-221` (`navigation.json:218`, 1896,2666) is **20–22 tiles** from the four forge arrivals
+(22, 20, 21, 20 by Chebyshev), against `Custom.NavHopMaxTiles = 12` (`Config/Custom.cfg:37`). Three
+arrivals name it anyway.
 
-`uo-wp-221-s1-s1` (`navigation.json:535`, 1890,2653,z10) is 8–9 tiles from the same tiles and is
+`uo-wp-221-s1-s1` (`navigation.json:535`, 1890,2653,z10) is **7–9 tiles** from the same tiles and is
 already the last hop before the forge in the graph:
 
 ```
@@ -152,10 +200,13 @@ second point to fall back on.
 
 **Why there is no route.** The tile is fine — `[TileProbe 1497 1612 20` gives
 `CanFit True, CanSpawnMobile True` and allows all eight steps. The building is the problem. Probed
-tile by tile, the inn's ground floor is x 1492–1498 × y 1605–1615 at z20/z21, sealed by wall at
-x 1491 and x 1499 and closed to the north by the block at y 1601–1604. **Its only ground-level
-doors are on the south face** — `0x06A5` and `0x06A7` at 1495,1620 and 1496,1620, plus `0x06AD` at
-1499,1618. The door above 1497,1612 is at **z 40**: that is the first floor, not a way in.
+tile by tile over x 1487–1502 × y 1598–1620, the inn's ground floor runs **x 1492–1498 at z20/z21
+from y 1605 down to y 1612**, narrowing to the x 1496–1498 column below that. It is sealed by wall
+at **x 1491 and x 1499** for its whole height. To the north, the only standable tiles in y 1601–1604
+are an interior stair at x 1496–1498 (z27 / z22 / z20) and **y 1601 is solid across its top**, so
+that is a dead end rather than a way in. **The only ground-level doors are on the south face** —
+`0x06A5` and `0x06A7` at 1495,1620 and 1496,1620, plus `0x06AD` at 1499,1618. The door above
+1497,1612 is at **z 40**: that is the first floor, not a way in.
 
 `uo-central-britain-road-2` (`:561`, 1489,1603,z17) is outside to the **north-west**. Stock drains
 at **658 expansions with a budget of 8,000** — no route at any budget. The destination's own centre
@@ -266,9 +317,19 @@ Check the line endings survived: `head -c 4 Data/Custom/navigation.json | xxd -p
 In this order:
 
 1. `[NavReload`
-2. `[NavAudit full` — expect 0/0/0/0/0
-3. `[WalkAudit` — then read **`arrivals`.`failed`** and the no-route rows in
-   `Data/Live/walk-audit.json`. `pass: true` means nothing here.
+2. `[NavAudit full` — expect `0 blocked, 0 over cap`, `0 unstandable arrival(s), 0 stale Z,
+   0 struck edge(s)`, `0 cliff pair(s)`. Occupied edges are warning-only; a bot standing on a
+   waypoint is not a finding.
+3. `[WalkAudit` — then count the no-route rows in `Data/Live/walk-audit.json`:
+
+   ```
+   rows where kind == "arrival" and probeClass == "bot" and tiles > 1 and pathTiles == 0
+   ```
+
+   **Not `arrivals`.`failed`, and not `pass`** — both read 0 today with all four broken.
+   `pathTiles` is the one that tells the truth: `NavWalkAudit.cs:1315-1330` sets it to 0 when
+   `MovementPath` finds nothing, and it is measured *before* the probe moves, so the blind-step
+   rescue cannot launder it. It should fall from **4** to **0**.
 4. `node --test tools/editor/*.test.js` — 380
 5. `[CoreSmoke` — `Nav.Data` should not have gained a warning
 

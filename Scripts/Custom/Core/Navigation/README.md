@@ -420,6 +420,35 @@ which is why two new edges across a mountain face passed `[NavAudit` first time.
 waypoint cannot cover a zone 26 tiles deep inside a 12-tile cap; the worst tile is now 9 tiles from
 a waypoint rather than 21.
 
+#### Four more of the same shape — `ARRIVAL-RELOCATIONS.md`
+
+`PATHFINDER-DECISION.md` §1 found four arrival edges with **no engine route**, and the 14 September
+2026 session took each apart against the running engine.
+**[`ARRIVAL-RELOCATIONS.md`](ARRIVAL-RELOCATIONS.md)** is the result: the record, the probe reading,
+why no route exists, and the exact edit — a numbered list to work through in the editor, ending at
+`[NavExportGolden`. Four records change in three places; `navigation.json` was deliberately **not**
+edited by that session.
+
+Two findings from it belong here rather than in a list Sean will delete when it is done:
+
+- **`nav-hop` cannot answer a question about a bot, because its probe is more permissive than one.**
+  `CorridorProbe : BaseCreature` (`NavCorridor.cs:259`) takes `FastAStarAlgorithm`'s `BaseCreature`
+  branch, which sets **both** `MoveImpl.AlwaysIgnoreDoors` and `MoveImpl.IgnoreMovableImpassables`
+  (`FastAStarAlgorithm.cs:97-101`); the `IBotActor` branch MODIFICATIONS entry 6 put beside it sets
+  only the first, on purpose (`:102-107`, and `BotPathPolicy`). The probe overrides
+  `CanOpenDoors => true` (`NavCorridor.cs:281`) and inherits
+  `CanMoveOverObstacles => Core.AOS || Body.IsMonster` (`BaseCreature.cs:1926`), true here because
+  the expansion is `EJ` — so it walks through crates, barrels and furniture a bot must route round.
+  On `uo-brit-west-rd-1-s2 -> brit-shop-provisioner-south` that is the whole difference between a
+  pass and a fail: **297 expansions and success for a creature, 301 and failure for a bot**, same
+  tiles, same stock budget of 300. The gap is systematic *inside buildings*, which is where arrival
+  points live. Verify a **fleet** arrival with `[NavHopProbe … bot`; `nav-hop` is still right for
+  the daily-life walkers, which really are `BaseCreature`s.
+- **`pass: true` is not evidence.** All four failing arrivals report it, because `PathFollower.Follow`
+  steps blindly at the goal when there is no path (`PathFollower.cs:134-145`) and the walker shoves
+  its way round. The column that tells the truth is **`arrivals` → `failed`** and the no-route rows
+  in `Data/Live/walk-audit.json`.
+
 ### The corridor search prefers roads
 
 `NavCorridor` weights each tile by what kind of ground it is - road 1, grass and sand 3, forest 4,

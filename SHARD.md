@@ -648,14 +648,28 @@ Measured, over a save taken after twelve minutes of ordinary running:
 
 | | |
 | --- | --- |
-| in the save | **57 bots owning 2,871 items** |
+| in the save | 57 bots owning **2,871** items — *inflated, see the correction below* |
 | orphans at the next boot | **26** - 13 `Backpack`, 13 `Gold` |
 | orphan serials found in the bot census | **0 of 26** |
-| bot-owned items that were orphaned | **0 of 2,871** |
+| bot-owned items that were orphaned | **0 of them** |
 
-**It is the second row that settles it.** A null owner check on 26 items is weak; *not one of 2,871
-bot-owned items being orphaned* is not. If the ephemeral delete ran before its items were attached,
-those 2,871 would be the orphan list.
+> **The item counts were inflated, corrected 14 September 2026.** `BotOrphans.WriteCensus` called
+> `Collect` on `bot.Backpack` and `bot.BankBox` *and then* looped `bot.Items`, which already holds
+> both layers — so every pack item was recorded twice. Measured before the fix: **2,632 reported
+> against 1,491 real, a 77% inflation**. After it, on a 57-bot fleet: **1,519 serials, zero
+> duplicates**. The 2,871 above was never re-measured on that save and cannot be now, so read it as
+> an upper bound of roughly 1.8× the true figure rather than as a count — and the same for
+> *"3,102 items"* and *"1,763 bot-owned serials"* in `Scripts/Custom/Bots/README.md`.
+>
+> **The same call was also minting bank boxes during the save** — `Mobile.BankBox` creates on miss
+> (`Server/Mobile.cs:10511`) — which is where 1,796 `Attempted to add … during world save` warnings
+> came from. Both calls are gone; `Core.SaveIntegrity` now fails `[CoreSmoke` if any save handler
+> constructs an entity. Full account in the Bots README under **Ephemerality**.
+
+**It is the second row that settles it.** A null owner check on 26 items is weak; *not one
+bot-owned item in the save being orphaned* is not. If the ephemeral delete ran before its items were
+attached, every one of them would be the orphan list. The ratio is zero whatever the denominator,
+which is why the correction above changes the arithmetic and not the finding.
 
 **And the ordering says why it cannot.** `Timer.DelayCall(Delete)` queued inside `Deserialize` goes
 onto the timer queue, and the **Timer thread does not start until after `World.Load` and after
@@ -705,6 +719,26 @@ tools into the same count. One backpack holding one gold pile is `BaseCreature.A
 **No fix was written, because nothing was ours to fix.** Where those loot packs come from is a
 separate question about ServUO's own creature lifecycle.
 
+**What the count actually tracks is the previous session, and 14 September settled it.** The
+observed range is now **6, 10, 30, 34, 50, 132, 136, 144, 160, 170, 240, 240 and 288** across every
+boot on record. Five consecutive boots on 14 September pin the variable down, with the bot
+population held at 54-57 throughout — each row is what the *previous* session left behind:
+
+| the session that preceded the boot | reaped at the next boot |
+| --- | --- |
+| a long run on 12 September | **160** — 80 `Backpack` + 80 `Gold` |
+| ~14 min, ordinary running plus nav probes | **34** |
+| ~3 min | **10** |
+| ~3 min | **6** |
+| ~10 min running the whole `[BotSmoke` chain | **144** — 72 `Backpack` + 72 `Gold` |
+
+So the earlier reading that *"the count tracking the bot population is a coincidence of scale"* is
+right, and can now be put more strongly: it tracks **how long and how busy the previous session
+was**, because that is how long stock creatures had to die and leave `AddLoot`/`PackGold` pairs
+behind. The last row is the clearest: four times as many as the 14-minute row produced, in less
+wall-clock time and at the same population, the only difference being how much combat the probes
+drove. Composition never varies — every count checked is exactly half `Backpack` and half `Gold`.
+
 
 ### The console is readable from outside its window
 
@@ -741,6 +775,24 @@ through it, so the save duration is the length of the longest freeze the shard h
 only place they appeared.
 
 Baseline, 61 bots and 219,308 items: **0.26 s** to save, 385 MB managed / 529 MB working set.
+
+### A world save must not change the world
+
+`Core.SaveIntegrity` (`Scripts/Custom/Core/SaveIntegrity.cs`) is the guard on that sentence. It
+brackets `BeforeWorldSave` to `AfterWorldSave` — the window in which the game thread is frozen and
+the only code that can run is a save handler — and **fails** if anything was constructed inside it.
+
+Three signals, because one is not enough. `Serial.LastItem` / `LastMobile` (`Server/Serial.cs:14-15`)
+move only when something is constructed and never when something is deleted, which makes a non-zero
+delta an exact detector; the byte growth of `world-save-errors.log` catches the delete side too; and
+the console tap, scoped by `ConsoleTap.Sequence`, is what *names* the offending entity. The
+`World.Items` count is reported beside them but only a **rise** fails it — `strategy.ProcessDecay()`
+runs at `Server/World.cs:1189`, inside the bracket, and is entitled to delete.
+
+It reports **Warn, not Ok, before it has seen a save**: a check that has observed nothing must not
+let a clean `[CoreSmoke` certify a contract it never tested. The defect it was written for is in the
+Bots README under **Ephemerality** — a census that created a bank box on every bot at every save for
+three days, 1,796 warnings, and no build ever went red.
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is

@@ -324,6 +324,21 @@ already fixed in the data, so that it buys something new rather than the same th
 
 Three, all pre-existing, none introduced here.
 
+> **The first two were fixed the next day, 14 September 2026. Both entries below are now false and
+> are kept for the record.** `94c60973` moved `brit-tanner-shopfront` from the door tile at
+> 1439,1612 to **1438,1611** and re-exported the goldens in the same commit; both files under
+> `Data/Custom/golden/` are byte-identical to their shipped counterparts today (same git blob), and
+> `node --test tools/editor/*.test.js` runs **380 tests, 380 pass, 0 fail**.
+>
+> The third still stands. And the four arrivals §1 named have since been taken apart against the
+> running engine — see **[`ARRIVAL-RELOCATIONS.md`](ARRIVAL-RELOCATIONS.md)**, which also corrects
+> §1's account of them in one respect: `uo-trinsic-forge-s1 -> trinsic-forge` and
+> `uo-wp-221 -> trinsic-forge` are **one record between them**, the arrival at 1884,2644 walled in
+> by the forge, the anvil and a sandstone wall. A fourth finding belongs beside these three:
+> `nav-hop`'s probe is a `BaseCreature` (`NavCorridor.cs:259`), so it reports the provisioner edge
+> **OK** while the same hop fails for a bot — 297 expansions against 301, on identical tiles at the
+> same budget.
+
 - **`brit-tanner-shopfront` (1439,1612,20) is a closed door tile.** `[TileProbe` reads
   `CanFit False`, `CanSpawnMobile False`, and all eight steps onto it refused for a creature. So
   `[NavAudit full` reports `brit-tanner-street -> brit-tanner-shopfront` **blocked** — one blocked
