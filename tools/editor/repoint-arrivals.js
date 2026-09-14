@@ -156,7 +156,9 @@ async function ask(port, name, body, timeoutMs = 60000) {
             authHeaders())
     }, body);
 
-    if (dropped.status !== 200) {
+    // 202, not 200: the bridge accepts a token and the shard answers later (bridge.js:1131). A
+    // 409 is its per-operation busy reply - a token of that name is still on disk unread.
+    if (dropped.status !== 202 && dropped.status !== 200) {
         fail(`the bridge answered ${dropped.status} dropping '${name}': ${dropped.text}`);
     }
 
