@@ -159,3 +159,140 @@ test('farListed ignores an id naming nothing, or naming another facet', () => {
 
     assert.deepStrictEqual(far, []);
 });
+
+// ---------------------------------------------------------------------------------------------
+// ROUTABILITY IS THE GATE, DISTANCE IS THE TIEBREAK.
+//
+// The shape below is brit-inn-central's, reduced to what made it wrong: a road waypoint two tiles
+// from the destination's CENTRE that cannot reach its arrival, and a door waypoint eight tiles from
+// that centre that can. Judged by centre distance the road wins and the record is left naming a
+// waypoint no bot can use; judged by routes to the arrivals the door wins, which is the answer.
+
+/**
+ * A sealed centre.
+ *
+ *   road (0,0) --- door (0,10)          one component, flooded from `road`
+ *   inn centre (0,2)                    2 tiles from road, 8 from door
+ *   inn arrival (0,8)                   8 tiles from road, 2 from door - both inside the cap
+ *
+ * Both waypoints pass the cap for both records, so the cap cannot separate them. Only the oracle
+ * can, which is the point: this is the case the old rule got wrong with every instrument green.
+ */
+function sealed() {
+    return {
+        waypoints: [
+            { id: 'road', map: 'Trammel', x: 0, y: 0, z: 0 },
+            { id: 'door', map: 'Trammel', x: 0, y: 10, z: 0 }
+        ],
+        edges: [{ from: 'road', to: 'door', kind: 'walk' }],
+        destinations: [
+            { id: 'inn', map: 'Trammel', x: 0, y: 2, z: 0, waypoints: 'road' }
+        ],
+        arrivals: [
+            { destination: 'inn', x: 0, y: 8, z: 0, waypoints: 'road' }
+        ]
+    };
+}
+
+/** An oracle over tiles: every pair not named answers false. `null` is for "would not say". */
+function oracle(allowed) {
+    const ok = new Set(allowed);
+
+    return (a, b) => ok.has(`${a.x},${a.y}>${b.x},${b.y}`);
+}
+
+function repointInn(data, extra) {
+    return repoint.repointFor(
+        data, data.destinations[0],
+        Object.assign({ map: 'Trammel', home: 'road' }, extra || {}));
+}
+
+test('a waypoint by a sealed centre is refused when it cannot route to the arrivals', () => {
+    // `road` is the nearest thing to the centre and the record already names it. It reaches the
+    // centre and nothing else, which is exactly what a centre inside a building is worth.
+    const data = sealed();
+    const result = repointInn(data, {
+        routes: oracle(['0,10>0,8', '0,8>0,10'])
+    });
+
+    assert.strictEqual(result.stranded, false);
+    assert.strictEqual(result.nearest, 'door');
+    assert.strictEqual(result.waypoints, 'door');
+    assert.strictEqual(result.verified, true);
+    assert.strictEqual(result.changed, true);
+});
+
+test('the nearest waypoint is still chosen when it does route to every arrival', () => {
+    // The gate is not a preference for far waypoints. With both approaches routable the nearest
+    // wins, which is the rule the tool has always had - now standing on an answer rather than an
+    // assumption.
+    const data = sealed();
+    const result = repointInn(data, {
+        routes: oracle(['0,0>0,8', '0,8>0,0', '0,10>0,8', '0,8>0,10'])
+    });
+
+    assert.strictEqual(result.nearest, 'road');
+    assert.strictEqual(result.verified, true);
+    assert.strictEqual(result.changed, false, 'it already named road, so nothing moved');
+});
+
+test('distance orders the survivors, and only the survivors', () => {
+    // Three candidates. The nearest cannot route, so it is out; of the two that can, the nearer
+    // one wins. That is the whole of "a tiebreaker, not a gate".
+    const data = sealed();
+
+    data.waypoints.push({ id: 'lane', map: 'Trammel', x: 0, y: 14, z: 0 });
+    data.edges.push({ from: 'door', to: 'lane', kind: 'walk' });
+
+    const result = repointInn(data, {
+        routes: oracle([
+            '0,10>0,8', '0,8>0,10',   // door,  8 tiles from the centre
+            '0,14>0,8', '0,8>0,14'    // lane, 12 tiles from the centre, also routable
+        ])
+    });
+
+    assert.strictEqual(result.nearest, 'door', 'door is nearer to the centre than lane');
+    assert.strictEqual(result.waypoints, 'door', 'lane was never listed, so it is not kept');
+});
+
+test('with no oracle the rule falls back to distance and marks itself unverified', () => {
+    // The editor has to keep working with the shard down, and this is what that costs: the old
+    // answer, labelled. A caller that writes files refuses on it; repoint-arrivals.js does.
+    const result = repointInn(sealed());
+
+    assert.strictEqual(result.nearest, 'road', 'distance alone still prefers the sealed centre');
+    assert.strictEqual(result.verified, false);
+});
+
+test('an oracle that will not answer is undecided, not a refusal', () => {
+    // null means nobody asked the engine, which must not read as "no route" - that would strand
+    // every record the moment a probe timed out.
+    const result = repointInn(sealed(), { routes: () => null });
+
+    assert.strictEqual(result.stranded, false);
+    assert.strictEqual(result.nearest, 'road');
+    assert.strictEqual(result.verified, false);
+});
+
+test('the CLI asks the engine on the bot class, at the stock budget, through nav-hop-probe', () => {
+    // A source assertion rather than a behavioural one, in this file's neighbours' style
+    // (coverage.test.js pins HOP_CAP the same way): the thing worth pinning is WHICH question the
+    // CLI asks, and running it for real would need a shard.
+    //
+    // Three claims, each of which has a reason to be wrong later:
+    //   - `bot`, because a creature walks over the movable impassables a bot goes round, which is
+    //     297 expansions against 301 on the provisioner hop;
+    //   - no `budget` word, because the fleet plans at the stock 300 and a probe at any other
+    //     number answers about a shard nobody runs;
+    //   - `nav-hop-probe` and not `nav-hop`, because nav-hop goes through MovementPath, which
+    //     fails any goal within one tile - the best approach a record could have.
+    const source = require('node:fs').readFileSync(
+        require('node:path').join(__dirname, 'repoint-arrivals.js'), 'utf8');
+
+    assert.match(source, /\$\{tileKey\(a\)\} \$\{tileKey\(b\)\}`\)\.join\(' '\)\} bot`/,
+        'the probe body must end in the bot class');
+    assert.ok(!/budget \$\{/.test(source) && !/ budget \d/.test(source),
+        'no budget word: stock is what the fleet plans at');
+    assert.match(source, /ask\(port, 'nav-hop-probe'/,
+        'nav-hop cannot answer this - see the header');
+});

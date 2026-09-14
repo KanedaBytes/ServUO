@@ -1835,8 +1835,17 @@ function repointDragged(shape) {
         shape.props.waypoints = result.waypoints;
         pushOp({ op: 'props', shapeId: shape.id, before, after: { ...shape.props } });
         markDirty(shape);
+
+        // UNVERIFIED, AND IT SAYS SO. The rule's gate is an engine route to every arrival both
+        // ways, and the browser hands it no oracle - a drag is synchronous and the engine is a
+        // round trip away, so this falls back to straight-line distance, which is the ordering
+        // that kept brit-inn-central's waypoint. The correction is not silent: the hop check
+        // below asks the shard about the list this just wrote, and `repoint-arrivals.js` is the
+        // gated pass. Say which of the two answers this is.
         setStatus(
-            `Re-pointed to ${result.nearest} (${result.tiles} tiles): ${result.waypoints}`, 'ok');
+            `Re-pointed to ${result.nearest} (${result.tiles} tiles): ${result.waypoints}`
+            + `${result.verified ? '' : ' - by distance; run repoint-arrivals.js to verify routes'}`,
+            'ok');
         showProperties(shape);
     }
 
