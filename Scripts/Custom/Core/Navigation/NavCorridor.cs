@@ -1007,9 +1007,23 @@ namespace Server.Custom
             return hops;
         }
 
+        /// <summary>
+        /// Can the probe walk from a to b?
+        ///
+        /// THE SHORT-CIRCUIT HAS TO MATCH MovementPath'S OWN, NOT BE NARROWER THAN IT. It used to
+        /// ask only whether X and Y were both equal, while MovementPath returns unsuccessfully for
+        /// ANY goal within one tile (MovementPath.cs:34-35) - it has nothing to plan, because the
+        /// goal is already a single step away. So an adjacent pair fell through to a search that
+        /// was always going to answer no, and `nav-hop` reported the closest approach a record can
+        /// possibly have as having no route at all.
+        ///
+        /// Measured on the Trinsic forge apron, 14 September 2026: 1884,2646 -> 1885,2645 is one
+        /// diagonal tile and answered NO ROUTE both ways, while 1884,2646 -> 1886,2645, two tiles
+        /// away past the same fixtures, answered OK. The nearer pair failing is the tell.
+        /// </summary>
         private static bool Pathable(Map map, CorridorProbe probe, Point3D a, Point3D b)
         {
-            if (a.X == b.X && a.Y == b.Y)
+            if (Utility.InRange(a, b, 1))
             {
                 return true;
             }
