@@ -109,15 +109,20 @@ sides by the smithy's own fixtures:
 
 | neighbour | what is on it | `CanFit` |
 | --- | --- | --- |
-| 1884,2645 (N) | `0x0FB1 'forge'`, **Impassable** | **False** |
-| 1885,2644 (W) | `0x0FB0 'anvil'`, **Impassable** | **False** |
-| 1883,2644 (E) | `0x0166` / `0x015F` sandstone wall | **False** |
-| 1883,2645 (NE) | sandstone wall | **False** |
+| 1884,2645 (**S**) | `0x0FB1 'forge'`, **Impassable** | **False** |
+| 1885,2644 (**E**) | `0x0FB0 'anvil'`, **Impassable** | **False** |
+| 1883,2644 (**W**) | `0x0166` / `0x015F` sandstone wall | **False** |
+| 1883,2645 (**SW**) | sandstone wall | **False** |
+
+*(North is decreasing `y`. The eight `STEP` lines name the tile a probe stood on, so
+`STEP North from 1884,2645` means the forge tile is the one to the **south**.)*
 
 `[TileProbe 1884 2644 0` reads `STAND … CanFit True, CanSpawnMobile False` and refuses **four of
-eight** steps — every diagonal. The north-west diagonal from 1885,2645 is refused because both of
-its orthogonals are the forge and the anvil. The only approach left is from the south, and
-`uo-trinsic-forge-s1` is two tiles **north** of it, on the other side of the forge.
+eight** steps — every diagonal. The south-east diagonal from 1885,2645 is refused because both of
+its orthogonals are the forge and the anvil. Of the four orthogonal neighbours, three cannot be
+stood on at all, so **the only way in is from the north, at 1884,2643** — and
+`uo-trinsic-forge-s1` is two tiles **south**, with the forge sitting directly between it and the
+arrival.
 
 Stock drains the open list rather than giving up: **236 expansions with the budget raised to
 8,000** from two tiles away, and **859** from `uo-wp-221`. There is no route at any budget.
