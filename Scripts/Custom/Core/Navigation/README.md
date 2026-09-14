@@ -446,27 +446,40 @@ writer and the C# writer still agree byte for byte.
 
 Three findings outlived the list that carried them:
 
-- **`repoint-arrivals.js` measures to a destination's centre tile, and for a sealed building that is
-  a tile no bot ever stands on.** It left `brit-inn-central`'s destination naming
-  `uo-central-britain-road-2` because that waypoint is 7 tiles from the centre at 1496,1610 —
-  comfortably inside the cap — while the route it actually hands the walker, to the arrival, is
-  15 tiles and plans **one way only**. Distance to the centre is not routability to the arrivals;
-  that record had to be repointed explicitly. Worth checking by hand whenever a destination sits
-  indoors.
+- **`repoint-arrivals.js` measured to a destination's centre tile, and for a sealed building that
+  is a tile no bot ever stands on** — fixed 14 September 2026. It left `brit-inn-central`'s
+  destination naming `uo-central-britain-road-2` because that waypoint is 7 tiles from the centre
+  at 1496,1610 — comfortably inside the cap — while the route it actually hands the walker, to the
+  arrival, is 15 tiles and plans **one way only**.
 
-- **`nav-hop` cannot answer a question about a bot, because its probe is more permissive than one.**
-  `CorridorProbe : BaseCreature` (`NavCorridor.cs:259`) takes `FastAStarAlgorithm`'s `BaseCreature`
-  branch, which sets **both** `MoveImpl.AlwaysIgnoreDoors` and `MoveImpl.IgnoreMovableImpassables`
-  (`FastAStarAlgorithm.cs:97-101`); the `IBotActor` branch MODIFICATIONS entry 6 put beside it sets
-  only the first, on purpose (`:102-107`, and `BotPathPolicy`). The probe overrides
+  **Routability is the gate now and distance is only the tiebreak.** An approach qualifies only if
+  it is inside the hop cap of **every** arrival of the destination and the engine plans a route to
+  each of them **both ways**, on the bot class at the stock budget; the survivors are then ordered
+  by distance. The oracle is injected (`options.routes`, exactly as `options.canReach` already
+  was), so the rule stays pure and testable and the editor keeps working with the shard down — it
+  falls back to the old ordering and reports `verified: false`, and `--write` refuses on that.
+  The oracle is built on `nav-hop-probe`, deliberately not `nav-hop`: see the adjacency note below.
+
+- **`nav-hop` walks the fleet's class now, and it did not used to** — fixed 14 September 2026.
+  Its probe was `CorridorProbe : BaseCreature` (`NavCorridor.cs:259`), which takes
+  `FastAStarAlgorithm`'s `BaseCreature` branch: that branch sets **both**
+  `MoveImpl.AlwaysIgnoreDoors` and `MoveImpl.IgnoreMovableImpassables`
+  (`FastAStarAlgorithm.cs:97-101`), while the `IBotActor` branch MODIFICATIONS entry 6 put beside
+  it sets only the first, on purpose (`:102-107`, and `BotPathPolicy`). The probe also overrides
   `CanOpenDoors => true` (`NavCorridor.cs:281`) and inherits
   `CanMoveOverObstacles => Core.AOS || Body.IsMonster` (`BaseCreature.cs:1926`), true here because
-  the expansion is `EJ` — so it walks through crates, barrels and furniture a bot must route round.
-  On `uo-brit-west-rd-1-s2 -> brit-shop-provisioner-south` that is the whole difference between a
-  pass and a fail: **297 expansions and success for a creature, 301 and failure for a bot**, same
-  tiles, same stock budget of 300. The gap is systematic *inside buildings*, which is where arrival
-  points live. Verify a **fleet** arrival with `[NavHopProbe … bot`; `nav-hop` is still right for
-  the daily-life walkers, which really are `BaseCreature`s.
+  the expansion is `EJ` — so it walked through crates, barrels and furniture a bot must route
+  round, and answered OK about hops the fleet cannot walk. The gap is systematic *inside
+  buildings*, which is where arrival points live.
+
+  **The token now defaults to `bot` and takes `creature` as an argument**, with the classes taken
+  from the walk audit's registry so they mean the same thing in both instruments. Measured through
+  the token on `1424,1739,20 -> 1414,1748,10`: the default answers **NO ROUTE** and explicit
+  `creature` answers **OK**, same tiles and the same stock budget of 300 — where before the default
+  answered OK. `creature` is still right for the daily-life walkers, which really are
+  `BaseCreature`s, and it is still what the road-**authoring** paths use (`nav-route`, `NavAdopt`,
+  `NavRejoin`), because a road they reject is a road those walkers lose. `Nav.HopClass` fails if
+  the two classes ever stop parting on that fixture.
 - **`pass: true` is not evidence, and neither is `arrivals`.`failed`.** All four failing arrivals
   reported `pass: true` and the summary read `failed: 0`, because `PathFollower.Follow` steps
   blindly at the goal when there is no path (`PathFollower.cs:134-145`) and the walker shoves its
@@ -476,6 +489,28 @@ Three findings outlived the list that carried them:
   `kind == "arrival"` with `tiles > 1` and `pathTiles == 0` — and keep the `tiles > 1` clause, or
   the 34 legitimately adjacent hops, where `MovementPath` returns nothing by design
   (`MovementPath.cs:34`), read as failures.
+
+#### Two Trinsic records the new rule closed
+
+- **`trinsic-bank-2` had one arrival where its crowd wants three**, and every other bank in the
+  file has four. 1906,2685 and 1910,2684 were added on the bank's z0 floor — both `CanFit True`
+  with all eight steps allowed, both routing to and from `uo-wp-219` and `uo-wp-219-s1` as a bot at
+  the stock budget, both `range 2, exclusive false`, which is unanimous across every bank arrival
+  in the file. The garrison itself is **one** spawner with `MX=3`, not three spawners, so the
+  recipe did not change — the arrivals were the shortfall, and `Bots.Population` stopped naming it.
+
+  Its destination also named `uo-wp-219` at 17 tiles from the centre, and the new rule corrected
+  that on its own: it prepended `uo-wp-219-s1` and **kept** `uo-wp-219`, because by the measure
+  that matters that waypoint was never bad — it is 6–10 tiles from every arrival a bot walks to,
+  and only "over cap" by the centre distance the fix replaced.
+
+- **`trinsic-shop-tailor-2` was not a distance problem at all.** Its centre at 1982,2832 sat in the
+  **north** room and its only arrival in the **south** one, with a solid wall at y2837 between them
+  and an interior door at 1980,2837. The south room is the shop — it holds the `Tailor` signpost at
+  1986,2846, the customer doors, the counters, the scissors, the dress form and the display cases,
+  while the north room is the back workroom with two upright looms, a spinning wheel and the wool.
+  So the centre moved to 1986,2841 on the shop floor rather than two tiles south inside the
+  workroom to satisfy a measurement, and 14 tiles from its waypoint became 6.
 
 ### The corridor search prefers roads
 
@@ -1398,13 +1433,17 @@ It also costs nothing. The reachability path runs **before** the per-neighbour p
 tile costs one `MovementPath` instead of one per neighbour: 54,706 paths in 7.6s became 76,866 in
 8.0s.
 
-**The probe that established this over-reported twice, both times the same way.** `nav-hop` answers
-with `MovementPath(probe, goal)` and has no special case for an adjacent goal, where `MovementPath`
-returns no path at all — so probing *waypoint to a tile one away*, or *a box tile to a neighbour one
-away*, reads `ok:false` for a step that is simply a step. `NavNeighbourhood.Paths` has had the
-`Chebyshev <= 1` short-circuit since it was written, and `[NavAudit` skips adjacent edges for the
-same reason. Filter those out and the two instruments agreed on all 22 pairs exactly, which is what
-made the 34 trustworthy.
+**The probe that established this over-reported twice, both times the same way — and that is now
+fixed.** `nav-hop` answers with `MovementPath(probe, goal)`, and `MovementPath` returns no path at
+all for an adjacent goal (`MovementPath.cs:34-35`); `NavCorridor.Pathable` short-circuited only
+when x *and* y were equal, so probing *waypoint to a tile one away*, or *a box tile to a neighbour
+one away*, read `ok:false` for a step that is simply a step. `NavNeighbourhood.Paths` has had the
+`Chebyshev <= 1` short-circuit since it was written and `[NavAudit` skips adjacent edges for the
+same reason; `Pathable` now does too. Measured on the Trinsic forge apron: 1884,2646 -> 1885,2645
+is one diagonal tile and read NO ROUTE both ways before the fix and OK after, while
+1884,2646 -> 1886,2645, two tiles past the same fixtures, read OK throughout - the nearer pair
+failing is the tell. Filter those out of the older measurement and the two instruments agreed on
+all 22 pairs exactly, which is what made the 34 trustworthy.
 
 **Two things it is easy to build smaller, and both would have found nothing.**
 

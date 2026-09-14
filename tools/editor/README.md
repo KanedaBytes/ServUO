@@ -483,11 +483,27 @@ the hop cap of *every* waypoint — the stranding case — so a record naming so
 waypoint sits six tiles off warns about nothing and reads as fine. Britain's rebase left 21 arrivals
 over the cap from the waypoint they named and 49 naming something that was no longer nearest.
 
-The tool re-points both kinds to the nearest **reachable** waypoint, keeps every listed one still
-inside the cap (a shop fronting two streets keeps both approaches), and never touches a tile, a Z or
-an `exclusive`/`exact`/`range` flag. Reachability is flooded from the home waypoint rather than
-assumed: a nearer waypoint on an island trades a long last hop for no route at all. `--tag` scopes it
-to a town, because a town is the unit somebody re-bases.
+**An approach is kept or chosen only if a route exists in both directions to every arrival of the
+destination**, walked with the bot class at the stock pathfinder budget and within the hop cap;
+distance to the destination's centre is a tiebreaker among the survivors, not a gate. That is the
+rule as of 14 September 2026, and `brit-inn-central` is why it changed: its centre sits inside a
+sealed building 7 tiles from `uo-central-britain-road-2`, comfortably inside the cap, so the old
+distance rule kept a waypoint whose real route to the arrival is 15 tiles and plans one way only.
+Distance to a centre is not routability to the arrivals.
+
+The tool still keeps every listed approach that still serves (a shop fronting two streets keeps
+both), and still never touches a tile, a Z or an `exclusive`/`exact`/`range` flag. Reachability is
+flooded from the home waypoint rather than assumed: a nearer waypoint on an island trades a long
+last hop for no route at all. `--tag` scopes it to a town, because a town is the unit somebody
+re-bases.
+
+**This needs a running shard now.** Only the engine can answer the routability question, so the
+pass asks it through the `nav-hop-probe` token before deciding anything - on the bot class, at the
+stock budget, in chunks under the 4096-byte token cap. With no shard the rule falls back to the old
+distance ordering, every affected record is reported `UNVERIFIED`, and `--write` refuses; the dry
+run still prints, because seeing the proposal is how somebody decides to go and start the shard.
+`nav-hop` is deliberately **not** the oracle: it goes through `MovementPath`, which fails any goal
+within one tile, so the best approach a record could possibly have would read as no route.
 
 **The rule lives in `js/repoint.js` and the editor calls it too** — see *Dragging a destination or
 an arrival* below. The script is the CLI around it: the flags, the scoping and the save. It used to
@@ -600,8 +616,11 @@ invalidating the coverage overlay.
   tiledata, so the shard answers it, using the same classification the search weights by rather
   than a second opinion that could disagree.
 
-**Every edit re-verifies.** Any hop that moves is walked again by a real `BaseCreature` through
-`nav-hop`, and drawn green or red. An edit that merely looked plausible is exactly what this tool
+**Every edit re-verifies.** Any hop that moves is walked again through `nav-hop`, and drawn green
+or red. Since 14 September 2026 that walk is a real **`PlayerBot`** by default rather than a
+`BaseCreature` - the fleet's own class, and a stricter one, because the creature branch is granted
+`IgnoreMovableImpassables` and walks through the crates a bot routes around. Pass `creature` in the
+body for the daily-life walkers. An edit that merely looked plausible is exactly what this tool
 exists to stop somebody saving.
 
 ## Tiles
@@ -1919,7 +1938,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `health` | Writes `health.json` now rather than waiting for the timer |
 | `world-items` | `WorldItemSnapshot.TryWrite`; the body is an optional facet name. The art view's furniture |
 | `save` | `Misc.AutoSave.Save()` — exactly what `[Save` runs, backup rotation included |
-| `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`; answers to `Data/Live/nav-hop.json` |
+| `nav-hop` | Is this hop walkable, and where is the nearest road. Body `"verify x,y x,y ..."` (pairs) and/or `"snap x,y"`, plus an optional `bot` or `creature` - **defaults to `bot`**, the fleet's class. Answers to `Data/Live/nav-hop.json` |
 | `tile-probe` | What the engine sees at a tile, and whether it will let a step onto it. Body `"x,y"` or `"x,y,z"` (several may be given), or `"sweep <lo> <hi>"` for every world item in an ItemID range; answers to `Data/Live/tile-probe.json` and in the ack's `warnings` |
 | `site-reach` | Per-arrival harvest reach to `Data/Live/site-reach.json`. Body `"<mine\|lumber> x,y x,y …"` answers for tiles **not in `navigation.json` yet** |
 | `core-smoke` | `CoreSmoke.Run(null)` — *started*, not run; the report goes to the console and to `health.json` |

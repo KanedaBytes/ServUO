@@ -344,6 +344,11 @@ Three, all pre-existing, none introduced here.
 > branch that also grants `IgnoreMovableImpassables`, which the `IBotActor` branch withholds — so it
 > reports the provisioner edge **OK** while the same hop fails for a bot, 297 expansions against
 > 301, on identical tiles at the same budget.
+>
+> **That fourth finding is fixed as of 14 September 2026**: `nav-hop` now defaults to the bot class
+> and takes `creature` as an argument, and `Nav.HopClass` fails if the two ever stop parting on
+> that fixture. `repoint-arrivals.js` was corrected in the same session and now gates on
+> routability rather than centre distance.
 
 - **`brit-tanner-shopfront` (1439,1612,20) is a closed door tile.** `[TileProbe` reads
   `CanFit False`, `CanSpawnMobile False`, and all eight steps onto it refused for a creature. So
@@ -376,3 +381,10 @@ Everything is off by default and no upstream file was edited.
 **If the decision is "keep stock", `NavPathfinder.cs` and `NavHopProbe.cs` should go**, along with
 `NavActorCheck`'s ledger entry for the copied `BaseCreature` test — that entry says so at the site.
 `LoopCost.cs` and `NavPlannerCheck.cs` stay either way; they are not about this decision.
+
+> **`NavHopProbe.cs` no longer goes, whatever is decided about the pathfinder** (14 September
+> 2026). `repoint-arrivals.js` asks it whether a bot can walk each candidate approach, both ways,
+> at the stock budget - it is the route oracle behind the routability rule, and the only instrument
+> in the tree that answers that question per pair, on a named class, without `MovementPath`'s
+> adjacency behaviour in the way. It has stopped being a measurement for this decision and become
+> load-bearing for authoring. `NavPathfinder.cs` is untouched by that and still goes.
