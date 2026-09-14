@@ -204,9 +204,26 @@ namespace Server.Custom
 
                 var serials = new List<int>();
 
-                Collect(bot.Backpack, serials);
-                Collect(bot.BankBox, serials);
-
+                // EVERY LAYER, ONCE. Mobile.Items already holds the Backpack (Layer.Backpack) and
+                // the bank box (Layer.Bank), so this loop is the whole census on its own. Two
+                // explicit Collect calls used to stand above it, and both were wrong:
+                //
+                //   Collect(bot.Backpack, serials);
+                //   Collect(bot.BankBox, serials);
+                //
+                // The first was merely redundant, and recorded every pack item twice - itemCount
+                // was inflated by 77% (2,632 reported against 1,491 real, measured 14 September
+                // 2026), which is the denominator every figure in SHARD.md's orphan section rested
+                // on. The second was worse than redundant: Mobile.BankBox is a CREATING getter
+                // (Server/Mobile.cs:10498-10516, the allocation at :10511), so reading it from a
+                // WorldSave handler MINTED a bank box on every bot that had none. That printed
+                // 1,796 "Attempted to add 0x... BankBox during world save" warnings across 11-12
+                // September 2026 and left one surplus item per bot in every save.
+                //
+                // A census must not change what it counts. Do not put either call back - if a bot
+                // has a bank box, this loop finds it; if it has none, it owns none, which is the
+                // true answer. Core.SaveIntegrity (Scripts/Custom/Core/SaveIntegrity.cs) now fails
+                // [CoreSmoke if anything on the save path does this again.
                 foreach (Item worn in bot.Items)
                 {
                     Collect(worn, serials);

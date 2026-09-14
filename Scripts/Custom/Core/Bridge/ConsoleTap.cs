@@ -190,6 +190,26 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// How many lines have been appended since the tap was installed.
+        ///
+        /// Tail() alone cannot answer "what was written between these two moments", because the
+        /// buffer is a fixed-capacity ring and its Count saturates. A reader that samples this
+        /// before and after some window knows exactly how many lines that window produced, and can
+        /// ask Tail for precisely those - which is what Core.SaveIntegrity does across a save.
+        /// Zero when the tap is off, which is why Installed is beside it.
+        /// </summary>
+        public static long Sequence
+        {
+            get { lock (_sync) { return _sequence; } }
+        }
+
+        /// <summary>Whether the tee is actually in place, so a zero Sequence can be read correctly.</summary>
+        public static bool Installed
+        {
+            get { return _installed; }
+        }
+
         /// <summary>The tail, newest last, for the bridge. Cheap enough to call on a poll.</summary>
         public static IList<string> Tail(int count)
         {
