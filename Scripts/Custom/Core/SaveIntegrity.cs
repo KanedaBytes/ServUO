@@ -140,7 +140,15 @@ namespace Server.Custom
             int mobilesMade = Serial.LastMobile.Value - _lastMobileBefore;
             int itemDelta = World.Items.Count - _itemsBefore;
             int mobileDelta = World.Mobiles.Count - _mobilesBefore;
-            long safetyGrew = SafetyLogBytes() - _safetyBytesBefore;
+
+            // Both ends or neither. SafetyLogBytes returns -1 for "could not read", and subtracting
+            // that from a real length either way invents a number - an unreadable BEFORE against a
+            // readable AFTER would report the whole log as this save's growth and fail a clean save.
+            // An axis that could not be measured makes no claim; the serial counters carry the test.
+            long safetyAfter = SafetyLogBytes();
+            long safetyGrew = _safetyBytesBefore >= 0 && safetyAfter >= 0
+                ? safetyAfter - _safetyBytesBefore
+                : 0L;
 
             string firstOffender;
             int warned;
