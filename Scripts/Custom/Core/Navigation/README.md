@@ -420,16 +420,39 @@ which is why two new edges across a mountain face passed `[NavAudit` first time.
 waypoint cannot cover a zone 26 tiles deep inside a 12-tile cap; the worst tile is now 9 tiles from
 a waypoint rather than 21.
 
-#### Four more of the same shape — `ARRIVAL-RELOCATIONS.md`
+#### Four more of the same shape — fixed 14 September 2026
 
-`PATHFINDER-DECISION.md` §1 found four arrival edges with **no engine route**, and the 14 September
-2026 session took each apart against the running engine.
-**[`ARRIVAL-RELOCATIONS.md`](ARRIVAL-RELOCATIONS.md)** is the result: the record, the probe reading,
-why no route exists, and the exact edit — a numbered list to work through in the editor, ending at
-`[NavExportGolden`. Four records change in three places; `navigation.json` was deliberately **not**
-edited by that session.
+`PATHFINDER-DECISION.md` §1 found four arrival edges with **no engine route**. They were taken apart
+against the running engine and repaired in `20d744b8`: **seven records in three places**, and the
+two Trinsic failures turned out to be one record between them — the arrival at 1884,2644, walled in
+by the forge (`0x0FB1`), the anvil (`0x0FB0`) and sandstone, reachable only from the north while its
+waypoint sat two tiles south with the forge in between.
 
-Two findings from it belong here rather than in a list Sean will delete when it is done:
+| | before | after |
+| --- | --- | --- |
+| no-route arrival rows, `PlayerBot` | 4 | **0** |
+| no-route arrival rows, `BaseCreature` | 3 | **0** |
+| `[WalkAudit` | 2,514 / 0 / 0 and 2,514 / 0 / 1 | 2,510 / 0 / 0 and 2,510 / 0 / 2 |
+
+The walk counts fall by four per class because the over-cap `uo-wp-221` approach was dropped from
+`trinsic-forge` — the audit stopped testing an approach that should never have existed, rather than
+learning to pass it.
+
+**It was applied through the editor's own write path, not by hand** — the three tile moves as a
+single `POST /api/save/navigation` batch, then `repoint-arrivals.js --dest … --write` for the
+approach lists, so the canonical writer produced the bytes and the shard revalidated each save.
+`project.test.js`'s *"the shipped file is canonical"* passing afterwards is what proves the bridge's
+writer and the C# writer still agree byte for byte.
+
+Three findings outlived the list that carried them:
+
+- **`repoint-arrivals.js` measures to a destination's centre tile, and for a sealed building that is
+  a tile no bot ever stands on.** It left `brit-inn-central`'s destination naming
+  `uo-central-britain-road-2` because that waypoint is 7 tiles from the centre at 1496,1610 —
+  comfortably inside the cap — while the route it actually hands the walker, to the arrival, is
+  15 tiles and plans **one way only**. Distance to the centre is not routability to the arrivals;
+  that record had to be repointed explicitly. Worth checking by hand whenever a destination sits
+  indoors.
 
 - **`nav-hop` cannot answer a question about a bot, because its probe is more permissive than one.**
   `CorridorProbe : BaseCreature` (`NavCorridor.cs:259`) takes `FastAStarAlgorithm`'s `BaseCreature`
@@ -444,10 +467,15 @@ Two findings from it belong here rather than in a list Sean will delete when it 
   tiles, same stock budget of 300. The gap is systematic *inside buildings*, which is where arrival
   points live. Verify a **fleet** arrival with `[NavHopProbe … bot`; `nav-hop` is still right for
   the daily-life walkers, which really are `BaseCreature`s.
-- **`pass: true` is not evidence.** All four failing arrivals report it, because `PathFollower.Follow`
-  steps blindly at the goal when there is no path (`PathFollower.cs:134-145`) and the walker shoves
-  its way round. The column that tells the truth is **`arrivals` → `failed`** and the no-route rows
-  in `Data/Live/walk-audit.json`.
+- **`pass: true` is not evidence, and neither is `arrivals`.`failed`.** All four failing arrivals
+  reported `pass: true` and the summary read `failed: 0`, because `PathFollower.Follow` steps
+  blindly at the goal when there is no path (`PathFollower.cs:134-145`) and the walker shoves its
+  way round. The field that tells the truth is **`pathTiles`** on each row of
+  `Data/Live/walk-audit.json`: `NavWalkAudit.cs:1315-1330` sets it to 0 when `MovementPath` finds
+  nothing, and it is measured *before* the probe moves, so the rescue cannot launder it. Count
+  `kind == "arrival"` with `tiles > 1` and `pathTiles == 0` — and keep the `tiles > 1` clause, or
+  the 34 legitimately adjacent hops, where `MovementPath` returns nothing by design
+  (`MovementPath.cs:34`), read as failures.
 
 ### The corridor search prefers roads
 

@@ -330,14 +330,20 @@ Three, all pre-existing, none introduced here.
 > `Data/Custom/golden/` are byte-identical to their shipped counterparts today (same git blob), and
 > `node --test tools/editor/*.test.js` runs **380 tests, 380 pass, 0 fail**.
 >
-> The third still stands. And the four arrivals §1 named have since been taken apart against the
-> running engine — see **[`ARRIVAL-RELOCATIONS.md`](ARRIVAL-RELOCATIONS.md)**, which also corrects
-> §1's account of them in one respect: `uo-trinsic-forge-s1 -> trinsic-forge` and
+> The third still stands. And **the four arrivals §1 named were repaired in `20d744b8`** — seven
+> records in three places, applied through the editor's own write path. The no-route arrival rows
+> in `Data/Live/walk-audit.json` went **4 → 0** on the bot class and **3 → 0** on the creature one;
+> the working notes are gone with the job, and what survives them is in
+> `README.md`, *Every arrival must be routable, not just one of them*.
+>
+> That work corrects §1's account in one respect: `uo-trinsic-forge-s1 -> trinsic-forge` and
 > `uo-wp-221 -> trinsic-forge` are **one record between them**, the arrival at 1884,2644 walled in
-> by the forge, the anvil and a sandstone wall. A fourth finding belongs beside these three:
-> `nav-hop`'s probe is a `BaseCreature` (`NavCorridor.cs:259`), so it reports the provisioner edge
-> **OK** while the same hop fails for a bot — 297 expansions against 301, on identical tiles at the
-> same budget.
+> by the forge, the anvil and a sandstone wall — reachable only from the north, while its waypoint
+> sat two tiles south with the forge in between. A fourth finding belongs beside these three:
+> `nav-hop`'s probe is a `BaseCreature` (`NavCorridor.cs:259`) and takes the `FastAStarAlgorithm`
+> branch that also grants `IgnoreMovableImpassables`, which the `IBotActor` branch withholds — so it
+> reports the provisioner edge **OK** while the same hop fails for a bot, 297 expansions against
+> 301, on identical tiles at the same budget.
 
 - **`brit-tanner-shopfront` (1439,1612,20) is a closed door tile.** `[TileProbe` reads
   `CanFit False`, `CanSpawnMobile False`, and all eight steps onto it refused for a creature. So
