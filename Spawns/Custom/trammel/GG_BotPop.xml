@@ -843,11 +843,11 @@
     <Name>GG_BotPop_britain_shop_brit-shop-provisioner-south</Name>
     <UniqueId>84b83f90-53c1-80d5-9140-b8fe10bcd1ba</UniqueId>
     <Map>Trammel</Map>
-    <X>1414</X>
+    <X>1422</X>
     <Y>1748</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1414</CentreX>
+    <CentreX>1422</CentreX>
     <CentreY>1748</CentreY>
     <CentreZ>10</CentreZ>
     <Range>0</Range>
@@ -1263,12 +1263,12 @@
     <Name>GG_BotPop_trinsic_station_trinsic-forge</Name>
     <UniqueId>b262656b-63bd-3dcb-6c58-d97418d9c5dc</UniqueId>
     <Map>Trammel</Map>
-    <X>1884</X>
-    <Y>2644</Y>
+    <X>1886</X>
+    <Y>2645</Y>
     <Width>0</Width>
     <Height>0</Height>
-    <CentreX>1884</CentreX>
-    <CentreY>2644</CentreY>
+    <CentreX>1886</CentreX>
+    <CentreY>2645</CentreY>
     <CentreZ>0</CentreZ>
     <Range>0</Range>
     <MaxCount>1</MaxCount>
