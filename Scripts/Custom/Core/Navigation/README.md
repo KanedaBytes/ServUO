@@ -170,9 +170,12 @@ read when it was. **Where the two disagree, this section is the one that has bee
 - **The mainland is the ANCHOR's component**, `Custom.NavHomeWaypoint` (Britain's bank plaza), with
   largest-component only as a fallback for a graph that has named no anchor. Largest was wrong, and
   one adopt proved it by bringing in 481 waypoints against it.
-- **The graph, Trammel**: 1001 waypoints, 1153 walk edges, 65 destinations, 136 arrival points, 8
-  zones, 4 routes. `[NavAudit` paths every edge both ways against real map data in about half a
-  second warm; `full` adds the approach-tile cliff scan at about 9 s.
+- **The graph, Trammel**: 4155 waypoints, 4480 walk edges and 36 gate edges, 160 destinations, 298
+  arrival points, 8 zones, 4 routes, after the whole-Trammel adopt of 15 September 2026 (see the
+  editor README, *Adopting all of Trammel*). `[NavAudit full` is **29 s** on it - the edge pass and
+  the approach-tile scan together, 305,592 engine paths in 27.5 s of that - and reads 0 blocked,
+  0 over cap, 0 unstandable, 0 stale Z, 0 struck, 0 cliff pairs. It runs on the game thread, so a
+  full audit is a 29-second freeze; the default (no cliff scan) is the editor's post-save run.
 - **The shove diagnostic is two predicates.** `NavWalkFailures.Describe` tests types in order and no
   longer splits `Player` on the `NetState`, which used to file every link-dead player as a PlayerBot.
 
@@ -1718,8 +1721,21 @@ subdivided under the cap. That is a real pathfind per edge, which is why the wor
 test `[NavAudit` applies after a save, run before the proposal is written. The flood and
 `MovementPath` answer different questions and can disagree about a step; a hop the flood accepted
 and the engine refused fails its whole edge with the reason `flood ok, engine refused: a -> b`, so
-the disagreement shows in the proposal rather than at the next audit. Hops of one tile are skipped,
-as the audit skips them, because `MovementPath` returns no path for an adjacent goal.
+the disagreement shows in the proposal rather than at the next audit. **Hops of one tile are
+stepped, not pathed** (from 15 September 2026): `MovementPath` returns no path for an adjacent goal,
+so they used to be skipped, and the whole-Trammel adopt shipped two diagonal hops down a Z drop that
+`[NavAudit` then reported BLOCKED. `Movement.CheckMovement` is asked both ways now, the question the
+audit asks.
+
+**Which walker verifies is the caller's choice.** `nav-adopt` with `class=bot` verifies every hop
+with the walk audit's `PlayerBot` probe at the stock budget, and refuses to start if
+`Custom.NavPathfinder` is not `Off`; without it the `CorridorProbe` (a `BaseCreature`) verifies, as
+every road-authoring caller did. The whole-Trammel adopt used `bot`, because every road it proposed
+is one the fleet walks. `skip=name:x,y,w,h` sets a box aside - its records counted as SKIPPED, never
+failed - after the existing refusals. **No id already in `navigation.json` is ever proposed**, whatever
+ground it stands on, and **the reach check is gate-aware**: a saved waypoint seeds it only if the
+mainland reaches it by road or moongate (`NavConnectivity`), which is how Moonglow's roads join onto
+`gate-moonglow` and count as reached.
 
 **Ground we have already authored is skipped** - the union of our nav-zone rects and a hop cap's
 radius around every existing waypoint, derived rather than a Britain rectangle, so it keeps holding
@@ -1924,9 +1940,9 @@ edges walked at adopt time and nothing else.
 
 ## Seed data, and what is still missing
 
-The whole file, Trammel: **1001 waypoints, 1153 walk edges, 65 destinations, 136 arrival points, 8
-zones, 4 routes** - counted from `navigation.json` on 11 September 2026, when it read 996 and 1148
-here. Every edge was `kind: walk` until 15 September 2026, when the nine Trammel moongates became
+The whole file, Trammel: **4155 waypoints, 4480 walk edges, 36 gate edges, 160 destinations, 298
+arrival points, 8 zones, 4 routes** - counted on 15 September 2026 after the whole-Trammel adopt; it
+read 1001 and 1153 on 11 September. Every edge was `kind: walk` until 15 September 2026, when the nine Trammel moongates became
 36 gate edges - see *Moongates*.
 `[NavAudit` reports **0 blocked, 0 over-cap, 0 unstandable arrivals and 0 stale Z** — every edge has
 been pathed in both directions against real map data.

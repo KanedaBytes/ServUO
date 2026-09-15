@@ -440,6 +440,140 @@ them are longer than the hop cap and have to be subdivided.
 6. **Run `[NavAudit`.** It paths every walk edge, so it is the check that the adopted road is real
    rather than merely present.
 
+### Adopting all of Trammel
+
+*Run 15 September 2026, headless, one proposal and one save.* The box-at-a-time rule that stood here
+was for a graph whose joins reached twelve tiles and whose islands had no way in. Joins now reach a
+hundred, Save writes what reaches the graph, and the nine moongates are gate edges (Navigation
+README, *Moongates*) - so the whole facet is one adopt:
+
+```
+nav-adopt   0,0,5120,4096 class=bot skip=haven:3314,2345,500,750 skip=magincia:3540,2020,290,300 skip=wind:5120,0,260,210
+node tools/editor/adopt-report.js            # the table below
+node tools/editor/accept-adopt.js            # dry run
+node tools/editor/accept-adopt.js --write     # with the bridge started under GG_ACK_TIMEOUT_MS=180000
+```
+
+**What each word does.** `class=bot` verifies every hop both ways with the walk audit's `PlayerBot`
+probe at the stock budget, one-tile hops stepped rather than skipped, and asserts no hop over the
+cap. The three `skip=` boxes are **skipped, not failed**: Haven Island (the `Regions.xml` rect -
+uo-offline's data there is Ocllo, a different town), Magincia (their T2A layout; ours is New
+Magincia) and Wind (teleport-only; their data has nothing on the overworld there). Every existing
+refusal applied unchanged before them: authored ground, the x >= 5120 dungeon / Lost Lands strip
+and the gather spots the converter already dropped, dungeon-tagged records. Nothing already in
+`navigation.json` was proposed, so no Britain or Trinsic record was overwritten.
+
+**The walk took 50 seconds**: 1,599 edges, 12 failed, 3,432 waypoints proposed, 3,126 reaching the
+graph. `accept-adopt.js --write` saved it through `/api/save/navigation` (the save route's body limit
+is 32 MiB now; the proposal was 850 KB and the save several MB), the shard reloaded it, and the file
+went from **1,031 waypoints, 1,176 walk + 36 gate edges, 70 destinations, 146 arrivals** to **4,155,
+4,480 + 36, 160, 298** after the corrections below.
+
+#### Per town, as the save wrote it
+
+A town is the City of the nearest uo-offline destination within 150 tiles (`adopt-report.js`); the
+road between towns is `wilderness`.
+
+| Town | Waypoints adopted | Destinations adopted | Edges verified | Edges failed | Waypoints dropped | Top failure reasons |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| moonglow | 390 | 17 | 426 | 5 | 2 | flood ok, engine refused (3); no walkable road from x,y to x,y (2) |
+| vesper | 365 | 15 | 382 | 1 | 1 | no walkable road from x,y to x,y (1) |
+| yew | 361 | 11 | 394 | 0 | 0 | - |
+| britain | 252 | 6 | 261 | 0 | 4 | - |
+| jhelom | 175 | 21 | 198 | 1 | 28 | flood ok, engine refused (1) |
+| skara-brae | 165 | 13 | 188 | 0 | 0 | - |
+| minoc | 152 | 8 | 159 | 1 | 1 | flood ok, engine refused (1) |
+| trinsic | 19 | 1 | 18 | 0 | 0 | - |
+| buccaneer-s-den | 0 | 0 | 0 | 0 | 76 | - |
+| dagger-isle | 0 | 0 | 0 | 0 | 39 | - |
+| fire-isle | 0 | 0 | 0 | 0 | 19 | - |
+| humility-isle | 0 | 0 | 0 | 0 | 40 | - |
+| valor-isle | 0 | 0 | 0 | 0 | 13 | - |
+| wilderness | 1247 | 0 | 1280 | 4 | 83 | flood ok, engine refused (3); no walkable road from x,y to x,y (1) |
+| **total** | **3126** | **92** | **3306** | **12** | **306** | |
+
+Two destinations counted above were removed afterwards (`moonglow-forge`, `yew-healer`; see below), so the file holds 90 adopted destinations, not 92.
+
+#### Skipped, and dropped
+
+- **Skipped** (boxes): `haven` 44 waypoints and 11 destinations; `magincia` 37 and 1; `wind` 0 and 0.
+- **Refused by the existing rules**: 484 records in authored ground, 2 destinations with no arrival,
+  1 id already in `navigation.json`. Nothing was dungeon-tagged inside the box - the converter keeps
+  the dungeon strip at x >= 5120, which the box ends at.
+- **Dropped for having no moongate** - reachable by neither road nor gate, so `survivors()` did not
+  write them and `Nav.Data` has nothing to fail on: **Buccaneer's Den** (76 waypoints), **Humility**
+  (40, plus 48 more on its Hythloth approach trail), **Dagger Isle** (39, plus 1), **Serpent's Hold /
+  Fire Island** (19, plus 27 on uo-offline's `fire-isle` trail - the table files them under the
+  nearest City, Fire Isle's dock), **Valor** (13), the south Jhelom island (28), and 3 waypoints on
+  the Ice approach cut off behind a failed edge.
+  Nujel'm has no uo-offline waypoints at all; its two forges were skipped for having no arrival. A
+  player reaches all of these by boat or Recall, and bots have neither.
+- **18 destinations** were skipped for having no arrival a written waypoint reaches, 9 of them on
+  Buccaneer's Den.
+
+#### What had to be corrected after the save, and why the adopt did not catch it
+
+`[NavAudit full` on the saved graph read 2 blocked, 46 unstandable arrivals, 8 stale Z and 2 cliff
+pairs, and the first walk audit failed 36 arrival walks and one edge walk. Each is a class of fault the adopt
+does not ask about, and each was fixed as data:
+
+| Found | Cause | Fix |
+| --- | --- | --- |
+| 2 BLOCKED (`uo-sacrifice-trail-15-s2 -> -16`, `uo-wrong-approach-3 -> -4`) | Diagonal hops down a Z drop; the verify skipped one-tile hops | The corner waypoint removed and the chain rejoined by a hop verified both ways as bot. **The verify now steps one-tile hops** (`NavCorridor.Steps`) |
+| 46 unstandable arrivals | uo-offline arrival tiles on counters, display cases, walls, water | Each moved to the nearest standable tile the audit named (1-2 tiles) |
+| 8 stale Z | Dock and shrine destination centres at the water's or the ground's Z | `[NavResampleZ apply` |
+| 2 cliff pairs | Street waypoints whose 5x5 box reaches a doorway | `arrivalRange: 1`, the documented fix |
+| 8 dangling approaches (`moonglow-bank`, `britain-graveyard`) | Approaches named a stranded waypoint the save dropped | `repoint-arrivals.js`; `moonglow-bank`'s 4465,1161 arrival had no routable approach and was removed |
+| 36 arrival walks failed, 9 destinations | Approach lists naming a waypoint with no route to the tile | `repoint-arrivals.js` on each; 8 arrivals with no routable approach removed, and with them `moonglow-forge` and `yew-healer`, left with none |
+| 12 walks failed on the second sweep | A destination's own approach is walked to every one of its arrivals, and `yew-bank`, `minoc-forge` and `jhelom-healer` still named a far one; one Jhelom hop crossed a teleporter | Destination approaches set to one that routes both ways to every arrival (`nav-hop`, both classes); `yew-bank`'s two arrivals no single approach serves removed (three remain); the Jhelom hop re-routed |
+
+#### Acceptance
+
+Every gate the brief set, measured on the graph as committed:
+
+| Check | Result |
+| --- | --- |
+| `[NavAudit full` | 4,480 walk + 36 gate edges: **0 blocked, 0 over cap, 0 unstandable, 0 stale Z, 0 struck, 0 cliff pairs**. 31.4 s, of which the approach-tile scan is 305,592 engine paths in 29.5 s |
+| `Nav.Data` | Ok, including the gate connectivity check - no island holding a destination without a walk or gate edge into it |
+| `[WalkAudit`, both classes | **18,942 walks, 0 failed**, 1,283 s over 12 probes. BaseCreature 9,435 (8,960 edge + 475 arrival); PlayerBot 9,507 (8,960 edge + 475 arrival + **72 gate**), 2 fragile. 3.8x the 2,515 per class of 14 September: the graph is 4x the waypoints and 3.7x the walk edges, and arrival walks went from 205 to 475 per class. It took three sweeps: the first failed 37 and the second 12, each fixed as data above |
+| `[BotSendTo moonglow-bank` from Britain's bank | Arrived: `Drusilla took the moongate at 1336,1997 to 4467,1283,5`, then `at Moonglow Bank` |
+| `[CoreSmoke` | PASS, with `gate islands` ok |
+| Editor tests | 392 pass |
+| Golden | Re-exported by `nav-export-golden`, byte-identical to `navigation.json` (`cmp`); its diff against the previous commit is the adopt itself |
+
+**The fleet's own ledger** (`walk-failures`, since the boot at 20:44): 17 terminal failures in 4,414
+walks, 0.39 per 100. Five were on the Yew bank and Jhelom healer approaches before those were
+re-pointed. Seven are one bot, `Senna`, cascading along Britain's existing north-mine and forge roads
+from an upper-floor tile - not adopted data, and every one of those edges passes the walk audit. Two
+are near `uo-wp-954` in Jhelom (no teleporter there; both hops pass the walk audit) and two are
+Skara Brae shop-arrival shuffles from a standing start. None is on a gate hop.
+
+**One Jhelom road crossed a teleporter.** The duel pit's invisible teleporters (0x1BC3 at 1409,3824
+and 1419,3832) sit beside `uo-wp-922-s1`, and the bot class walked the hop from `uo-wp-922` straight
+over one and came out 246 tiles away - twice, deterministically, while the creature class (which a
+`Teleporter` ignores) passed. A player walking that line would be moved too, so the road was re-routed
+through `uo-wp-922-s4` rather than the check relaxed. Nothing in the adopt or the audit can see an
+item teleporter; only a PlayerBot walking the road does.
+
+#### Where bots go now - weights were not edited
+
+**New destinations pick up weight automatically; no new town is weight 0.**
+`BotDestinationConfig.WeightFor` multiplies `byType` by `byTag` and an absent key is 1.0, so
+`yew-bank` weighs 1.2 like any bank, a `healer`, `dock`, `stables`, `shrine` or `graveyard` weighs
+1.0, and only the new forges are 0 for everyone but a Smith. Town destinations have **no distance
+term**, and `towns` is still `["britain", "trinsic"]`, so nobody is born in a new town and the home
+bias (2.5) favours only those two. For a Britain-home bot of default class the share of its roll
+that lands on Britain-tagged destinations fell from **81.0% to 53.7%**, Trinsic's from 15.4% to 9.4%,
+and everything else - the new towns - rose from 3.6% to **36.9%**, reached through the moongates.
+**`bots.json` was not edited.**
+
+**Bot population is unchanged: no new fixtures, no regen.** `[BotPopulationAudit` now reports one
+difference - `GG_BotPop_britain_shop_britain-shop-smith`, a shop spawner the recipe wants for the
+adopted `britain-shop-smith` - and `Bots.Recipe` says REGEN NEEDED. It was left: regenerating is a
+population decision, not a navigation one. `Bots.Work` excludes three adopted forges
+(`britain-forge-3`, `jhelom-forge-2`, `skara-brae-forge`) that have no arrival within two tiles of
+both a forge and an anvil.
+
 ### Rebasing a town onto their roads
 
 There is a second mode, and it is the one that changed Britain. An ordinary adopt **refuses to

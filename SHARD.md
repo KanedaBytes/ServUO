@@ -496,12 +496,23 @@ still refused outright is a box that reaches nothing at all.
 reachable waypoint to a waypoint minted on the arrival tile, listed with its length and flagged for
 review past two hops. The eight skipped destinations were their data measured against our cap.
 
-### What the acceptance test still needs
+### All of Trammel, 15 September 2026
 
-1. Adopt outward from Britain **one box at a time**, each overlapping ground already saved, so each
-   box's edges have something to join onto. One large box cannot join and will be refused.
-2. Save each box, then run `[NavAudit`.
-3. `[BotSendTo trinsic-bank` and watch the bot arrive.
+The box-at-a-time advice that stood here is retired: joins reach a hundred tiles and Save writes what
+reaches the graph, so **one whole-facet adopt** now works, and the moongates carry it onto the islands.
+`nav-adopt` with body `0,0,5120,4096 class=bot skip=haven:3314,2345,500,750
+skip=magincia:3540,2020,290,300 skip=wind:5120,0,260,210`, accepted headlessly with
+`accept-adopt.js --write`, took the graph from 1031 waypoints to **4155** and 70 destinations to
+**160**; `[NavAudit full` reads all zeros and `[BotSendTo moonglow-bank` from Britain's bank arrives
+through the Britain moongate. The per-town table, what was skipped and dropped, and what it does to
+where bots go are in the editor README, *Adopting all of Trammel*.
+
+| `nav-adopt` body word | Effect |
+| --- | --- |
+| `x,y,width,height` | The region (required) |
+| `rebase` | Propose road over ground we authored; see below |
+| `class=bot` / `class=creature` | Verify every hop with that walk audit probe class at the stock budget. Absent: the `CorridorProbe` |
+| `skip=name:x,y,width,height` | Repeatable. Reference records inside are SKIPPED, counted per box, never proposed or failed |
 
 ### The Britain rebase
 

@@ -729,9 +729,22 @@ namespace Server.Custom
                     Point3D a = Resolve(map, hops[i - 1]);
                     Point3D b = Resolve(map, hops[i]);
 
+                    // A ONE-TILE HOP IS STEPPED, NOT PATHED. MovementPath returns no path for a goal
+                    // within one tile, so this used to be skipped - and the whole-Trammel adopt
+                    // shipped two diagonal hops down a Z drop that [NavAudit then reported BLOCKED:
+                    // "adjacent tiles, but Movement.CheckMovement refuses the step". The same
+                    // question NavAudit asks, asked here first, both ways.
                     if (Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y)) <= 1)
                     {
-                        continue;
+                        if ((a.X == b.X && a.Y == b.Y) || (Steps(map, probe, a, b) && Steps(map, probe, b, a)))
+                        {
+                            continue;
+                        }
+
+                        failure = String.Format(
+                            "adjacent step refused: {0},{1},{2} -> {3},{4},{5}",
+                            a.X, a.Y, a.Z, b.X, b.Y, b.Z);
+                        return false;
                     }
 
                     if (Pathable(map, probe, a, b) && Pathable(map, probe, b, a))
@@ -753,6 +766,16 @@ namespace Server.Custom
                 Log.Error(ex, "Hop verification threw.");
                 return false;
             }
+        }
+
+        /// <summary>Whether the engine lets <paramref name="probe"/> take the one step from a to b.</summary>
+        private static bool Steps(Map map, Mobile probe, Point3D a, Point3D b)
+        {
+            probe.MoveToWorld(a, map);
+
+            int z;
+
+            return Movement.Movement.CheckMovement(probe, map, a, Utility.GetDirection(a, b), out z);
         }
 
         /// <summary>
