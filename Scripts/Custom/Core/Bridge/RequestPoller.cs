@@ -581,6 +581,36 @@ namespace Server.Custom
                     message = "health snapshot written";
                     return true;
 
+                // What the fleet is keeping awake, and where it is standing.
+                //
+                // Answers in `warnings` as well as to Data/Live/world-census.json, for tile-probe's
+                // reason: a headless run reads the lines off the ack, and the whole value here is
+                // the lines. "reset" additionally opens a fresh GC and thread counter window on
+                // ProcessHealth, so a measurement window's collections are that window's rather
+                // than since boot - it is one word here rather than a token of its own because the
+                // two are always wanted together and a window opened on only one of them is a
+                // window whose rows do not line up.
+                case "world-census":
+                {
+                    if (Insensitive.Equals(FirstWord(body), "reset"))
+                    {
+                        ProcessHealth.ResetCounters();
+                        message = "GC and thread counter window opened";
+                        return true;
+                    }
+
+                    List<string> censusLines;
+
+                    if (!WorldCensus.TryWrite(out message, out censusLines))
+                    {
+                        return false;
+                    }
+
+                    warnings = censusLines;
+
+                    return true;
+                }
+
                 // What the shard actually loaded, so the editor's create forms can be dropdowns
                 // rather than free text typed from memory. No body: it reports everything, and
                 // the answer only changes when Scripts.dll does.

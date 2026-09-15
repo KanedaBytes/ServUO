@@ -13,6 +13,11 @@
 // `WorkingSet64` is what the OS thinks the process has, which are different questions and both
 // worth having.
 //
+// GC COLLECTIONS AND THREADS were added for the population scale ramp, which asks for both per
+// window and could find neither: GC.CollectionCount appears nowhere else in this tree, and the only
+// thread count in it is Server/Serialization.cs's save workers, which is a different question and
+// is not exposed. Both are counted over a window rather than since boot - see ResetCounters.
+//
 // THE SAVE DURATION IS TIMED HERE RATHER THAN READ FROM ANYWHERE, because there is nowhere to read
 // it from: World.Save prints its own line and keeps no number. It matters more than it looks -
 // World.Save runs SYNCHRONOUSLY on the core thread and the Timer thread idles through it
@@ -36,6 +41,83 @@ namespace Server.Custom
         public static int Saves { get; private set; }
 
         private static Stopwatch _saving;
+
+        // ---- the window counters ----
+        //
+        // GC AND THREADS ARE COUNTED OVER A WINDOW, NOT SINCE BOOT, and that is the whole reason
+        // they are fields rather than a pair of bare reads. A ten-minute measurement window wants
+        // the collections that happened IN IT; a since-boot total read at the end of the fourth
+        // window is dominated by the first three and says nothing about any of them.
+        //
+        // THERE IS NO GC PAUSE TIME HERE AND THERE CANNOT BE. GC.GetTotalPauseDuration() is .NET 7
+        // and later; this tree is net48 (CLAUDE.md section 1). The other route is the ".NET CLR
+        // Memory" performance counter, which is Windows-only and so is barred by section 15. So
+        // the honest instrument is the COUNT, and the observable pause is LoopCost's max - a
+        // blocking gen2 lands in the loop period as one enormous sample, which is exactly the
+        // quantity a stall is felt as. Reporting a count as though it were a duration would be
+        // worse than reporting neither.
+        private static int _gc0, _gc1, _gc2;
+        private static long _countersOpened;
+
+        /// <summary>Open a fresh counter window. Called by the world-census token's `reset`.</summary>
+        public static void ResetCounters()
+        {
+            _gc0 = GC.CollectionCount(0);
+            _gc1 = GC.CollectionCount(1);
+            _gc2 = GC.CollectionCount(2);
+            _countersOpened = Stopwatch.GetTimestamp();
+        }
+
+        /// <summary>Seconds since the counter window opened, or 0 before the first reset.</summary>
+        public static double CounterWindowSeconds
+        {
+            get
+            {
+                return _countersOpened == 0L
+                    ? 0.0
+                    : (Stopwatch.GetTimestamp() - _countersOpened) / (double)Stopwatch.Frequency;
+            }
+        }
+
+        /// <summary>
+        /// Managed threads the OS reports for this process. Zero when it cannot be read.
+        ///
+        /// The same try/catch WorkingSetBytes carries, for the same reason: Mono on a locked-down
+        /// host can refuse the Process query, and a zero reads as "not available" rather than as
+        /// a shard with no threads.
+        /// </summary>
+        public static int ThreadCount
+        {
+            get
+            {
+                try
+                {
+                    using (Process self = Process.GetCurrentProcess())
+                    {
+                        return self.Threads.Count;
+                    }
+                }
+                catch
+                {
+                    return 0;
+                }
+            }
+        }
+
+        /// <summary>Collections in this window, as "gen0/gen1/gen2 over Ns", or since boot.</summary>
+        public static string DescribeCollections()
+        {
+            int g0 = GC.CollectionCount(0) - _gc0;
+            int g1 = GC.CollectionCount(1) - _gc1;
+            int g2 = GC.CollectionCount(2) - _gc2;
+
+            return String.Format(
+                CultureInfo.InvariantCulture,
+                _countersOpened == 0L
+                    ? "gc {0}/{1}/{2} since boot"
+                    : "gc {0}/{1}/{2} over {3:F0}s",
+                g0, g1, g2, CounterWindowSeconds);
+        }
 
         public static void Configure()
         {
@@ -84,14 +166,18 @@ namespace Server.Custom
             // question CyclesPerSecond answers as a mean, and a reader comparing the two should
             // not have to find them in different places. LoopCost.Describe says "off" when the
             // sampler is not running, which is the shipping state.
+            int threads = ThreadCount;
+
             return String.Format(
                 CultureInfo.InvariantCulture,
-                "{0:F1} cycles/s now, {1:F1} mean; {2} managed{3}; {4}; {5}",
+                "{0:F1} cycles/s now, {1:F1} mean; {2} managed{3}; {4}; {5}{6}; {7}",
                 Core.CyclesPerSecond,
                 Core.AverageCPS,
                 Megabytes(ManagedBytes),
                 working > 0 ? ", " + Megabytes(working) + " working set" : "",
                 DescribeSaves(),
+                DescribeCollections(),
+                threads > 0 ? String.Format(CultureInfo.InvariantCulture, "; {0} thread(s)", threads) : "",
                 LoopCost.Describe());
         }
 

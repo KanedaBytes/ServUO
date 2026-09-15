@@ -85,7 +85,8 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
     'botpop-audit', 'botpop-gen', 'botinfo',
-    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe', 'bot-pace'
+    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe', 'bot-pace',
+    'world-census'
 ]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a
