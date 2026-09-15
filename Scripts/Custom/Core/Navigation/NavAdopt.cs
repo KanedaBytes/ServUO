@@ -99,6 +99,9 @@ namespace Server.Custom
         /// <summary>Edges walked per LoopQueue pass. Each is a flood-fill; this is the budget.</summary>
         private const int EdgesPerPass = 4;
 
+        /// <summary>The longest a working proposal goes unwritten. See Step.</summary>
+        private const long WriteIntervalMs = 5000;
+
         private static bool _running;
 
         public static bool Running
@@ -141,7 +144,59 @@ namespace Server.Custom
         /// </summary>
         public static bool TryStart(Map map, Rectangle2D region, bool rebase, out string error)
         {
+            return TryStart(map, region, rebase, null, null, out error);
+        }
+
+        /// <summary>
+        /// Start an adopt with a verifying probe class and skip boxes.
+        ///
+        /// <paramref name="verifyClass"/> is the walk audit's probe class key (`bot` or
+        /// `creature`) that re-walks every hop both ways before it is proposed; null keeps the
+        /// CorridorProbe, a BaseCreature, which is what every road-authoring caller used (commit
+        /// 0001d5cb kept it there, because a road it rejects is one the daily-life walkers lose).
+        /// THE WHOLE-TRAMMEL ADOPT PASSES `bot`: every edge it proposes is one the fleet walks, and
+        /// a bot may not walk through the crates a BaseCreature is granted.
+        ///
+        /// <paramref name="skipBoxes"/> are named rectangles whose reference records are neither
+        /// proposed nor failed - counted per box as SKIPPED. They apply after the existing refusals,
+        /// so a record both refused and boxed is counted once, as refused.
+        /// </summary>
+        public static bool TryStart(
+            Map map, Rectangle2D region, bool rebase, string verifyClass,
+            IList<KeyValuePair<string, Rectangle2D>> skipBoxes, out string error)
+        {
             error = null;
+
+            NavWalkAudit.ProbeClass probeClass = null;
+
+            if (!String.IsNullOrEmpty(verifyClass))
+            {
+                foreach (NavWalkAudit.ProbeClass candidate in NavWalkAudit.ProbeClasses)
+                {
+                    if (Insensitive.Equals(candidate.Key, verifyClass))
+                    {
+                        probeClass = candidate;
+                    }
+                }
+
+                if (probeClass == null)
+                {
+                    error = String.Format(
+                        "unknown probe class '{0}'; known: {1}", verifyClass, NavWalkAudit.ProbeKeyList());
+                    return false;
+                }
+
+                // THE STOCK BUDGET OR NOTHING. A hop verified under a widened budget is a hop the
+                // shard as it boots cannot plan, and every number this adopt reports would be about
+                // a pathfinder nobody runs.
+                if (NavPathfinder.Mode != NavPathfinderMode.Off)
+                {
+                    error = String.Format(
+                        "Custom.NavPathfinder is {0}; an adopt verifies at the stock budget only",
+                        NavPathfinder.Mode);
+                    return false;
+                }
+            }
 
             if (_running)
             {
@@ -166,7 +221,7 @@ namespace Server.Custom
                 return false;
             }
 
-            var job = new Job(map, region, reference, rebase);
+            var job = new Job(map, region, reference, rebase, probeClass, skipBoxes);
 
             if (job.Total == 0 && job.Waypoints.Count == 0)
             {
@@ -197,7 +252,14 @@ namespace Server.Custom
                     job.Walk(job.Pending[job.Next++]);
                 }
 
-                Write(job);
+                // AT MOST EVERY FIVE SECONDS. The proposal is rewritten whole, so writing it after
+                // every four-edge pass made a whole-facet adopt quadratic on the game thread - a few
+                // megabytes serialised six hundred times. Progress is still current to the second
+                // that matters; the final write below is unconditional.
+                if (Core.TickCount - job.WroteTick >= WriteIntervalMs)
+                {
+                    Write(job);
+                }
 
                 if (job.Next < job.Pending.Count)
                 {
@@ -245,6 +307,7 @@ namespace Server.Custom
 
                 _running = false;
                 job.Finished = true;
+                job.ReleaseProbe();
 
                 Write(job);
 
@@ -255,6 +318,7 @@ namespace Server.Custom
             catch (Exception ex)
             {
                 _running = false;
+                job.ReleaseProbe();
                 Log.Error(ex, "Adopt threw and was stopped.");
             }
         }
@@ -393,6 +457,23 @@ namespace Server.Custom
             public int SkippedNoArrival;
             public int Links;
 
+            /// <summary>Reference records whose id is already in navigation.json. Never proposed.</summary>
+            public int SkippedExisting;
+
+            /// <summary>The probe class verifying every hop, or null for the CorridorProbe.</summary>
+            public readonly NavWalkAudit.ProbeClass VerifyClass;
+
+            private NavWalkAudit.IWalkAuditProbe _probe;
+
+            /// <summary>Named skip boxes, in the order given, and what each set aside.</summary>
+            public readonly List<KeyValuePair<string, Rectangle2D>> SkipBoxes =
+                new List<KeyValuePair<string, Rectangle2D>>();
+
+            public readonly Dictionary<string, int[]> SkippedBoxes =
+                new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+
+            public long WroteTick;
+
             public int Total
             {
                 get { return Pending.Count; }
@@ -402,11 +483,23 @@ namespace Server.Custom
             private readonly HashSet<string> _taken =
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            public Job(Map map, Rectangle2D region, NavigationStore reference, bool rebase)
+            public Job(
+                Map map, Rectangle2D region, NavigationStore reference, bool rebase,
+                NavWalkAudit.ProbeClass verifyClass, IList<KeyValuePair<string, Rectangle2D>> skipBoxes)
             {
                 Map = map;
                 Region = region;
                 Rebase = rebase;
+                VerifyClass = verifyClass;
+
+                if (skipBoxes != null)
+                {
+                    foreach (KeyValuePair<string, Rectangle2D> box in skipBoxes)
+                    {
+                        SkipBoxes.Add(box);
+                        SkippedBoxes[box.Key] = new int[2];
+                    }
+                }
 
                 foreach (NavWaypoint waypoint in reference.Waypoints ?? new List<NavWaypoint>())
                 {
@@ -467,6 +560,21 @@ namespace Server.Custom
                     if (!Rebase && authored.Contains(waypoint.X, waypoint.Y))
                     {
                         SkippedAuthored++;
+                        continue;
+                    }
+
+                    if (InSkipBox(waypoint.X, waypoint.Y, 0))
+                    {
+                        continue;
+                    }
+
+                    // NOTHING ALREADY IN navigation.json IS PROPOSED, whatever ground it stands on.
+                    // The authored skip nearly always catches it first; this is what makes "Britain
+                    // and Trinsic records are never overwritten" a property rather than a
+                    // consequence of where they happen to stand.
+                    if (!Rebase && NavigationSystem.Graph.Node(waypoint.Id) != null)
+                    {
+                        SkippedExisting++;
                         continue;
                     }
 
@@ -600,6 +708,17 @@ namespace Server.Custom
                         continue;
                     }
 
+                    if (InSkipBox(destination.X, destination.Y, 1))
+                    {
+                        continue;
+                    }
+
+                    if (NavigationSystem.Destination(destination.Id) != null)
+                    {
+                        SkippedExisting++;
+                        continue;
+                    }
+
                     // A destination with no arrival is one a bot can be sent to and cannot stand
                     // at, and Nav.Data warns about exactly that. Four of theirs are like this on
                     // the overworld and all four duplicate a better-covered record nearby.
@@ -623,6 +742,51 @@ namespace Server.Custom
                     Destinations.Add(destination);
                     Arrivals.AddRange(mine);
                 }
+            }
+
+            /// <summary>True, and counted against the box, when a point is in a skip box. Slot 0 counts waypoints, 1 destinations.</summary>
+            private bool InSkipBox(int x, int y, int slot)
+            {
+                foreach (KeyValuePair<string, Rectangle2D> box in SkipBoxes)
+                {
+                    if (box.Value.Contains(new Point2D(x, y)))
+                    {
+                        SkippedBoxes[box.Key][slot]++;
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            /// <summary>
+            /// Verify a road's hops both ways with the job's probe class, or the CorridorProbe when
+            /// it has none. One probe for the whole job: a PlayerBot per edge would be two thousand
+            /// constructions and deletions for the same answer.
+            /// </summary>
+            private bool VerifyHops(List<Point3D> hops, out string refused)
+            {
+                if (VerifyClass == null)
+                {
+                    return NavCorridor.TryVerifyHopsBothWays(Map, hops, out refused);
+                }
+
+                if (_probe == null || _probe.Mobile == null || _probe.Mobile.Deleted)
+                {
+                    _probe = VerifyClass.Create();
+                }
+
+                return NavCorridor.TryVerifyHopsBothWays(Map, hops, _probe.Mobile, out refused);
+            }
+
+            public void ReleaseProbe()
+            {
+                if (_probe != null && _probe.Mobile != null && !_probe.Mobile.Deleted)
+                {
+                    _probe.Mobile.Delete();
+                }
+
+                _probe = null;
             }
 
             private static List<NavArrival> ArrivalsFor(NavigationStore reference, string destinationId)
@@ -921,9 +1085,24 @@ namespace Server.Custom
                 // own reason, drawn red like any other failure, rather than being saved for the
                 // audit to find - and the reason says the two disagreed, which is the thing worth
                 // knowing when the climb window is one Z looser than uo-offline's.
-                string refused;
+                string refused = null;
 
-                if (NavCorridor.TryVerifyHopsBothWays(Map, hops, out refused))
+                // AND NO HOP OVER THE CAP, asserted rather than trusted to the cut above: the last
+                // hop is emitted unconditionally, and a proposal that saves an over-cap hop is one
+                // [NavAudit then reports as FAR.
+                for (int i = 1; i < hops.Count && refused == null; i++)
+                {
+                    int tiles = NavGraph.Chebyshev(hops[i - 1], hops[i]);
+
+                    if (tiles > cap)
+                    {
+                        refused = String.Format(
+                            "hop over cap: {0},{1} -> {2},{3} is {4} tiles",
+                            hops[i - 1].X, hops[i - 1].Y, hops[i].X, hops[i].Y, tiles);
+                    }
+                }
+
+                if (refused == null && VerifyHops(hops, out refused))
                 {
                     return;
                 }
@@ -1832,13 +2011,21 @@ namespace Server.Custom
                     Add(links, Edges[i].To, Edges[i].From);
                 }
 
-                // Anything already on our graph is the mainland by definition.
+                // Anything already on our graph THAT THE MAINLAND REACHES is the mainland - by road or
+                // through a moongate. It used to be anything on our graph at all, which was right
+                // while the graph was one piece and stops being right the moment it holds an island:
+                // a proposal joined onto a gateless island of ours would have counted as reached.
+                // Gate-aware because Moonglow's roads join onto gate-moonglow, and gate-moonglow is
+                // reached the way a player reaches it.
                 var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var queue = new Queue<string>();
+                HashSet<int> mainland = NavConnectivity.Reachable(
+                    NavigationSystem.Graph, NavigationSystem.HomeWaypoint);
 
                 foreach (KeyValuePair<string, List<string>> pair in links)
                 {
-                    if (NavigationSystem.Graph.Node(pair.Key) != null)
+                    if (NavigationSystem.Graph.Node(pair.Key) != null
+                        && mainland.Contains(NavigationSystem.Graph.ComponentOf(pair.Key)))
                     {
                         reached.Add(pair.Key);
                         queue.Enqueue(pair.Key);
@@ -2714,10 +2901,31 @@ namespace Server.Custom
                 .Append(",\"y\":").Append(job.Region.Y)
                 .Append(",\"width\":").Append(job.Region.Width)
                 .Append(",\"height\":").Append(job.Region.Height).Append("},\n");
+            job.WroteTick = Core.TickCount;
+
             builder.Append("  \"skipped\": {\"authored\":").Append(job.SkippedAuthored)
                 .Append(",\"region\":").Append(job.SkippedRegion)
                 .Append(",\"noArrival\":").Append(job.SkippedNoArrival)
-                .Append(",\"adopted\":").Append(job.SkippedAdopted).Append("},\n");
+                .Append(",\"adopted\":").Append(job.SkippedAdopted)
+                .Append(",\"existing\":").Append(job.SkippedExisting).Append("},\n");
+            builder.Append("  \"verifyClass\": ")
+                .Append(Json.Quote(job.VerifyClass == null ? "corridor" : job.VerifyClass.Key)).Append(",\n");
+            builder.Append("  \"skipBoxes\": [");
+
+            for (int i = 0; i < job.SkipBoxes.Count; i++)
+            {
+                KeyValuePair<string, Rectangle2D> box = job.SkipBoxes[i];
+                int[] counts = job.SkippedBoxes[box.Key];
+
+                builder.Append(i == 0 ? "\n    " : ",\n    ");
+                builder.Append("{\"name\":").Append(Json.Quote(box.Key))
+                    .Append(",\"x\":").Append(box.Value.X).Append(",\"y\":").Append(box.Value.Y)
+                    .Append(",\"width\":").Append(box.Value.Width).Append(",\"height\":").Append(box.Value.Height)
+                    .Append(",\"waypoints\":").Append(counts[0]).Append(",\"destinations\":").Append(counts[1])
+                    .Append("}");
+            }
+
+            builder.Append(job.SkipBoxes.Count == 0 ? "],\n" : "\n  ],\n");
             builder.Append("  \"rebase\": ").Append(job.Rebase ? "true" : "false").Append(",\n");
             builder.Append("  \"mergeRadius\": ").Append(job.Rebase ? MergeRadius : 0).Append(",\n");
             builder.Append("  \"links\": ").Append(job.Links).Append(",\n");

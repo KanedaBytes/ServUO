@@ -65,6 +65,12 @@ const SESSION_SECRET = process.env.GG_BRIDGE_SECRET || crypto.randomBytes(16).to
 // few hundred KB. Over the limit is an answer, not a dropped connection.
 const MAX_BODY = 1024 * 1024;
 
+// EXCEPT A NAV SAVE, which can legitimately be an adopt: the whole-Trammel adopt is thousands of
+// waypoints and edges created in one save, several megabytes of shapes, and accept-adopt.js is the
+// ordinary save path on purpose. The save route alone gets the larger limit; a token or any other
+// body stays at a megabyte.
+const MAX_SAVE_BODY = 32 * 1024 * 1024;
+
 // How long to wait for the shard to answer a reload. The poller ticks once a second, so this is
 // four ticks of grace before the editor is told the shard did not answer. The override exists so
 // the timeout path can be tested in a fraction of a second rather than five of them.
@@ -1384,7 +1390,7 @@ async function handleSave(name, request, response) {
     let payload;
 
     try {
-        payload = JSON.parse(await readBody(request, MAX_BODY));
+        payload = JSON.parse(await readBody(request, MAX_SAVE_BODY));
     } catch (error) {
         sendError(response, error.status || 400, error.status ? error.message : 'Malformed request body.');
         return;
@@ -1555,5 +1561,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+    MAX_SAVE_BODY,
     handleRequest, hostIsLocal, refusalFor, hashOf, ACK_TIMEOUT_MS, SESSION_SECRET, art
 };

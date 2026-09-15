@@ -697,6 +697,33 @@ namespace Server.Custom
             {
                 probe = new CorridorProbe();
 
+                return TryVerifyHopsBothWays(map, hops, probe, out failure);
+            }
+            finally
+            {
+                if (probe != null)
+                {
+                    probe.Delete();
+                }
+            }
+        }
+
+        /// <summary>
+        /// The same test with a probe the caller owns - a walk audit probe class's mobile, so the
+        /// whole-Trammel adopt verifies as the fleet walks (NavAdopt.Job.VerifyHops). The caller
+        /// creates and deletes it; this only moves it.
+        /// </summary>
+        public static bool TryVerifyHopsBothWays(Map map, IList<Point3D> hops, Mobile probe, out string failure)
+        {
+            failure = null;
+
+            if (map == null || map == Map.Internal || hops == null || hops.Count < 2)
+            {
+                return true;
+            }
+
+            try
+            {
                 for (int i = 1; i < hops.Count; i++)
                 {
                     Point3D a = Resolve(map, hops[i - 1]);
@@ -725,13 +752,6 @@ namespace Server.Custom
                 failure = ex.Message;
                 Log.Error(ex, "Hop verification threw.");
                 return false;
-            }
-            finally
-            {
-                if (probe != null)
-                {
-                    probe.Delete();
-                }
             }
         }
 

@@ -34,8 +34,13 @@
 //     node tools/editor/accept-adopt.js --write       # accept
 //     node tools/editor/accept-adopt.js --write --port 8081
 //
-// It refuses on anything short of a finished, unblocked proposal, and on any fatal finding from the
-// dry run. Exit code is 0 only when what was asked for actually happened.
+// It refuses on anything short of a finished, unblocked proposal, on any fatal finding from the dry
+// run, and on any destination the dry run finds on an island no walk or gate edge reaches. Exit
+// code is 0 only when what was asked for actually happened.
+//
+// A LARGE ACCEPT NEEDS THE BRIDGE TO WAIT LONGER. The reload that follows a whole-facet save
+// rebuilds thousands of records, and the bridge gives the shard GG_ACK_TIMEOUT_MS (5 s by default)
+// to answer - set on the BRIDGE's process, not this one's - before it reports reloaded false.
 
 'use strict';
 
@@ -173,6 +178,19 @@ async function main() {
 
     if ((findings.fatal || []).length > 0) {
         fail(`${findings.fatal.length} fatal finding(s). Nothing was written.`);
+    }
+
+    // THE GATE-AWARE ISLAND CHECK, AS A REFUSAL. The validator reports a destination on an island
+    // nothing walks or gates to as a warning, because in the browser an author may be half-way
+    // through drawing the road. A headless accept is not half-way through anything: the shard's
+    // Nav.Data FAILS on exactly this (NavConnectivity), so a proposal that would make it fail is not
+    // written. An island a moongate reaches is not reported at all, so Moonglow passes.
+    const islands = (findings.warnings || [])
+        .filter((finding) => /no walk or gate edge from the main graph/.test(finding.message));
+
+    if (islands.length > 0) {
+        fail(`${islands.length} island finding(s) with no walk or gate edge from the main graph.`
+            + ' Nothing was written.');
     }
 
     if (!write) {

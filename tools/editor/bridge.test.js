@@ -443,10 +443,22 @@ test('an oversized body is answered rather than dropped', async () => {
     const response = await fetch(origin + '/api/save/navigation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-GG-Auth': bridge.SESSION_SECRET },
-        body: JSON.stringify({ baseHash: 'x', filler: 'a'.repeat(2 * 1024 * 1024) })
+        body: JSON.stringify({ baseHash: 'x', filler: 'a'.repeat(33 * 1024 * 1024) })
     });
 
     assert.strictEqual(response.status, 413, 'the size answer, not the authorisation one');
+});
+
+test('a nav save the size of a whole-facet adopt is read, not refused for size', async () => {
+    // Two megabytes was over the old one-megabyte limit, and a whole-Trammel adopt is several. The
+    // stale baseHash is what answers here - a 409 proves the body was read and parsed.
+    const response = await fetch(origin + '/api/save/navigation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-GG-Auth': bridge.SESSION_SECRET },
+        body: JSON.stringify({ baseHash: 'x', filler: 'a'.repeat(2 * 1024 * 1024) })
+    });
+
+    assert.notStrictEqual(response.status, 413);
 });
 
 // ---- spawners -----------------------------------------------------------------------------------

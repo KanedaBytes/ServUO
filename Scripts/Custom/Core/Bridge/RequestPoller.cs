@@ -990,10 +990,41 @@ namespace Server.Custom
                     bool haveRegion = false;
                     bool rebase = false;
 
+                    // `class=bot` verifies every hop with that walk audit probe class; `skip=name:x,y,w,h`
+                    // (repeatable) sets a box aside as SKIPPED rather than failed. See NavAdopt.TryStart.
+                    string verifyClass = null;
+                    var skipBoxes = new List<KeyValuePair<string, Rectangle2D>>();
+
                     for (int i = 0; i < parts.Length; i++)
                     {
                         if (parts[i].StartsWith("#"))
                         {
+                            continue;
+                        }
+
+                        if (parts[i].StartsWith("class=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            verifyClass = parts[i].Substring(6);
+                            continue;
+                        }
+
+                        if (parts[i].StartsWith("skip=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string spec = parts[i].Substring(5);
+                            int colon = spec.IndexOf(':');
+                            string[] box = colon > 0 ? spec.Substring(colon + 1).Split(',') : new string[0];
+                            int bx, by, bw, bh;
+
+                            if (box.Length != 4
+                                || !Int32.TryParse(box[0], out bx) || !Int32.TryParse(box[1], out by)
+                                || !Int32.TryParse(box[2], out bw) || !Int32.TryParse(box[3], out bh))
+                            {
+                                message = String.Format("nav-adopt skip box '{0}' is not name:x,y,width,height", spec);
+                                return false;
+                            }
+
+                            skipBoxes.Add(new KeyValuePair<string, Rectangle2D>(
+                                spec.Substring(0, colon), new Rectangle2D(bx, by, bw, bh)));
                             continue;
                         }
 
@@ -1027,15 +1058,16 @@ namespace Server.Custom
 
                     string adoptError;
 
-                    if (!NavAdopt.TryStart(Map.Trammel, region, rebase, out adoptError))
+                    if (!NavAdopt.TryStart(Map.Trammel, region, rebase, verifyClass, skipBoxes, out adoptError))
                     {
                         message = String.Format("adopt not started: {0}", adoptError);
                         return false;
                     }
 
                     message = String.Format(
-                        "adopt{0} started over {1}x{2} at {3},{4}; watch Data/Live/nav-adopt.json",
-                        rebase ? " (rebase)" : "", region.Width, region.Height, region.X, region.Y);
+                        "adopt{0} started over {1}x{2} at {3},{4}, verified as {5}, {6} skip box(es); watch Data/Live/nav-adopt.json",
+                        rebase ? " (rebase)" : "", region.Width, region.Height, region.X, region.Y,
+                        verifyClass ?? "corridor", skipBoxes.Count);
                     return true;
                 }
 
