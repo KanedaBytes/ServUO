@@ -564,20 +564,110 @@ export function validateNavigation(nav, options, report) {
         }
     }
 
-    checkComponents(out, nav, byId, destById);
+    checkComponents(out, nav, options);
 
     return out;
 }
 
+/** The waypoint the shard calls the mainland, `Custom.NavHomeWaypoint`'s default. */
+export const HOME_WAYPOINT = 'uo-britain-bank';
+
 /**
- * Walk-connected components per facet, reported when destinations land in more than one.
+ * Destinations no bot can reach: those on a walk component that neither walks nor GATES to the
+ * mainland. The shard's NavConnectivity asks the same question and Nav.Data FAILS on it.
  *
- * Union-find over walk edges only; a gate is a teleport and does not make two places walkable to
- * one another. This is the closest we get to what [NavAudit does with real map data, and it is not
- * close: it cannot see a river, a wall, or a closed door.
+ * Two union-finds over the same waypoints - one over walk edges (what a mobile can walk between)
+ * and one over walk and gate edges (what a bot can get between, moongates included). The mainland
+ * is the home waypoint's group, or the largest group when there is no home waypoint. Like the rest
+ * of this file it cannot see a river, a wall or a closed door; it sees only the edges.
+ *
+ * Returns `{ walkRoots: Map<facet, Set<root>>, unreachable: [{ id, map }] }`.
  */
-function checkComponents(report, nav, byId, destById) {
+export function reachability(nav, options) {
+    const byId = new Map();
+
+    for (const wp of (nav && nav.waypoints) || []) {
+        if (wp && typeof wp.id === 'string') byId.set(wp.id, wp);
+    }
+
+    const walk = unionFind(byId.keys());
+    const reach = unionFind(byId.keys());
+
+    for (const edge of (nav && nav.edges) || []) {
+        if (!edge || !byId.has(edge.from) || !byId.has(edge.to)) continue;
+
+        const kind = edge.kind === undefined ? 'walk' : edge.kind;
+
+        if (kind === 'walk') walk.union(edge.from, edge.to);
+        if (kind === 'walk' || kind === 'gate') reach.union(edge.from, edge.to);
+    }
+
+    const home = (options && options.homeWaypoint) || HOME_WAYPOINT;
+    let mainland = byId.has(home) ? reach.find(home) : null;
+
+    if (mainland === null) {
+        const sizes = new Map();
+
+        for (const id of byId.keys()) {
+            const root = reach.find(id);
+            sizes.set(root, (sizes.get(root) || 0) + 1);
+        }
+
+        let best = -1;
+
+        for (const [root, size] of sizes) {
+            if (size > best) {
+                best = size;
+                mainland = root;
+            }
+        }
+    }
+
+    // Nearest waypoint per facet, found linearly: a sort per destination was O(D W log W), which a
+    // whole-facet adopt of five thousand waypoints turns into something a person waits for.
+    const perMap = new Map();
+
+    for (const wp of byId.values()) {
+        if (!perMap.has(wp.map)) perMap.set(wp.map, []);
+        perMap.get(wp.map).push(wp);
+    }
+
+    const walkRoots = new Map();
+    const unreachable = [];
+
+    for (const dest of (nav && nav.destinations) || []) {
+        if (!dest || typeof dest.id !== 'string') continue;
+
+        let near = null;
+        let nearDistance = Infinity;
+
+        for (const wp of perMap.get(dest.map) || []) {
+            const d = chebyshev(wp, dest);
+
+            if (d < nearDistance) {
+                nearDistance = d;
+                near = wp;
+            }
+        }
+
+        if (!near) continue;
+
+        if (!walkRoots.has(dest.map)) walkRoots.set(dest.map, new Set());
+
+        walkRoots.get(dest.map).add(walk.find(near.id));
+
+        if (mainland !== null && reach.find(near.id) !== mainland) {
+            unreachable.push({ id: dest.id, map: dest.map });
+        }
+    }
+
+    return { walkRoots, unreachable };
+}
+
+function unionFind(ids) {
     const parent = new Map();
+
+    for (const id of ids) parent.set(id, id);
 
     const find = (id) => {
         while (parent.get(id) !== id) {
@@ -588,36 +678,37 @@ function checkComponents(report, nav, byId, destById) {
         return id;
     };
 
-    for (const id of byId.keys()) parent.set(id, id);
+    return {
+        find,
+        union(a, b) {
+            parent.set(find(a), find(b));
+        }
+    };
+}
 
-    for (const edge of nav.edges || []) {
-        const kind = !edge || edge.kind === undefined ? 'walk' : edge.kind;
-
-        if (kind !== 'walk' || !byId.has(edge.from) || !byId.has(edge.to)) continue;
-
-        parent.set(find(edge.from), find(edge.to));
-    }
+/**
+ * Destinations on an island nothing walks or gates to, reported as a warning.
+ *
+ * A walk component that a gate reaches is NOT reported: Moonglow is an island and a bot gets there
+ * through the Britain moongate, the way a player does. See reachability.
+ */
+function checkComponents(report, nav, options) {
+    const { walkRoots, unreachable } = reachability(nav, options);
 
     const perFacet = new Map();
 
-    for (const dest of destById.values()) {
-        const near = [...byId.values()]
-            .filter((wp) => wp.map === dest.map)
-            .sort((a, b) => chebyshev(a, dest) - chebyshev(b, dest))[0];
-
-        if (!near) continue;
-
-        if (!perFacet.has(dest.map)) perFacet.set(dest.map, new Set());
-
-        perFacet.get(dest.map).add(find(near.id));
+    for (const dest of unreachable) {
+        if (!perFacet.has(dest.map)) perFacet.set(dest.map, []);
+        perFacet.get(dest.map).push(dest.id);
     }
 
-    for (const [map, roots] of perFacet) {
-        if (roots.size > 1) {
-            report.warn(
-                `${map} destinations span ${roots.size} disconnected walk components - some places `
-                + 'cannot be reached on foot');
-        }
+    for (const [map, ids] of perFacet) {
+        const shown = ids.slice(0, 8).join(', ') + (ids.length > 8 ? ` and ${ids.length - 8} more` : '');
+
+        report.warn(
+            `${map} destinations span ${(walkRoots.get(map) || new Set()).size} disconnected walk components, `
+            + `and ${ids.length} of them have no walk or gate edge from the main graph (${shown}) - `
+            + 'some places cannot be reached at all');
     }
 }
 

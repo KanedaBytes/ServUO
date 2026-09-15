@@ -1049,6 +1049,40 @@ namespace Server.Custom
                 // Body is the bot's serial. Nothing else: the editor already has the serial - it is
                 // what it draws the dot with - and a name would have to be resolved against a
                 // population where names repeat across towns.
+                // [BotSendTo without a client. Body: "<destination id or words> [bot=<name>]"; with no
+                // name the bot nearest the home waypoint goes. See BotCommands.TrySendHeadless.
+                case "bot-send":
+                {
+                    var query = new List<string>();
+                    string botName = null;
+
+                    foreach (string word in (body ?? "").Split(
+                        new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        if (word.StartsWith("#"))
+                        {
+                            continue;
+                        }
+
+                        if (word.StartsWith("bot=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            botName = word.Substring(4).Replace('_', ' ');
+                            continue;
+                        }
+
+                        query.Add(word);
+                    }
+
+                    if (query.Count == 0)
+                    {
+                        message = "bot-send needs a destination: 'moonglow-gate [bot=Name_With_Spaces]'";
+                        return false;
+                    }
+
+                    return BotCommands.TrySendHeadless(
+                        String.Join(" ", query.ToArray()), botName, out message);
+                }
+
                 case "botinfo":
                 {
                     string[] words = (body ?? "").Split(

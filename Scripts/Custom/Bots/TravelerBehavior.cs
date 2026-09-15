@@ -337,6 +337,12 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// The share of gated departures that walk instead when a walked route exists: uo-offline's
+        /// 1 - GateShortcutChance (TravelerBehavior.cs:394).
+        /// </summary>
+        private const double WalkInsteadOfGateChance = 0.2;
+
         private bool Depart(PlayerBot bot, NavDestination destination)
         {
             NavRoute route;
@@ -354,6 +360,27 @@ namespace Server.Custom
                 BotLog.Note(bot, BotLogKind.Route, "no route to '{0}': {1}", destination.Id, error);
 
                 return false;
+            }
+
+            // SOME LONG HAULS WALK ANYWAY. The planner takes a moongate whenever it is cheaper, which
+            // is every time; uo-offline takes its long-haul gate shortcut GateShortcutChance 0.8 of
+            // the time and walks the rest, "keeping some long-haul foot traffic on the roads"
+            // (TravelerBehavior.cs:389-394). Same share here, applied only where a walked route
+            // actually exists - an island is never asked to walk.
+            bool gated = Nav.UsesGate(route);
+
+            if (gated && Utility.RandomDouble() < WalkInsteadOfGateChance)
+            {
+                NavRoute walked;
+                string walkError;
+
+                if (Nav.TryRouteFrom(bot.Location, bot.Map, destination.Id, bot, false, out walked, out walkError))
+                {
+                    route = walked;
+                    gated = false;
+
+                    BotLog.Note(bot, BotLogKind.Route, "walking to '{0}' rather than taking the moongate", destination.Id);
+                }
             }
 
             if (_walker == null)
@@ -393,8 +420,8 @@ namespace Server.Custom
                 bot,
                 BotMovement.PaceForRoute(route) );
 
-            BotLog.Note(bot, BotLogKind.Route, "departing for '{0}' ({1}), {2} hop(s)",
-                destination.Id, destination.Name, route.Count);
+            BotLog.Note(bot, BotLogKind.Route, "departing for '{0}' ({1}), {2} hop(s){3}",
+                destination.Id, destination.Name, route.Count, gated ? ", through a moongate" : "");
 
             _walker.Follow(route);
 

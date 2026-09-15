@@ -205,6 +205,7 @@ namespace Server.Custom
             passed &= RunJsonConfigCheck(report);
             passed &= RunCrossingCheck(report);
             passed &= RunRouteCacheCheck(report);
+            passed &= RunGateIslandCheck(report);
             passed &= RunPersistenceCheck(report, from);
 
             int failing, warning;
@@ -412,6 +413,26 @@ namespace Server.Custom
         /// table, and the strike is expired rather than cleared at the end, so what the last leg
         /// exercises is the ORDINARY expiry path and not a test-only shortcut.
         /// </summary>
+        /// <summary>
+        /// The island rule Nav.Data fails on, against a hand-built graph: an island holding a
+        /// destination with no gate into it is unreached, the same island with a gate edge is
+        /// reached, and an island holding nothing is not reported. See NavConnectivity.SelfTest.
+        /// </summary>
+        private static bool RunGateIslandCheck(List<string> report)
+        {
+            report.Add("-- navigation gate islands --");
+
+            try
+            {
+                return NavConnectivity.SelfTest(report);
+            }
+            catch (Exception ex)
+            {
+                report.Add("FAIL gate islands threw: " + ex.Message);
+                return false;
+            }
+        }
+
         private static bool RunRouteCacheCheck(List<string> report)
         {
             report.Add("-- navigation route cache --");

@@ -561,8 +561,11 @@ namespace Server.Custom
 
             if (step.Kind == NavStepKind.Transition)
             {
-                OnTransition(step);
-                Advance();
+                if (OnTransition(step))
+                {
+                    Advance();
+                }
+
                 return;
             }
 
@@ -586,8 +589,11 @@ namespace Server.Custom
 
                 if (step.Kind == NavStepKind.Transition)
                 {
-                    OnTransition(step);
-                    Advance();
+                    if (OnTransition(step))
+                    {
+                        Advance();
+                    }
+
                     return;
                 }
 
@@ -796,6 +802,12 @@ namespace Server.Custom
             TimeSpan.FromMilliseconds(HopTimeout.TotalMilliseconds * 6.0);
 
         private const int FrozenMoveTiles = 2;
+
+        /// <summary>When a gate hop's step-through beat ends, as a Core.TickCount; 0 before it starts.</summary>
+        private long _gateReadyAt;
+
+        /// <summary>Due steps spent getting onto the gate tile this hop. See GateStepTries.</summary>
+        private int _gateStepTries;
 
         private Point3D _frozenAnchor;
         private long _frozenAt;
@@ -2044,35 +2056,153 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// A gate hop. The base behaviour is to move the mobile, which is right for a staff
-        /// tool and for anything that does not care how it got there; a consumer that should
-        /// actually walk onto a teleporter or through a moongate overrides this.
+        /// How many due steps a walker gets to put itself ON the gate tile once the previous hop
+        /// has called it arrived - which it does from ArrivalRangeFor tiles out, two by default.
+        /// Two tiles is two steps on open ground; the rest is room for a mobile in the way.
         /// </summary>
-        protected virtual void OnTransition(NavStep step)
+        private const int GateStepTries = 8;
+
+        /// <summary>
+        /// A gate hop, taken as a player takes a public moongate. Returns true when the mobile has
+        /// gone through and the route may advance; false while it is still getting onto the gate
+        /// or reading the gump, and false after a refusal, which stops the walk.
+        ///
+        /// NOT A TELEPORT FROM WHEREVER THE WALKER STANDS, which is what this used to be: the
+        /// previous hop is "arrived" two tiles out, and the old body moved the mobile from there.
+        /// See NavGate for the rule and for exactly what is copied from stock.
+        ///
+        ///   1. onto the gate tile - the previous step's waypoint IS the gate, and a player walks on;
+        ///   2. a real PublicMoongate there, and a PMList entry where the route lands;
+        ///   3. the step-through beat, with the walker still Active so nothing re-routes it;
+        ///   4. MoongateGump.OnResponse's refusals, then its tail, landing on the entry tile.
+        ///
+        /// A refusal is NOT rescued. The top of the recovery ladder teleports, and a teleport across
+        /// the sea is precisely what a player cannot do; the walk stops, Failed is raised with the
+        /// reason, and the consumer picks again. No edge strike either - a criminal bot is not a
+        /// fault in the gate.
+        /// </summary>
+        protected virtual bool OnTransition(NavStep step)
         {
-            Map map = step.Map ?? _mobile.Map;
+            NavStep pad = _index > 0 ? _route.Steps[_index - 1] : null;
+            Map map = _mobile.Map;
 
-            Point3D landing;
-
-            // A gate's far side is authored data with the same exposure as an arrival's, so it gets
-            // the same validated landing rather than the raw tile at whatever Z resolves. Falling
-            // back to the raw tile here rather than refusing: a transition that does not happen
-            // leaves the mobile on the wrong facet with a route it cannot walk, which is worse than
-            // an awkward arrival - and unlike the rescue, this is the caller's own instruction.
-            if (!TryPickLanding(map, step.Point, out landing))
+            if (pad == null)
             {
-                landing = new Point3D(step.Point.X, step.Point.Y, ResolveZ(map, step.Point));
-
-                Log.Warn(
-                    "{0} is taking the gate to {1},{2} unvalidated - nothing within {3} tiles of it "
-                    + "will take a landing.",
-                    Who(),
-                    step.Point.X,
-                    step.Point.Y,
-                    MaxRescueRing);
+                FailGate(step, "the route begins with a gate hop, so there is no gate to stand on");
+                return false;
             }
 
-            _actor.PlaceAt(landing, map);
+            if (!_mobile.Player)
+            {
+                FailGate(step, "a public moongate serves players only");
+                return false;
+            }
+
+            if (_mobile.X != pad.Point.X || _mobile.Y != pad.Point.Y)
+            {
+                if (_gateStepTries >= GateStepTries
+                    || Chebyshev(_mobile.Location, pad.Point) > ArrivalRangeFor(pad) + 1)
+                {
+                    FailGate(step, String.Format(
+                        "could not step onto the gate at {0},{1} (standing {2} tile(s) off after {3} tries)",
+                        pad.Point.X,
+                        pad.Point.Y,
+                        Chebyshev(_mobile.Location, pad.Point),
+                        _gateStepTries));
+                    return false;
+                }
+
+                if (_actor.HasMover && Core.TickCount - _actor.NextStepTick >= 0)
+                {
+                    _gateStepTries++;
+
+                    if (_goal == null || _goal.X != pad.Point.X || _goal.Y != pad.Point.Y)
+                    {
+                        _goal = new NavGoal(pad.Point.X, pad.Point.Y, ResolveZ(map, pad.Point));
+                    }
+
+                    _actor.MoveTowards(_goal, Run, 0);
+                }
+
+                return false;
+            }
+
+            PublicMoongate gate = NavGate.MoongateAt(map, _mobile.Location);
+
+            PMList list;
+            PMEntry entry = NavGate.EntryAt(step.Map ?? map, step.Point, out list);
+
+            if (gate == null)
+            {
+                FailGate(step, String.Format("there is no public moongate at {0},{1}", _mobile.X, _mobile.Y));
+                return false;
+            }
+
+            if (entry == null)
+            {
+                FailGate(step, String.Format(
+                    "{0},{1} on {2} is not a moongate destination", step.Point.X, step.Point.Y, step.Map ?? map));
+                return false;
+            }
+
+            if (_gateReadyAt == 0)
+            {
+                _gateReadyAt = Core.TickCount + (long)NavGate.StepThrough.TotalMilliseconds;
+                return false;
+            }
+
+            // Wraparound-safe: compare by subtraction, never a < b.
+            if (Core.TickCount - _gateReadyAt < 0)
+            {
+                return false;
+            }
+
+            string reason;
+
+            if (!NavGate.CanUse(_mobile, gate, list, entry, out reason))
+            {
+                FailGate(step, reason);
+                return false;
+            }
+
+            Point3D from = _mobile.Location;
+
+            NavGate.BeforeMove(_mobile, list, entry);
+            _actor.PlaceAt(entry.Location, list.Map);
+            NavGate.AfterMove(_mobile, list, entry);
+
+            Log.Info(
+                "{0} took the moongate at {1},{2} to {3},{4},{5} on {6}.",
+                Who(),
+                from.X,
+                from.Y,
+                entry.Location.X,
+                entry.Location.Y,
+                entry.Location.Z,
+                list.Map);
+
+            return true;
+        }
+
+        private void FailGate(NavStep step, string reason)
+        {
+            Log.Warn("{0} did not take the gate to {1},{2}: {3}.", Who(), step.Point.X, step.Point.Y, reason);
+
+            Action<NavWalker, NavStep, string> failed = Failed;
+
+            if (failed != null)
+            {
+                try
+                {
+                    failed(this, step, "gate: " + reason);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "A Failed subscriber threw.");
+                }
+            }
+
+            Stop();
         }
 
         private int ArrivalRangeFor(NavStep step)
@@ -2500,6 +2630,10 @@ namespace Server.Custom
             _arrivalCheckedAt = Int32.MaxValue;
             _reAnchored = false;
             _approaching = false;
+
+            // A gate hop's two clocks are per hop: a fresh hop has not reached the gate yet.
+            _gateReadyAt = 0;
+            _gateStepTries = 0;
 
             ResetHopDeadline();
         }

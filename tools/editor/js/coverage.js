@@ -21,16 +21,26 @@
 
 import { traceWorldRect } from './iso.js';
 
-const MAX_CELLS = 12000;
+const MAX_CELLS = 600000;
 
 let cache = null;
 
 /**
  * Builds the distance grid.
  *
- * The domain is the bounding box of the waypoints, padded - deliberately not the whole facet,
- * because ocean nobody has ever walked is not a gap. The cell size grows until the grid fits in
- * MAX_CELLS, which makes the cost independent of how large the covered area gets with no tuning.
+ * The domain is the bounding box of the waypoints, padded, and a cell is measured ONLY against
+ * waypoints within that pad of it - further than the pad from every waypoint is ocean or wilderness
+ * nobody has walked, which is not a gap in the graph but the edge of it, and is neither drawn nor
+ * counted.
+ *
+ * THAT RULE USED TO BE THE BOUNDING BOX, and moongates broke it. With nine gate waypoints spread
+ * from Skara Brae to Moonglow the box became the whole facet, the cell grew to 32 tiles to fit the
+ * old 12,000-cell budget, and the overlay went coarser than the hop cap it exists to measure. Now
+ * each waypoint stamps its own padded square, so the cost is waypoints x (pad / cell)^2 rather than
+ * cells x waypoints, and the grid can stay finer than the cap across a whole facet.
+ *
+ * `band` lists the cells worth drawing (past three-quarters of the cap), so drawing a facet-sized
+ * grid costs what the gaps cost rather than what the facet does.
  */
 export function compute(waypoints, hopCap) {
     cache = null;
@@ -60,41 +70,56 @@ export function compute(waypoints, hopCap) {
     maxX += pad;
     maxY += pad;
 
-    // A quarter of the cap: fine enough that a gap is located rather than merely reported.
+    // A quarter of the cap: fine enough that a gap is located rather than merely reported. It grows
+    // only to keep the array inside MAX_CELLS, and never past the cap.
     let cell = Math.max(2, Math.floor(hopCap / 4));
     let cols = Math.ceil((maxX - minX) / cell);
     let rows = Math.ceil((maxY - minY) / cell);
 
-    while (cols * rows > MAX_CELLS) {
-        cell = Math.ceil(cell * 1.5);
+    while (cols * rows > MAX_CELLS && cell < hopCap) {
+        cell = Math.min(hopCap, Math.ceil(cell * 1.5));
         cols = Math.ceil((maxX - minX) / cell);
         rows = Math.ceil((maxY - minY) / cell);
     }
 
-    const distance = new Float32Array(cols * rows);
+    const distance = new Float32Array(cols * rows).fill(Infinity);
 
-    for (let r = 0; r < rows; r++) {
-        const cy = minY + r * cell + cell / 2;
+    // Each waypoint stamps the cells within `pad` (plus a cell, so every centre inside the pad is
+    // reached) with its Chebyshev distance, keeping the nearest.
+    const reach = pad + cell;
 
-        for (let c = 0; c < cols; c++) {
-            const cx = minX + c * cell + cell / 2;
+    for (const wp of waypoints) {
+        const c0 = Math.max(0, Math.floor((wp.x - reach - minX) / cell));
+        const c1 = Math.min(cols - 1, Math.floor((wp.x + reach - minX) / cell));
+        const r0 = Math.max(0, Math.floor((wp.y - reach - minY) / cell));
+        const r1 = Math.min(rows - 1, Math.floor((wp.y + reach - minY) / cell));
 
-            let best = Infinity;
+        for (let r = r0; r <= r1; r++) {
+            const cy = minY + r * cell + cell / 2;
 
-            for (const wp of waypoints) {
+            for (let c = c0; c <= c1; c++) {
+                const cx = minX + c * cell + cell / 2;
+
                 // Chebyshev, matching the engine's own movement cost.
                 const d = Math.max(Math.abs(wp.x - cx), Math.abs(wp.y - cy));
 
-                if (d < best) {
-                    best = d;
+                if (d <= pad && d < distance[r * cols + c]) {
+                    distance[r * cols + c] = d;
                 }
             }
-
-            distance[r * cols + c] = best;
         }
     }
 
-    cache = { minX, minY, cell, cols, rows, distance, hopCap };
+    const fine = hopCap * 0.75;
+    const band = [];
+
+    for (let i = 0; i < distance.length; i++) {
+        if (distance[i] > fine && distance[i] !== Infinity) {
+            band.push(i);
+        }
+    }
+
+    cache = { minX, minY, cell, cols, rows, distance, band: Int32Array.from(band), hopCap };
 
     return cache;
 }
@@ -115,7 +140,7 @@ export function gapCount() {
 
     let count = 0;
 
-    for (let i = 0; i < cache.distance.length; i++) {
+    for (const i of cache.band) {
         if (cache.distance[i] > cache.hopCap) {
             count++;
         }
@@ -129,44 +154,39 @@ export function draw(ctx, view) {
         return;
     }
 
-    const { minX, minY, cell, cols, rows, distance, hopCap } = cache;
-
-    // Below this, coverage is good and nothing is painted.
-    const fine = hopCap * 0.75;
+    const { minX, minY, cell, cols, distance, band, hopCap } = cache;
 
     const size = Math.max(1, cell * view.scale);
 
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const d = distance[r * cols + c];
+    // Only the band: below three-quarters of the cap coverage is good and nothing is painted, and
+    // beyond the pad is the edge of the graph rather than a hole in it. See compute.
+    for (const index of band) {
+        const r = Math.floor(index / cols);
+        const c = index - r * cols;
+        const d = distance[index];
 
-            if (d <= fine) {
-                continue;
-            }
+        const [px, py] = view.toScreen(minX + c * cell, minY + r * cell);
 
-            const [px, py] = view.toScreen(minX + c * cell, minY + r * cell);
+        // The cull uses the projected corner in both projections; in art a cell is a diamond
+        // whose widest point is `size` from that corner, so the same margin still holds.
+        if (px + size < 0 || py + size < 0 || px > ctx.canvas.clientWidth || py > ctx.canvas.clientHeight) {
+            continue;
+        }
 
-            // The cull uses the projected corner in both projections; in art a cell is a diamond
-            // whose widest point is `size` from that corner, so the same margin still holds.
-            if (px + size < 0 || py + size < 0 || px > ctx.canvas.clientWidth || py > ctx.canvas.clientHeight) {
-                continue;
-            }
+        if (d <= hopCap) {
+            // Marginal: reachable, but one edit away from not being.
+            ctx.fillStyle = 'rgba(255, 210, 0, 0.28)';
+        } else {
+            // A real gap, deepening with distance so the worst of it is obvious at a glance.
+            const alpha = Math.min(0.6, 0.28 + (d - hopCap) / (hopCap * 6));
+            ctx.fillStyle = `rgba(255, 40, 0, ${alpha})`;
+        }
 
-            if (d <= hopCap) {
-                // Marginal: reachable, but one edit away from not being.
-                ctx.fillStyle = 'rgba(255, 210, 0, 0.28)';
-            } else {
-                // A real gap, deepening with distance so the worst of it is obvious at a glance.
-                const alpha = Math.min(0.6, 0.28 + (d - hopCap) / (hopCap * 6));
-                ctx.fillStyle = `rgba(255, 40, 0, ${alpha})`;
-            }
-
-            // A coverage cell is a world square, so in art it is a diamond like every other rect.
-            if (traceWorldRect(ctx, view, minX + c * cell, minY + r * cell, cell, cell)) {
-                ctx.fill();
-            } else {
-                ctx.fillRect(px, py, size, size);
-            }
+        // A coverage cell is a world square, so in art it is a diamond like every other rect.
+        if (traceWorldRect(ctx, view, minX + c * cell, minY + r * cell, cell, cell)) {
+            ctx.fill();
+        } else {
+            ctx.fillRect(px, py, size, size);
         }
     }
 }

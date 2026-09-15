@@ -890,6 +890,100 @@ namespace Server.Custom
             return found;
         }
 
+        /// <summary>
+        /// [BotSendTo without a client, for the `bot-send` token: the destination by exact id or by
+        /// words, and the bot by name - or, with no name, the live bot standing nearest the home
+        /// waypoint (Custom.NavHomeWaypoint, Britain's bank plaza), so "send a Britain bot to
+        /// Moonglow" needs no serial. The same Traveler swap and the same TravelerBehavior.SendTo
+        /// as the command; the answer names the bot and says whether its route takes a gate.
+        /// </summary>
+        public static bool TrySendHeadless(string query, string botName, out string message)
+        {
+            NavDestination destination = Nav.Destination(query);
+
+            if (destination == null)
+            {
+                List<NavDestination> matches = Matching(query);
+
+                if (matches.Count != 1)
+                {
+                    message = String.Format("'{0}' matches {1} destination(s)", query, matches.Count);
+                    return false;
+                }
+
+                destination = matches[0];
+            }
+
+            PlayerBot bot = null;
+            NavWaypoint home = Nav.Waypoint(NavigationSystem.HomeWaypoint);
+            int best = Int32.MaxValue;
+
+            foreach (Mobile mobile in LiveRegistry.Snapshot())
+            {
+                var candidate = mobile as PlayerBot;
+
+                if (candidate == null || candidate.Deleted || !candidate.Alive)
+                {
+                    continue;
+                }
+
+                if (!String.IsNullOrEmpty(botName))
+                {
+                    if (Insensitive.Equals(candidate.Name, botName))
+                    {
+                        bot = candidate;
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (home == null || candidate.Map != home.Map)
+                {
+                    continue;
+                }
+
+                int distance = NavGraph.Chebyshev(candidate.Location, home.Location);
+
+                if (distance < best)
+                {
+                    best = distance;
+                    bot = candidate;
+                }
+            }
+
+            if (bot == null)
+            {
+                message = String.IsNullOrEmpty(botName)
+                    ? "no live bot to send"
+                    : String.Format("no live bot is called '{0}'", botName);
+                return false;
+            }
+
+            var traveler = bot.Behavior as TravelerBehavior;
+
+            if (traveler == null)
+            {
+                bot.SetBehavior(BotBehaviors.Create("Traveler"), "sent by bot-send");
+                traveler = bot.Behavior as TravelerBehavior;
+            }
+
+            if (traveler == null || !traveler.SendTo(bot, destination))
+            {
+                message = String.Format("{0} (0x{1:X}) cannot route to {2} from {3}", bot.Name, bot.Serial.Value, destination.Id, bot.Location);
+                return false;
+            }
+
+            message = String.Format(
+                "{0} (0x{1:X}) sent from {2} to {3}",
+                bot.Name,
+                bot.Serial.Value,
+                bot.Location,
+                destination.Id);
+
+            return true;
+        }
+
         private static void SendBot(Mobile from, PlayerBot bot, NavDestination destination)
         {
             if (bot == null || bot.Deleted)

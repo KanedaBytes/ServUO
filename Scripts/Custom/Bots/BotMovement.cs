@@ -251,6 +251,10 @@ namespace Server.Custom
         /// Not the step count, which counts a twelve-tile hop and a one-tile hop the same, and not
         /// NavRoute.Cost, which is weighted by road tags for the SEARCH and so is not a distance
         /// at all - a road hop costs 0.9 of what it measures.
+        ///
+        /// A GATE HOP IS NO TILES. It is a moongate, not a road three thousand tiles long, and
+        /// counting it made every gated trip a long run and every work site beyond a gate look as
+        /// far away as the teleport's straight line.
         /// </summary>
         public static int RouteTiles(NavRoute route)
         {
@@ -263,6 +267,11 @@ namespace Server.Custom
 
             for (int i = 1; i < route.Steps.Count; i++)
             {
+                if (route.Steps[i].Kind == NavStepKind.Transition)
+                {
+                    continue;
+                }
+
                 Point3D a = route.Steps[i - 1].Point;
                 Point3D b = route.Steps[i].Point;
 

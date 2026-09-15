@@ -42,10 +42,10 @@
 //
 // WHAT A FAILURE MEANS, AND WHAT IT DOES NOT
 // -------------------------------------------
-// Reported, not fixed. Neither case arises in the live data - gate routing is not active and no
-// gate edge has ever been authored (Nav.Data reports 0) - so a disagreement here is a fact about
-// what the planner WOULD do, not about what it does. That is the whole reason to have it before
-// somebody authors the first gate.
+// Reported, not fixed. The stacked-discount case does not arise in the live data, so a disagreement
+// there is a fact about what the planner WOULD do. The gate cases are no longer hypothetical: the
+// nine Trammel moongates are 36 gate edges from 15 September 2026, and "gate behind the start" is
+// the case plain Chebyshev got wrong and NavGraph.Heuristic's gate bound now gets right.
 //
 // The check reports Ok when the two agree, and Warn - never Fail - when they do not: a warning on
 // a hypothetical is honest, and a red check for a case the shard cannot reach is one people learn
@@ -362,6 +362,7 @@ namespace Server.Custom
             yield return StackedDiscounts();
             yield return GateShortcut();
             yield return GateShortcutDeep();
+            yield return GateBehindStart();
             yield return StackedDiscountsLong();
         }
 
@@ -523,6 +524,50 @@ namespace Server.Custom
                 ExpectedTruth = 70.0,
                 ExpectDisagreement = false,
                 Name = "gate shortcut two hops in",
+                Store = store,
+                CostTags = new Dictionary<string, double> { { "road", 0.9 } },
+                HopCap = 1024,
+                From = "a",
+                To = "far"
+            };
+        }
+
+        /// <summary>
+        /// THE CASE THE OLD HEURISTIC GOT WRONG, and the reason gate routing could not be switched
+        /// on until the heuristic changed. The gate pad is BEHIND the start: four hundred tiles
+        /// the wrong way, whose gate lands beside a goal nine hundred tiles ahead.
+        ///
+        /// Plain Chebyshev scored the pad at 400 + 0.9 x 1300 = 1570 and the road's goal at 900,
+        /// so the search closed the goal by road before it ever expanded the pad. The true
+        /// optimum is 400 + 30 = 430. With the gate bound in NavGraph.Heuristic, the pad scores
+        /// 400 + 30 + 0 and is expanded first.
+        /// </summary>
+        private static Case GateBehindStart()
+        {
+            var store = new NavigationStore();
+
+            store.Waypoints.Add(Wp("a", 0));
+            store.Waypoints.Add(Wp("pad", -400));
+            store.Waypoints.Add(Wp("m", 450));
+            store.Waypoints.Add(Wp("far", 900));
+
+            store.Edges.Add(Edge("a", "pad", null));
+            store.Edges.Add(Edge("a", "m", null));
+            store.Edges.Add(Edge("m", "far", null));
+
+            NavEdge gate = Edge("pad", "far", null);
+            gate.KindName = "gate";
+            store.Edges.Add(gate);
+
+            foreach (NavWaypoint w in store.Waypoints) { w.Bind(); }
+            foreach (NavEdge e in store.Edges) { e.Bind(); }
+
+            return new Case
+            {
+                // a->pad 400, then the gate's flat 30. Total 430, against 450 + 450 = 900 by road.
+                ExpectedTruth = 430.0,
+                ExpectDisagreement = false,
+                Name = "gate behind the start (pad 400 tiles the wrong way)",
                 Store = store,
                 CostTags = new Dictionary<string, double> { { "road", 0.9 } },
                 HopCap = 1024,

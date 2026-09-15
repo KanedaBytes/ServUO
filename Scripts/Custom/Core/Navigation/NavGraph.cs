@@ -156,6 +156,10 @@ namespace Server.Custom
         private int _walkEdges;
         private int _gateEdges;
 
+        /// <summary>Every node with at least one gate link, and the cheapest gate link's cost.</summary>
+        private readonly List<int> _gateNodes = new List<int>();
+        private double _minGateCost = Double.PositiveInfinity;
+
         public int NodeCount
         {
             get { return _nodes.Count; }
@@ -211,6 +215,8 @@ namespace Server.Custom
             _componentCount = 0;
             _walkEdges = 0;
             _gateEdges = 0;
+            _gateNodes.Clear();
+            _minGateCost = Double.PositiveInfinity;
 
             _minMultiplier = 1.0;
 
@@ -244,7 +250,40 @@ namespace Server.Custom
                 AddEdge(edge, costTags, hopCap);
             }
 
+            IndexGates();
             LabelComponents();
+        }
+
+        /// <summary>
+        /// Collects the gate nodes and the cheapest gate link AFTER every edge is in, because
+        /// AddLink may replace a gate link with a cheaper walk declaration of the same pair.
+        /// </summary>
+        private void IndexGates()
+        {
+            for (int i = 0; i < _links.Count; i++)
+            {
+                bool gate = false;
+
+                foreach (Link link in _links[i])
+                {
+                    if (link.Kind != NavEdgeKind.Gate)
+                    {
+                        continue;
+                    }
+
+                    gate = true;
+
+                    if (link.Cost < _minGateCost)
+                    {
+                        _minGateCost = link.Cost;
+                    }
+                }
+
+                if (gate)
+                {
+                    _gateNodes.Add(i);
+                }
+            }
         }
 
         private void AddEdge(NavEdge edge, IDictionary<string, double> costTags, int hopCap)
@@ -436,6 +475,49 @@ namespace Server.Custom
             return _components[index];
         }
 
+        /// <summary>
+        /// The walk components reachable from a waypoint over walk AND gate edges - what a bot
+        /// standing there can get to, where ComponentOf is only what it can get to on foot.
+        /// Empty when the waypoint is unknown.
+        /// </summary>
+        public HashSet<int> ComponentsReachableFrom(string id)
+        {
+            var result = new HashSet<int>();
+
+            int start;
+
+            if (id == null || _components == null || !_index.TryGetValue(id, out start))
+            {
+                return result;
+            }
+
+            var seen = new bool[_nodes.Count];
+            var queue = new Queue<int>();
+
+            seen[start] = true;
+            queue.Enqueue(start);
+
+            while (queue.Count > 0)
+            {
+                int current = queue.Dequeue();
+
+                result.Add(_components[current]);
+
+                List<Link> links = _links[current];
+
+                for (int i = 0; i < links.Count; i++)
+                {
+                    if (!seen[links[i].To])
+                    {
+                        seen[links[i].To] = true;
+                        queue.Enqueue(links[i].To);
+                    }
+                }
+            }
+
+            return result;
+        }
+
         public bool SameComponent(string a, string b)
         {
             int ca = ComponentOf(a);
@@ -566,14 +648,13 @@ namespace Server.Custom
         /// point of a cache hit is that no search happens.
         ///
         /// The heuristic is Chebyshev distance scaled by the cheapest cost multiplier in the
-        /// data, which keeps it admissible against a single discounting tag (a "road" at 0.9,
-        /// say). It is NOT unconditionally admissible: an edge multiplies ALL of its tags while
-        /// the heuristic takes only the cheapest one, so two stacked discounts can overshoot it,
-        /// and a gate edge is a flat cost for which geographic distance is no lower bound at all.
-        /// Neither case arises in the current data - gate routing is not active - but the claim
-        /// this comment used to make was wider than the code. Nodes on a different facet from the
-        /// goal get a heuristic of zero, so a cross-facet search degrades to Dijkstra rather than
-        /// going wrong.
+        /// data, min'd with a bound through the nearest gate - see Heuristic. That keeps it
+        /// consistent with gate edges in the graph and against a single discounting tag (a "road"
+        /// at 0.9, say). It is still NOT admissible against STACKED discounts: an edge multiplies
+        /// ALL of its tags while the heuristic takes only the cheapest one. That case does not
+        /// arise in the current data and Nav.Planner warns the day it does. Nodes on a different
+        /// facet from the goal get a heuristic of zero, so a cross-facet search degrades to
+        /// Dijkstra rather than going wrong.
         /// </summary>
         /// <param name="cacheTtlSeconds">
         /// How long a cached route may be served before it is re-searched, whatever edge health
@@ -581,6 +662,18 @@ namespace Server.Custom
         /// </param>
         public bool TryFindPath(
             string fromId, string toId, int cacheLimit, int cacheTtlSeconds,
+            out NavRoute route, out string error)
+        {
+            return TryFindPath(fromId, toId, cacheLimit, cacheTtlSeconds, true, out route, out error);
+        }
+
+        /// <param name="allowGates">
+        /// False plans on foot only - gate links are not relaxed at all, so the answer is the best
+        /// WALKED route or none. A traveller uses it to keep some long-haul foot traffic on the
+        /// roads, as uo-offline's GateShortcutChance does.
+        /// </param>
+        public bool TryFindPath(
+            string fromId, string toId, int cacheLimit, int cacheTtlSeconds, bool allowGates,
             out NavRoute route, out string error)
         {
             route = null;
@@ -605,7 +698,7 @@ namespace Server.Custom
             NavEdgeHealth.Sweep();
 
             int health = NavEdgeHealth.Version;
-            string key = fromId + ">" + toId;
+            string key = (allowGates ? "" : "walk:") + fromId + ">" + toId;
 
             CacheEntry cached;
 
@@ -627,11 +720,14 @@ namespace Server.Custom
                 }
             }
 
-            route = Search(from, to);
+            route = Search(from, to, allowGates);
 
             if (route == null)
             {
-                error = String.Format("no route from '{0}' to '{1}'", fromId, toId);
+                error = String.Format(
+                    allowGates ? "no route from '{0}' to '{1}'" : "no walked route from '{0}' to '{1}'",
+                    fromId,
+                    toId);
                 return false;
             }
 
@@ -651,7 +747,7 @@ namespace Server.Custom
             return true;
         }
 
-        private NavRoute Search(int from, int to)
+        private NavRoute Search(int from, int to, bool allowGates)
         {
             if (from == to)
             {
@@ -678,10 +774,27 @@ namespace Server.Custom
             Point3D goal = _nodes[to].Location;
             Map goalMap = _nodes[to].Map;
 
+            // The gate half of the heuristic needs the cheapest walk from any gate on the goal's
+            // facet to the goal. Nine gates, so this is nine subtractions per search.
+            double gateToGoal = Double.PositiveInfinity;
+
+            if (allowGates)
+            {
+                for (int i = 0; i < _gateNodes.Count; i++)
+                {
+                    NavWaypoint gate = _nodes[_gateNodes[i]];
+
+                    if (gate.Map == goalMap)
+                    {
+                        gateToGoal = Math.Min(gateToGoal, Chebyshev(gate.Location, goal) * _minMultiplier);
+                    }
+                }
+            }
+
             var open = new NavHeap(count);
 
             cost[from] = 0.0;
-            open.Push(from, Heuristic(from, goal, goalMap));
+            open.Push(from, Heuristic(from, goal, goalMap, gateToGoal));
 
             while (open.Count > 0)
             {
@@ -705,7 +818,7 @@ namespace Server.Custom
                 {
                     Link link = links[i];
 
-                    if (closed[link.To])
+                    if (closed[link.To] || (!allowGates && link.Kind == NavEdgeKind.Gate))
                     {
                         continue;
                     }
@@ -732,14 +845,34 @@ namespace Server.Custom
                     previous[link.To] = current;
                     previousKind[link.To] = link.Kind;
 
-                    open.Push(link.To, candidate + Heuristic(link.To, goal, goalMap));
+                    open.Push(link.To, candidate + Heuristic(link.To, goal, goalMap, gateToGoal));
                 }
             }
 
             return null;
         }
 
-        private double Heuristic(int node, Point3D goal, Map goalMap)
+        /// <summary>
+        /// A lower bound on the remaining cost, and a CONSISTENT one with gates in the graph.
+        ///
+        /// Two ways to reach the goal, and the bound is the cheaper of their bounds:
+        ///
+        ///   on foot    - Chebyshev to the goal, times the cheapest tag multiplier.
+        ///   by a gate  - Chebyshev to the nearest gate node on this facet, plus the cheapest gate
+        ///                link, plus Chebyshev from the gate nearest the goal (gateToGoal).
+        ///
+        /// Plain Chebyshev alone is NOT a bound once a gate exists: a pad four hundred tiles BEHIND
+        /// the start whose gate lands beside the goal costs 400 + 30 by the gate and the heuristic
+        /// at the pad promised well over a thousand, so the search closed the road route first and
+        /// never looked behind itself (NavPlannerCheck, "gate behind the start"). Each half is
+        /// consistent - Chebyshev is 1-Lipschitz, so is the nearest-gate distance, and at a gate
+        /// node the gate half is exactly the gate link plus the far gate's own bound - and the
+        /// minimum of consistent heuristics is consistent, so a closed node never needs reopening.
+        ///
+        /// Edge-health penalties only ever multiply a cost by 1 or more, so they cannot break it.
+        /// Stacked discount tags still can, exactly as before; Nav.Planner watches for that.
+        /// </summary>
+        private double Heuristic(int node, Point3D goal, Map goalMap, double gateToGoal)
         {
             NavWaypoint waypoint = _nodes[node];
 
@@ -748,7 +881,26 @@ namespace Server.Custom
                 return 0.0;
             }
 
-            return Chebyshev(waypoint.Location, goal) * _minMultiplier;
+            double onFoot = Chebyshev(waypoint.Location, goal) * _minMultiplier;
+
+            if (Double.IsPositiveInfinity(gateToGoal))
+            {
+                return onFoot;
+            }
+
+            double toGate = Double.PositiveInfinity;
+
+            for (int i = 0; i < _gateNodes.Count; i++)
+            {
+                NavWaypoint gate = _nodes[_gateNodes[i]];
+
+                if (gate.Map == goalMap)
+                {
+                    toGate = Math.Min(toGate, Chebyshev(waypoint.Location, gate.Location) * _minMultiplier);
+                }
+            }
+
+            return Math.Min(onFoot, toGate + _minGateCost + gateToGoal);
         }
 
         private NavRoute Reconstruct(int[] previous, NavEdgeKind[] previousKind, int from, int to, double cost)

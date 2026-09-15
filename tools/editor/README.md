@@ -1165,6 +1165,12 @@ Adapted from uo-offline-server's editor with three changes.
   `HOP_CAP` matches the config, because an overlay whose numbers are not the pathfinder's numbers
   is decoration.
 - **Nothing is painted where coverage is good**, which is what lets it be a permanent layer.
+- **A cell is measured only against waypoints within twice the cap of it** (15 September 2026).
+  Beyond that is the edge of the graph, not a hole in it, and is neither drawn nor counted. It used
+  to be the padded bounding box, and the moongates broke that: nine gate waypoints from Skara Brae to
+  Moonglow made the box the whole facet, the cell grew to 32 tiles to fit a 12,000-cell budget, and
+  the overlay went coarser than the hop cap it measures. Each waypoint now stamps its own padded
+  square, the budget is 600,000 cells, and only the drawn band is iterated per frame.
 
 **Read it knowing what it measures.** It is distance to the nearest waypoint *node*, not
 reachability *through the graph*. On our data roughly 60% of the padded bounding box reads as a
@@ -1946,6 +1952,7 @@ a second, runs the matching command path, deletes the token and writes `<name>.a
 | `bots-reload` | `BotSystem.TryReload` **and** `BotWorkSites.Validate`, which is both halves of `[BotsReload` |
 | `broadcast` | The whole body, to every player, through `CommandHandlers.BroadcastMessage`. Never nonced |
 | `shutdown` | Acks, then `Core.Kill(false)` two seconds later. The **save is the caller's job** |
+| `bot-send` | `BotCommands.TrySendHeadless` - `[BotSendTo` without a client. Body `<destination id or words> [bot=Name_With_Underscores]`; no name sends the live bot nearest the home waypoint. The ack names the bot and serial, and `botinfo` follows it from there |
 
 **`save` exists because there is no other way to save from outside the game.** ServUO's console
 takes no staff commands, and `HandleClosed` does *not* save on exit — it only waits for writes

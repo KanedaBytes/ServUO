@@ -174,6 +174,17 @@ namespace Server.Custom
 
         public static bool TryRoute(string fromId, string toId, Mobile forMobile, out NavRoute route, out string error)
         {
+            return TryRoute(fromId, toId, forMobile, true, out route, out error);
+        }
+
+        /// <param name="allowGates">
+        /// False plans on foot only. A gate is never planned for a mobile that is not a Player
+        /// whatever this says, because PublicMoongate.OnMoveOver serves players only and a
+        /// creature routed onto one would stand there - see NavGate.
+        /// </param>
+        public static bool TryRoute(
+            string fromId, string toId, Mobile forMobile, bool allowGates, out NavRoute route, out string error)
+        {
             route = null;
 
             string fromWaypoint;
@@ -194,9 +205,14 @@ namespace Server.Custom
 
             NavRoute found;
 
+            if (forMobile != null && !forMobile.Player)
+            {
+                allowGates = false;
+            }
+
             if (!NavigationSystem.Graph.TryFindPath(
                 fromWaypoint, toWaypoint, NavigationSystem.RouteCacheMax,
-                NavigationSystem.RouteCacheTtlSeconds, out found, out error))
+                NavigationSystem.RouteCacheTtlSeconds, allowGates, out found, out error))
             {
                 return false;
             }
@@ -212,6 +228,12 @@ namespace Server.Custom
         /// </summary>
         public static bool TryRouteFrom(Point3D from, Map map, string toId, Mobile forMobile, out NavRoute route, out string error)
         {
+            return TryRouteFrom(from, map, toId, forMobile, true, out route, out error);
+        }
+
+        public static bool TryRouteFrom(
+            Point3D from, Map map, string toId, Mobile forMobile, bool allowGates, out NavRoute route, out string error)
+        {
             route = null;
 
             NavWaypoint start = NavigationSystem.Graph.Nearest(from, map, NavigationSystem.HopMaxTiles);
@@ -226,7 +248,7 @@ namespace Server.Custom
                 return false;
             }
 
-            return TryRoute(start.Id, toId, forMobile, out route, out error);
+            return TryRoute(start.Id, toId, forMobile, allowGates, out route, out error);
         }
 
         /// <summary>
@@ -282,6 +304,25 @@ namespace Server.Custom
 
             waypointId = nearest.Id;
             return true;
+        }
+
+        /// <summary>True when a route takes at least one gate hop.</summary>
+        public static bool UsesGate(NavRoute route)
+        {
+            if (route == null || route.Steps == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < route.Steps.Count; i++)
+            {
+                if (route.Steps[i].Kind == NavStepKind.Transition)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static NavRoute AppendArrival(NavRoute route, NavDestination destination, Mobile forMobile)

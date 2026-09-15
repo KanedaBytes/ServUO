@@ -141,11 +141,21 @@ read when it was. **Where the two disagree, this section is the one that has bee
   is bounded at one health interval and is visible in the health line; it is never Ok while a
   runtime override from the `nav-pathfinder` token is in force. **What the instrument measured, and
   the decision it feeds, is `PATHFINDER-DECISION.md`.**
-- **The heuristic is admissible against one discounting tag, and no more.** An edge multiplies all
-  of its tags while the heuristic takes the cheapest one, and a gate edge is a flat cost for which
-  geographic distance is no lower bound at all. Neither case arises in the current data - **gate
-  routing is not active and no gate edge has ever been authored** - and both must be settled before
-  it is.
+- **The heuristic is consistent with gate edges, and admissible against one discounting tag.**
+  From 15 September 2026 it is the cheaper of two bounds: Chebyshev to the goal, and Chebyshev to
+  the nearest gate node plus the cheapest gate link plus Chebyshev from the gate nearest the goal
+  (`NavGraph.Heuristic`). Plain Chebyshev was no bound once a gate existed - a pad behind the start
+  whose gate lands beside the goal was closed out by the road route - and the minimum of the two
+  consistent bounds is consistent, so the no-reopening search stays optimal. **Stacked discount
+  tags can still overshoot it**, exactly as before. **Gate routing is active**: see *Moongates*.
+- **A gate hop is taken the way a player takes a public moongate** (`NavGate.cs`): walk onto the
+  gate tile, a real `PublicMoongate` there, a two-second step-through beat, then
+  `MoongateGump.OnResponse`'s own refusals and its own tail, landing on the far gate's PMList tile.
+  A creature is never planned through a gate (`Nav.TryRoute`), and a refusal stops the walk rather
+  than rescuing it, because a rescue across the sea is exactly what a player cannot do.
+- **`Nav.Data` FAILS on an island holding somewhere to go with no walk and no gate into it**
+  (`NavConnectivity`). An island a gate reaches is not reported at all. `[CoreSmoke` runs the
+  three-case fixture (`-- navigation gate islands --`).
 - **`Nav.Planner` checks that claim against the live data every sixty seconds**, from 12 September
   2026, rather than leaving it as prose. It builds tiny graphs in memory and compares `NavGraph`'s
   A* against a plain Dijkstra, and **the overshoot REVIEW.md:91 names is real and reproducible**:
@@ -154,9 +164,9 @@ read when it was. **Where the two disagree, this section is the one that has bee
   It **cannot fire on the data as authored** - five cost tags of which exactly one discounts
   (`road`, 0.9), and the only edge carrying two tags multiplies out to 1.17, a net penalty - and the
   check is Ok while that holds and Warns the moment a second discounting tag appears or an edge's
-  product drops below the cheapest single one. Both gate cases agree, including one where the gate
-  hangs two hops in; that is reported as *no disagreement found* rather than as *gates are safe*,
-  because there is no gate edge in the data to test against.
+  product drops below the cheapest single one. Three gate cases agree, including **"gate behind the
+  start"**, the one plain Chebyshev got wrong (900 by road against the true 430 through a pad four
+  hundred tiles the wrong way) and the reason the heuristic changed before any gate was authored.
 - **The mainland is the ANCHOR's component**, `Custom.NavHomeWaypoint` (Britain's bank plaza), with
   largest-component only as a fallback for a graph that has named no anchor. Largest was wrong, and
   one adopt proved it by bringing in 481 waypoints against it.
@@ -372,9 +382,62 @@ Two deliberate differences:
   coordinate as a last resort, which is precisely the behaviour this change removes. Standing in
   the road is recoverable; standing under a pier is not.
 
-`OnTransition` gets the same validated landing, because a gate's far side is authored data with the
-same exposure - it keeps the raw fallback, since a transition that does not happen leaves the
-mobile on the wrong facet with a route it cannot walk.
+`OnTransition` no longer lands anywhere of its own choosing. It used to take this validated landing,
+from wherever the walker stood two tiles short of the gate; it now lands on the PMList entry tile,
+exactly as a player's gump does - see *Moongates*.
+
+## Moongates
+
+*Built 15 September 2026.* The nine public moongates `PMList.Trammel` lists - Moonglow, Britain,
+Jhelom, Yew, Minoc, Trinsic, Skara Brae, Magincia and New Haven - are waypoints `gate-<town>` on the
+gate tile itself, and every pair of them is one `kind: gate` edge: **36 edges, a full mesh**, because
+a public moongate offers every other one and a player picks.
+
+**What is uo-offline's and what is not.** They have no gate edge at all (`waypoints.json` has no map
+and no kind; read `Behaviors/MoongateTravel.cs` whole and `TravelerBehavior.cs:1436-1660,
+2310-2365`). Their bot reroutes to the nearest reachable Moongate destination when there is no walk
+path, takes a long-haul shortcut through the gates 80% of the time when a trip is 200 tiles or more
+and the two gate legs are under half the walk, and on arrival waits `StepThroughDelay` (2 s) and
+`MoveToWorld`s to a spread tile beside the exit gate. Three named seams against that:
+
+| Theirs | Ours | Why |
+| --- | --- | --- |
+| Component reroute plus a straight-line shortcut test | Gate edges costed by the route planner (`GateBaseCost` 30) | Sean's brief. One mechanism instead of two, and the planner already knows what the road costs |
+| Land within two tiles of the exit gate | Land ON the PMList entry tile | A player cannot choose a spread landing |
+| A bot at a gate destination steps through to a random gate 80% of the time | Not ported | Our destination roll is facet-wide already, so bots spread by picking far places and routing through gates |
+
+**Kept from theirs**: the two-second beat, and **a fifth of gated departures walk instead** when a
+walked route exists (`TravelerBehavior.WalkInsteadOfGateChance`, their `1 - GateShortcutChance`).
+
+**The player rule, in code.** `NavWalker.OnTransition` is a small state machine now, not a teleport:
+onto the gate tile (bounded steps, because the previous hop calls itself arrived two tiles out), a
+live `PublicMoongate` within a tile, the beat, then `NavGate.CanUse` - `MoongateGump.OnResponse`'s
+refusals in its order: already there, too far, red travel, sigil, criminal, combat, casting, and
+`CanUseGate`'s dragging - and its tail verbatim: `TeleportPets`, `Combatant = null`,
+`Warmode = false`, `Hidden = true`, the move, sound 0x1FE, `CityTradeSystem.OnPublicMoongateUsed`.
+The stock gump is not used because it cannot be: a bot has no NetState, so `SendGump` returns false
+and stepping onto a gate plays 0x20E and nothing else.
+
+**Checked three ways.** `[NavAudit` counts gate edges and BLOCKS one whose end is not within a tile
+of a PMList entry and of a live `PublicMoongate`. `[WalkAudit` walks every gate edge both ways with
+the **bot** class - from the gate's nearest walk neighbour, onto the gate, through, out - and counts
+the creature class's gate walks as not made, since a moongate serves players. `Nav.Data` fails a
+gateless island. On the day it landed: **72 gate walks, 0 failed** in a bot sweep of 2,637 walks, and
+`[BotSendTo moonglow-gate` from Britain's bank logged `took the moongate at 1336,1997 to 4467,1283,5`.
+
+**The walk links.** `gate-britain` is four tiles from `uo-wp-614`, the moongate destination's own
+approach. `gate-trinsic` is 196 tiles from the nearest Trinsic road, south-east round the water, so
+it is a `nav-route` corridor from `uo-wp-199-s1` in 20 hops (`gate-trinsic-road-1`...`-19`), every
+hop verified both ways by `nav-hop` as bot; two of them carry `arrivalRange: 1` for the reason
+*What the five real cliffs turned out to be* gives. The other seven gates have no road yet; the
+Trammel adopt joins uo-offline's roads onto them. Five uo-offline gate destinations were copied by
+id with their `waypoints` pointed at our gate waypoint: `moonglow-gate`, `jhelom-gate`,
+`skara-brae-gate`, `yew-gate` and `vesper-gate` - **which is Minoc's gate**, labelled Vesper in their
+data, and the id is kept as copied.
+
+**Two things this does not do.** A gate is two-way (`NavGraph.AddEdge` symmetrises every edge), which
+is right for public moongates and wrong for a one-way teleporter. And `bots.json` has no opinion
+about any of it: gate routing changes how bots get somewhere, never where they choose to go.
 
 ## Stuck recovery
 
@@ -1863,7 +1926,8 @@ edges walked at adopt time and nothing else.
 
 The whole file, Trammel: **1001 waypoints, 1153 walk edges, 65 destinations, 136 arrival points, 8
 zones, 4 routes** - counted from `navigation.json` on 11 September 2026, when it read 996 and 1148
-here. Every edge is `kind: walk`; no gate edge has ever been authored.
+here. Every edge was `kind: walk` until 15 September 2026, when the nine Trammel moongates became
+36 gate edges - see *Moongates*.
 `[NavAudit` reports **0 blocked, 0 over-cap, 0 unstandable arrivals and 0 stale Z** — every edge has
 been pathed in both directions against real map data.
 
@@ -1890,9 +1954,8 @@ and the same guesses are available to make again:
 
 Known gaps, in the order worth fixing:
 
-1. **The moongate (1336, 1997, 5) is not in the data.** It is ~90 tiles south of the town and
-   every waypoint on the road there would be invented. Walk it with `[NavRecord` and it becomes
-   real data in one pass.
+1. ~~**The moongate (1336, 1997, 5) is not in the data.**~~ It is, twice over: `brit-moongate` came
+   with the rebase, and `gate-britain` stands on the gate tile itself - see *Moongates*.
 2. **Only the west gate is seeded.** The north Chaos guard posts (1521/1525, 1457) and the
    northern approach are outside the seeded box.
 3. ~~**`[NavAudit` is a full re-path every time, and gets slower with the graph.**~~ **The "132

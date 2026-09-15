@@ -395,6 +395,27 @@ test('destinations in two unconnected pieces of the graph are a warning', () => 
         /Trammel destinations span 2 disconnected walk components/);
 });
 
+test('an island a gate edge reaches from the main graph is not a warning', () => {
+    // Moonglow is an island and a bot gets there through the Britain moongate. The shard's
+    // Nav.Data asks the same question through NavConnectivity and FAILS only on the gateless kind.
+    const { fatal, warnings } = check((nav) => {
+        nav.waypoints.push({ id: 'island', map: 'Trammel', x: 100, y: 100, z: 0, arrivalRange: 0, tags: '' });
+        nav.waypoints.push({ id: 'island2', map: 'Trammel', x: 101, y: 100, z: 0, arrivalRange: 0, tags: '' });
+        nav.edges.push({ from: 'island', to: 'island2', kind: 'walk', tags: '' });
+        nav.edges.push({ from: nav.waypoints[0].id, to: 'island', kind: 'gate', tags: '' });
+        nav.destinations.push({
+            id: 'far', name: 'Far', type: 'bank', map: 'Trammel', x: 100, y: 100, z: 0,
+            tags: '', waypoints: 'island'
+        });
+        nav.arrivals.push(
+            { destination: 'far', x: 100, y: 100, z: 0, exclusive: false, waypoints: 'island' },
+            { destination: 'far', x: 101, y: 101, z: 0, exclusive: false, waypoints: 'island' });
+    });
+
+    assert.deepStrictEqual(fatal, []);
+    assert.doesNotMatch(warnings.join('|'), /disconnected walk components/);
+});
+
 // ---- the shapes the browser actually holds -----------------------------------------------------
 
 test('validating the editor shapes agrees with validating the file', async () => {

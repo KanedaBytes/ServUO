@@ -30,7 +30,8 @@ test('the grid stays within the cell budget and is finer than the hop cap', () =
     const grid = coverage.compute(waypoints(), HOP_CAP);
 
     assert.ok(grid, 'no grid was produced');
-    assert.ok(grid.cols * grid.rows <= 12000, `grid is ${grid.cols * grid.rows} cells`);
+    // 600,000 cells: a whole facet at five tiles, which the moongates made the ordinary case.
+    assert.ok(grid.cols * grid.rows <= 600000, `grid is ${grid.cols * grid.rows} cells`);
     assert.ok(grid.cell <= HOP_CAP, 'cells are coarser than the thing being measured');
 });
 

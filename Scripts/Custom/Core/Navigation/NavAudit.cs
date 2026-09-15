@@ -197,6 +197,34 @@ namespace Server.Custom
         }
 
         /// <summary>As above, with the cliff scan. See Run(Mobile, bool).</summary>
+        /// <summary>
+        /// Why a gate waypoint is not a moongate a player could use, or null when it is: it must be
+        /// within a tile of a PMList destination AND of a live PublicMoongate. See NavGate.
+        /// </summary>
+        private static string GateFault(NavWaypoint waypoint)
+        {
+            if (waypoint.Map == null)
+            {
+                return String.Format("'{0}' has no facet", waypoint.Id);
+            }
+
+            Server.Items.PMList list;
+
+            if (NavGate.EntryAt(waypoint.Map, waypoint.Location, out list) == null)
+            {
+                return String.Format(
+                    "'{0}' at {1},{2} is not a moongate destination", waypoint.Id, waypoint.X, waypoint.Y);
+            }
+
+            if (NavGate.MoongateAt(waypoint.Map, waypoint.Location) == null)
+            {
+                return String.Format(
+                    "no public moongate at {0},{1} for '{2}'", waypoint.X, waypoint.Y, waypoint.Id);
+            }
+
+            return null;
+        }
+
         public static bool TryRun(
             bool full,
             out string summary, out IList<string> report, out IList<NavAuditProblem> problems)
@@ -214,11 +242,51 @@ namespace Server.Custom
             int far = 0;
             int adjacent = 0;
             int occupied = 0;
+            int gateEdges = 0;
 
             int cap = NavigationSystem.HopMaxTiles;
 
             foreach (NavEdge edge in NavigationSystem.Store.Edges)
             {
+                // A GATE EDGE IS NOT PATHED - there is nothing to path across a moongate - but it is
+                // checked, because it is the one kind of edge a bot takes the way a player does and a
+                // player needs two things there: a PMList destination on each end, and a real
+                // PublicMoongate in the world to stand on. Either missing and NavGate refuses the hop
+                // at run time, so it is a BLOCKED edge here rather than a surprise there.
+                if (edge.Kind == NavEdgeKind.Gate)
+                {
+                    NavWaypoint ga = Nav.Waypoint(edge.From);
+                    NavWaypoint gb = Nav.Waypoint(edge.To);
+
+                    if (ga == null || gb == null)
+                    {
+                        continue;
+                    }
+
+                    string gateKey = "gate:" + (String.CompareOrdinal(ga.Id, gb.Id) < 0
+                        ? ga.Id + ">" + gb.Id
+                        : gb.Id + ">" + ga.Id);
+
+                    if (!seen.Add(gateKey))
+                    {
+                        continue;
+                    }
+
+                    gateEdges++;
+
+                    string fault = GateFault(ga) ?? GateFault(gb);
+
+                    if (fault != null)
+                    {
+                        blocked++;
+                        found.Add(new NavAuditProblem(
+                            ga.Id, gb.Id, ga.Map == null ? "" : ga.Map.Name, NavAuditKind.Blocked, 0, fault));
+                        lines.Add(String.Format("BLOCKED  gate '{0}' -> '{1}': {2}", ga.Id, gb.Id, fault));
+                    }
+
+                    continue;
+                }
+
                 if (edge.Kind != NavEdgeKind.Walk)
                 {
                     continue;
@@ -400,7 +468,7 @@ namespace Server.Custom
             _lastCliffs = cliffs;
 
             summary = String.Format(
-                "[NavAudit] {0} walk edge(s) checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
+                "[NavAudit] {0} walk edge(s){11} checked: {1} blocked, {2} over cap, {3} occupied (warning only), "
                 + "{4} adjacent (skipped){5}. Records: {6} unstandable arrival(s), {7} stale Z, {8} struck edge(s)."
                 + " {9}s.{10}",
                 checkedEdges,
@@ -417,7 +485,8 @@ namespace Server.Custom
                 Fixed(watch.Elapsed.TotalSeconds),
                 cliffs == null
                     ? " Approach tiles not checked; [NavAudit full does that."
-                    : " Approach tiles: " + cliffs.Summary);
+                    : " Approach tiles: " + cliffs.Summary,
+                gateEdges == 0 ? "" : String.Format(" and {0} gate edge(s)", gateEdges));
 
             report = lines;
             problems = found;

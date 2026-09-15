@@ -288,7 +288,7 @@ checkpoint has shipped it as `True` once already.
 | `[NavArrival <destId> [exclusive]` | GameMaster | Add an arrival point where you stand |
 | `[NavRoute <from> <to>` | GameMaster | Print the computed route between two waypoints or destinations |
 | `nav-rejoin` (token only, like `nav-adopt`) | Administrator | Re-pick every join in a region by **walked road length** rather than straight line. Body is `x,y,width,height`. Proposes edges only - no waypoint is created, moved or deleted - and writes to `Data/Live/nav-adopt.json` for `accept-adopt.js` |
-| `[NavAudit [full]` | Administrator | Pathfind every walk edge against real map data (1153 edges, ~0.5 s). `full` adds the approach-tile cliff scan — 54,683 engine paths, ~9 s — which the editor's quiet post-save run deliberately skips |
+| `[NavAudit [full]` | Administrator | Pathfind every walk edge against real map data (1153 edges, ~0.5 s), and check every gate edge ends on a PMList destination with a live `PublicMoongate` (a miss is BLOCKED). `full` adds the approach-tile cliff scan — 54,683 engine paths, ~9 s — which the editor's quiet post-save run deliberately skips |
 | `[WalkAudit [probes] [selftest] [class]` | Administrator | **Walk** every edge and arrival with real probe walkers, **once per probe class and reported per class**; `selftest` proves the instrument, per class. The class key is `creature` (the `BaseCreature` probe, which is the daily-life walkers' instrument) or `bot` (a real `PlayerBot`, which is the fleet's); omit it for both. Arguments are order-free, and the `walk-audit` token takes the same three |
 | `[NavHopProbe gen\|validate\|<pairs> [budget <n>] [bot\|creature]` | Administrator | Plan hops **three ways** - stock, a `Custom/` copy of stock, and that copy with `FastAStarAlgorithm.cs:118`'s dead-end `break` changed to `continue` - reporting success, route length and **node expansions** for each. It is the instrument behind `PATHFINDER-DECISION.md` (token: `nav-hop-probe`) |
 | `[NavPlannerCheck` | Administrator | `NavGraph`'s route planner against a plain Dijkstra on hand-built graphs with stacked cost-tag discounts and a gate edge - the admissibility test REVIEW.md:91 asked for. Reports only (token: `nav-planner`) |
@@ -312,7 +312,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
-| `[BotSendTo <destination or words> [bot name]` | GameMaster | Send a bot to a destination by id or by words, for testing a route by hand |
+| `[BotSendTo <destination or words> [bot name]` | GameMaster | Send a bot to a destination by id or by words, for testing a route by hand. Headless as the `bot-send` token: body `<destination> [bot=Name_With_Underscores]`, and with no name the live bot nearest `Custom.NavHomeWaypoint` goes; the ack names the bot and its serial |
 | `[BotTrace on \| off \| off all \| list` | GameMaster | Per-bot verbose tracing; `list` names who is traced |
 | `[BotWorkScout` | Administrator | Propose work sites from what the engine says is harvestable and standable, to `Data/Live/work-scout.json`. **Never touches `navigation.json`** - a human merges it |
 | `[BotSiteAudit` | Administrator | Every authored work site against the engine: what can be dug, what can be stood on, and whether the hops path |
@@ -474,6 +474,10 @@ Target the bot, or name it when it is not within 12 tiles. A partial argument li
 `[BotSendTo trinsic bank` resolves without knowing the exact id. It routes through
 `TravelerBehavior.SendTo`, the same path the lifecycle uses. `[BotInfo` shows behaviour,
 destination and leg progress; the editor's Bots panel shows the same live.
+
+**Across water it takes a moongate**, the way a player does: walk onto the gate tile, a two-second
+beat, out on the far gate's tile. The console says `<bot> took the moongate at x,y to x,y,z`. The nine
+Trammel gates are a full mesh of gate edges; see the Navigation README, *Moongates*.
 
 ### The Britain-Trinsic adopt, as it stands
 

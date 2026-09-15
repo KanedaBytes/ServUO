@@ -48,6 +48,13 @@ namespace Server.Custom
         private static readonly List<string> _dataWarnings = new List<string>();
 
         /// <summary>
+        /// The subset of the warnings that fail Nav.Data: today, only an island holding somewhere
+        /// to go with no walk and no gate into it. Each is ALSO in the warnings, so every existing
+        /// reader - the reload ack, the console, [NavAudit's island line - still sees it.
+        /// </summary>
+        private static readonly List<string> _dataFailures = new List<string>();
+
+        /// <summary>
         /// Gaps somebody has already looked at and accepted, kept out of the warnings on purpose.
         ///
         /// The third tier exists because the second was doing two jobs. A warning is meant to be
@@ -189,6 +196,12 @@ namespace Server.Custom
         public static IList<string> DataWarnings
         {
             get { return _dataWarnings.AsReadOnly(); }
+        }
+
+        /// <summary>The warnings that fail Nav.Data. See _dataFailures.</summary>
+        public static IList<string> DataFailures
+        {
+            get { return _dataFailures.AsReadOnly(); }
         }
 
         // ---- boot ----
@@ -343,6 +356,7 @@ namespace Server.Custom
             _zonesByMap.Clear();
             _costTags.Clear();
             _dataWarnings.Clear();
+            _dataFailures.Clear();
             _dataNotes.Clear();
 
             foreach (NavCostTag tag in _store.CostTags)
@@ -694,143 +708,47 @@ namespace Server.Custom
         /// </summary>
         private static void CheckComponents()
         {
-            if (_graph == null || _graph.ComponentCount <= 1)
-            {
-                return;
-            }
-
-            // Every waypoint, grouped by the component it walks within.
-            var members = new Dictionary<int, List<NavWaypoint>>();
-
-            foreach (NavWaypoint waypoint in _graph.Nodes)
-            {
-                int component = _graph.ComponentOf(waypoint.Id);
-
-                if (component < 0)
-                {
-                    continue;
-                }
-
-                List<NavWaypoint> list;
-
-                if (!members.TryGetValue(component, out list))
-                {
-                    list = new List<NavWaypoint>();
-                    members[component] = list;
-                }
-
-                list.Add(waypoint);
-            }
-
-            int mainland = -1;
-            int biggest = -1;
-
-            foreach (KeyValuePair<int, List<NavWaypoint>> pair in members)
-            {
-                if (pair.Value.Count > biggest)
-                {
-                    biggest = pair.Value.Count;
-                    mainland = pair.Key;
-                }
-            }
-
-            // The anchor wins over size wherever it exists.
-            NavWaypoint home = _graph.Node(HomeWaypoint);
-
-            if (home != null)
-            {
-                int anchored = _graph.ComponentOf(home.Id);
-
-                if (anchored >= 0)
-                {
-                    mainland = anchored;
-                }
-            }
-
-            // What each island holds. Both questions matter and the old check asked neither:
-            // a destination on an island cannot be walked to, and an arrival on one cannot be
-            // walked away from.
-            var strandedDestinations = new Dictionary<int, List<string>>();
-            var strandedArrivals = new Dictionary<int, int>();
-
-            foreach (NavDestination destination in _store.Destinations)
-            {
-                int component = ComponentNear(destination.Location, destination.Map);
-
-                if (component < 0 || component == mainland)
-                {
-                    continue;
-                }
-
-                List<string> ids;
-
-                if (!strandedDestinations.TryGetValue(component, out ids))
-                {
-                    ids = new List<string>();
-                    strandedDestinations[component] = ids;
-                }
-
-                ids.Add(destination.Id);
-            }
+            var arrivals = new List<KeyValuePair<NavArrival, Map>>();
 
             foreach (NavArrival arrival in _store.Arrivals)
             {
                 // An arrival has no map of its own; it lives on the one its destination is on.
                 NavDestination owner;
 
-                if (!_destinations.TryGetValue(arrival.DestinationId, out owner))
+                if (_destinations.TryGetValue(arrival.DestinationId, out owner))
                 {
-                    continue;
+                    arrivals.Add(new KeyValuePair<NavArrival, Map>(arrival, owner.Map));
                 }
-
-                int component = ComponentNear(arrival.Location, owner.Map);
-
-                if (component < 0 || component == mainland)
-                {
-                    continue;
-                }
-
-                int count;
-                strandedArrivals.TryGetValue(component, out count);
-                strandedArrivals[component] = count + 1;
             }
 
-            foreach (KeyValuePair<int, List<NavWaypoint>> pair in members)
+            // What each island holds. Both questions matter: a destination on an island cannot be
+            // walked to, and an arrival on one cannot be walked away from.
+            //
+            // AN ISLAND A GATE REACHES IS NOT A FAULT. Moonglow is an island and always will be; a
+            // bot reaches it the way a player does, through the Britain moongate. Only an island
+            // holding somewhere to go with NO way in - walked or gated - is, and that is now a
+            // FAILURE rather than a warning, because a destination nothing can reach is a place a
+            // bot will roll, fail to route to, and roll again forever. See NavConnectivity.
+            foreach (NavIsland island in NavConnectivity.Islands(_graph, _store.Destinations, arrivals, HomeWaypoint))
             {
-                if (pair.Key == mainland)
+                if (island.ReachedByGate)
                 {
                     continue;
                 }
 
-                List<string> destinations;
-                int arrivals;
-
-                strandedDestinations.TryGetValue(pair.Key, out destinations);
-                strandedArrivals.TryGetValue(pair.Key, out arrivals);
-
-                if ((destinations == null || destinations.Count == 0) && arrivals == 0)
-                {
-                    continue;
-                }
-
-                _dataWarnings.Add(String.Format(
-                    "{0} waypoint(s) form an island nothing can walk to or from, holding {1}{2}: {3}. "
-                    + "Link one of them to the main graph.",
-                    pair.Value.Count,
-                    destinations == null || destinations.Count == 0
+                string message = String.Format(
+                    "{0} waypoint(s) form an island nothing can walk to or from, and it has no gate edge into it, holding {1}{2}: {3}. "
+                    + "Link one of them to the main graph, or give the island a moongate.",
+                    island.Waypoints.Count,
+                    island.Destinations.Count == 0
                         ? "no destination"
-                        : String.Format("destination(s) {0}", String.Join(", ", destinations.ToArray())),
-                    arrivals == 0 ? "" : String.Format(" and {0} arrival point(s)", arrivals),
-                    NameWaypoints(pair.Value)));
+                        : String.Format("destination(s) {0}", String.Join(", ", island.Destinations.ToArray())),
+                    island.Arrivals == 0 ? "" : String.Format(" and {0} arrival point(s)", island.Arrivals),
+                    NameWaypoints(island.Waypoints));
+
+                _dataFailures.Add(message);
+                _dataWarnings.Add(message);
             }
-        }
-
-        /// <summary>The component of the waypoint nearest a point, or -1 when the graph is empty.</summary>
-        private static int ComponentNear(Point3D at, Map map)
-        {
-            NavWaypoint nearest = _graph.Nearest(at, map, 0);
-
-            return nearest == null ? -1 : _graph.ComponentOf(nearest.Id);
         }
 
         /// <summary>
@@ -1064,6 +982,15 @@ namespace Server.Custom
             }
 
             List<string> extra = RunAuditors();
+
+            if (_dataFailures.Count > 0)
+            {
+                return HealthResult.Fail(String.Format(
+                    "{0} unreachable island(s) - first: {1}. {2}",
+                    _dataFailures.Count,
+                    _dataFailures[0],
+                    counts));
+            }
 
             if (_dataWarnings.Count > 0 || extra.Count > 0)
             {

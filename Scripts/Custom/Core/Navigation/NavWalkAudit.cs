@@ -579,6 +579,12 @@ namespace Server.Custom
             /// <summary>The step handed to the walker. Built once here so the row and the walk agree.</summary>
             public NavStep Step;
 
+            /// <summary>
+            /// The whole route, for a walk that is more than one step - a gate walk is the gate pad
+            /// and then the Transition. Null for every other kind, which walks Step alone.
+            /// </summary>
+            public List<NavStep> Steps;
+
             /// <summary>The authored straight line this hop is measured against.</summary>
             public int Tiles()
             {
@@ -651,6 +657,12 @@ namespace Server.Custom
             public readonly List<ProbeClass> Classes = new List<ProbeClass>();
 
             public int Skipped;
+
+            /// <summary>
+            /// Gate walks a class did not make. A PublicMoongate serves players only, so the
+            /// creature probe has no gate to take; they are counted rather than silently absent.
+            /// </summary>
+            public int GatesSkipped;
             public int Total;
             public long StartedTick;
 
@@ -755,7 +767,7 @@ namespace Server.Custom
                 }
                 else
                 {
-                    BuildWorkList(job, items, ReferenceEquals(cls, classes[0]));
+                    BuildWorkList(job, items, ReferenceEquals(cls, classes[0]), Insensitive.Equals(cls.Key, "bot"));
                 }
 
                 foreach (Item item in items)
@@ -829,12 +841,45 @@ namespace Server.Custom
         /// inside the hop cap: an arrival that only one approach can reach is a one-way trip from
         /// every other, and "does this arrival work" has as many answers as it has approaches.
         /// </summary>
-        private static void BuildWorkList(Job job, List<Item> into, bool countSkipped)
+        private static void BuildWorkList(Job job, List<Item> into, bool countSkipped, bool gates)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (NavEdge edge in NavigationSystem.Store.Edges)
             {
+                // A GATE EDGE IS WALKED THE WAY A PLAYER USES ONE: from beside the gate, onto the
+                // gate tile, through the step-through beat, out at the far gate's PMList tile. Both
+                // directions, like a walk edge, and by the bot class only - see Job.GatesSkipped.
+                if (edge.Kind == NavEdgeKind.Gate)
+                {
+                    NavWaypoint ga = Nav.Waypoint(edge.From);
+                    NavWaypoint gb = Nav.Waypoint(edge.To);
+
+                    if (ga == null || gb == null || ga.Map == null || gb.Map == null)
+                    {
+                        continue;
+                    }
+
+                    string gateKey = "gate:" + (String.CompareOrdinal(ga.Id, gb.Id) < 0
+                        ? ga.Id + ">" + gb.Id
+                        : gb.Id + ">" + ga.Id);
+
+                    if (!seen.Add(gateKey))
+                    {
+                        continue;
+                    }
+
+                    if (!gates)
+                    {
+                        job.GatesSkipped += 2;
+                        continue;
+                    }
+
+                    into.Add(GateItem(ga, gb));
+                    into.Add(GateItem(gb, ga));
+                    continue;
+                }
+
                 if (edge.Kind != NavEdgeKind.Walk)
                 {
                     continue;
@@ -971,6 +1016,90 @@ namespace Server.Custom
                 Range = to.ArrivalRange,
                 Step = new NavStep(to.Location, to.Map, to.Id, NavStepKind.Walk)
             };
+        }
+
+        /// <summary>
+        /// A gate walk. It starts on the from-gate's nearest WALK neighbour inside the hop cap -
+        /// where a bot routed through the gate is actually coming from - or, for a gate nothing is
+        /// walked to yet, on a standable tile beside it. Either way the probe has to step onto the
+        /// gate itself, which is the half of the rule a spawn on the tile would skip.
+        /// </summary>
+        private static Item GateItem(NavWaypoint from, NavWaypoint to)
+        {
+            Point3D start = GateApproach(from);
+
+            Server.Items.PMList list;
+            Server.Items.PMEntry entry = NavGate.EntryAt(to.Map, to.Location, out list);
+
+            Point3D goal = entry != null
+                ? entry.Location
+                : new Point3D(to.Location.X, to.Location.Y, NavWalker.ResolveZ(to.Map, to.Location));
+
+            return new Item
+            {
+                Kind = "gate",
+                From = from.Id,
+                To = to.Id,
+                Map = from.Map,
+                Start = start,
+                Goal = goal,
+                Range = 1,
+                Step = new NavStep(to.Location, to.Map, to.Id, NavStepKind.Transition),
+                Steps = new List<NavStep>
+                {
+                    new NavStep(from.Location, from.Map, from.Id, NavStepKind.Walk),
+                    new NavStep(to.Location, to.Map, to.Id, NavStepKind.Transition)
+                }
+            };
+        }
+
+        private static Point3D GateApproach(NavWaypoint gate)
+        {
+            NavWaypoint best = null;
+            int bestDistance = Int32.MaxValue;
+
+            foreach (NavWaypoint neighbour in NavigationSystem.Graph.Neighbours(gate.Id))
+            {
+                int distance = NavGraph.Chebyshev(neighbour.Location, gate.Location);
+
+                if (neighbour.Map == gate.Map
+                    && distance <= NavigationSystem.HopMaxTiles
+                    && NavigationSystem.Graph.SameComponent(neighbour.Id, gate.Id)
+                    && distance < bestDistance)
+                {
+                    best = neighbour;
+                    bestDistance = distance;
+                }
+            }
+
+            if (best != null)
+            {
+                return new Point3D(best.X, best.Y, NavWalker.ResolveZ(best.Map, best.Location));
+            }
+
+            for (int ring = 1; ring <= 2; ring++)
+            {
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    for (int dy = -ring; dy <= ring; dy++)
+                    {
+                        if (Math.Abs(dx) != ring && Math.Abs(dy) != ring)
+                        {
+                            continue;
+                        }
+
+                        var tile = new Point3D(gate.X + dx, gate.Y + dy, gate.Z);
+                        int z = NavWalker.ResolveZ(gate.Map, tile);
+
+                        if (gate.Map.CanFit(tile.X, tile.Y, z, 16, false, false, true))
+                        {
+                            return new Point3D(tile.X, tile.Y, z);
+                        }
+                    }
+                }
+            }
+
+            return new Point3D(gate.X, gate.Y, NavWalker.ResolveZ(gate.Map, gate.Location));
         }
 
         private static Item ArrivalItem(
@@ -1314,7 +1443,12 @@ namespace Server.Custom
             // as a detour factor of zero.
             item.PathTiles = 0;
 
-            if (item.Tiles() <= 1)
+            if (item.Kind == "gate")
+            {
+                // Nothing to path across a moongate; the only walked part is onto the gate.
+                item.PathTiles = NavGraph.Chebyshev(item.Start, item.Steps[0].Point);
+            }
+            else if (item.Tiles() <= 1)
             {
                 item.PathTiles = item.Tiles();
             }
@@ -1360,7 +1494,7 @@ namespace Server.Custom
                 }
             };
 
-            walker.Follow(new NavRoute(new List<NavStep> { item.Step }, 0.0));
+            walker.Follow(new NavRoute(item.Steps ?? new List<NavStep> { item.Step }, 0.0));
         }
 
         /// <summary>
@@ -1683,9 +1817,20 @@ namespace Server.Custom
         private static string Summarise(Job job)
         {
             int edges = 0, edgesFailed = 0, arrivals = 0, arrivalsFailed = 0, occupied = 0;
+            int gates = 0, gatesFailed = 0;
 
             foreach (NavWalkAuditRow row in job.Rows)
             {
+                if (row.Kind == "gate")
+                {
+                    gates++;
+
+                    if (!row.Pass)
+                    {
+                        gatesFailed++;
+                    }
+                }
+
                 bool arrival = row.Kind == "arrival";
 
                 if (arrival)
@@ -1739,6 +1884,11 @@ namespace Server.Custom
                 "{9}. {0} edge walk(s): {1} failed. {2} arrival walk(s): {3} failed, {4} skipped "
                 + "(pending-road). {5} failure(s) had somebody on the next-step tile. "
                 + "Worst detour {6}. {7:F1}s over {8} probe(s)."
+                + (gates == 0 && job.GatesSkipped == 0
+                    ? ""
+                    : String.Format(
+                        " Of the edge walks, {0} were gate walks: {1} failed; {2} gate walk(s) not made by the creature class.",
+                        gates, gatesFailed, job.GatesSkipped))
                 + (job.Cliffs == null ? "" : " Approach tiles: " + job.Cliffs.Summary),
                 edges,
                 edgesFailed,
