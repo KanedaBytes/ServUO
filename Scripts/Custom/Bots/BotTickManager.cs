@@ -32,6 +32,13 @@ namespace Server.Custom
 
         private static int _plansLeft;
 
+        // The admission ledger, over the same window ResetCost opens. _plansBudget is what the last
+        // pass actually granted itself, so a health line can say the budget IN FORCE rather than
+        // re-deriving it from a live count that has moved since.
+        private static int _plansGranted;
+        private static int _plansRefused;
+        private static int _plansBudget;
+
         // Counters, reset each tick, reported by Bots.Population. They are the difference between
         // "the bots are standing still" and knowing WHY they are standing still.
         private static int _noDestination;
@@ -61,15 +68,33 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// How many bots may plan a route in one tick.
+        /// How many bots may plan a route on a tick holding <paramref name="live"/> bots.
         ///
         /// The budget is on PLANNING, not on ticking. Ticking a bot is a switch on an enum;
         /// picking a destination and building a route walks the graph. Everything else about a
         /// journey is already paid for by NavWalker's own timer.
+        ///
+        /// IT USED TO BE A FLAT NUMBER, AND THAT WAS THE FLEET'S CEILING. Eight plans over a
+        /// two-second tick is four a second whether the shard holds 60 bots or 2000, so the scale
+        /// ramp found concurrent travellers stalling at about 140 from 400 bots upward - 83 of them
+        /// at 2000, where 95% of the fleet stood still while the whole bot layer was using 0.9% of
+        /// its tick budget. The ceiling was the admission rate and nothing else; see SCALE.md.
+        ///
+        /// So the rate scales with the live count now, and the old flat value survives as the
+        /// FLOOR - which still binds at 60, 100, 200 and 400, every count the ramp measured at or
+        /// below that knee. The gate only opens where it was actually shut.
+        ///
+        /// Falling back to the config key when the store is not loaded is not a nicety: this is
+        /// read on the first pass, and a boot that failed to load bots.json must still tick.
         /// </summary>
-        public static int PlansPerTick
+        public static int PlansFor(int live)
         {
-            get { return Config.Get("Custom.BotPlansPerTick", 8); }
+            BotPopulationConfig population =
+                BotSystem.Store == null ? null : BotSystem.Store.Population;
+
+            return population == null
+                ? Config.Get("Custom.BotPlansPerTick", 8)
+                : population.PlansFor(live);
         }
 
         /// <summary>
@@ -215,12 +240,19 @@ namespace Server.Custom
         /// <summary>Called by a behaviour before it plans. False means "not this tick".</summary>
         public static bool TryTakePlan()
         {
+            // BOTH SIDES ARE COUNTED, AND THE REFUSALS ARE THE INTERESTING HALF. A budget that is
+            // never refused is not the thing limiting anything - so if travellers still fail to
+            // scale with the population while this stays near zero, the number is set by DEMAND,
+            // by how often a bot decides to travel at all, and raising the rate cannot move it.
             if (_plansLeft <= 0)
             {
+                _plansRefused++;
+
                 return false;
             }
 
             _plansLeft--;
+            _plansGranted++;
 
             return true;
         }
@@ -271,7 +303,6 @@ namespace Server.Custom
                 _cadencePasses++;
             }
 
-            _plansLeft = PlansPerTick;
             _noDestination = 0;
             _noRoute = 0;
             _abandoned = 0;
@@ -297,6 +328,13 @@ namespace Server.Custom
             }
 
             int live = _scratch.Count;
+
+            // THE BUDGET IS SET HERE, AFTER THE COUNT, WHICH IS THE WHOLE OF THE CHANGE. It used to
+            // be reset above the snapshot, where the live count is not yet known - which is exactly
+            // why it could only ever be a flat number. Nothing between the snapshot and the
+            // behaviour loop below takes a plan, so the move is free.
+            _plansBudget = PlansFor(live);
+            _plansLeft = _plansBudget;
 
             // The step census's denominator, taken BEFORE the brains run: the seconds just elapsed
             // belong to the phase each bot was holding during them, and a behaviour swapped by the
@@ -456,6 +494,8 @@ namespace Server.Custom
             _passMeanMs = 0.0;
             _passMaxMs = 0;
             _passes = 0;
+            _plansGranted = 0;
+            _plansRefused = 0;
         }
 
         /// <summary>
@@ -484,12 +524,36 @@ namespace Server.Custom
         public static string DescribeCost()
         {
             return String.Format(
-                "tick {0:0.0} ms mean / {1} ms max of {2:0} ms over {3} pass(es) at {4} bot(s)",
+                "tick {0:0.0} ms mean / {1} ms max of {2:0} ms over {3} pass(es) at {4} bot(s); {5}",
                 _passMeanMs,
                 _passMaxMs,
                 Interval.TotalMilliseconds,
                 _passes,
-                _passBots);
+                _passBots,
+                DescribePlans());
+        }
+
+        /// <summary>
+        /// The admission ledger: the budget in force, and what it did with it.
+        ///
+        /// REFUSALS ARE THE LOAD-BEARING HALF. Granted-per-second says how fast journeys are being
+        /// started; refused says whether this budget is what is deciding that. Near-zero refusals
+        /// beside travellers that will not scale means the limit is DEMAND - how often a bot
+        /// chooses to travel - and no rate here can move it.
+        /// </summary>
+        public static string DescribePlans()
+        {
+            double seconds = _passes * Interval.TotalSeconds;
+
+            return String.Format(
+                "plans {0}/tick at {1} bot(s), {2} granted / {3} refused{4}",
+                _plansBudget,
+                _passBots,
+                _plansGranted,
+                _plansRefused,
+                seconds > 0.0
+                    ? String.Format(" = {0:0.0}/s granted", _plansGranted / seconds)
+                    : "");
         }
     }
 }

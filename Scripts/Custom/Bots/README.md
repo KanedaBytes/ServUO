@@ -1541,8 +1541,19 @@ arrives when somebody is standing there. But `OnThink` runs off the AI timer, an
 (`BaseAI.cs:3072-3082`), so a bot would stop deciding the moment nobody was watching. A shared
 timer is immune, which is why `NavWalker` has one too.
 
-`Custom.BotPlansPerTick` budgets **planning**, not ticking: ticking a bot is a switch on an enum,
-while picking a destination and building a route walks the graph.
+The plan budget budgets **planning**, not ticking: ticking a bot is a switch on an enum, while
+picking a destination and building a route walks the graph.
+
+**It scales with the live count, and it did not always.** `Custom.BotPlansPerTick` was a flat 8,
+reset once per pass — four plans a second over a 2-second tick, whether the shard held 60 bots or
+2000. [`SCALE.md`](SCALE.md) measured what that costs: concurrent travellers double cleanly to 141
+at 400 bots and then stall, falling to 83 at 2000 where 95% of the fleet stands still, while every
+resource sits idle. So the budget is now `max(floor, ceil(rate × live))` with the rate in
+`bots.json` (`population.plansPerBotPerTick`, shipped 0.02) and the old flat value surviving as
+`population.plansPerTickFloor`. The floor binds at 60, 100, 200 and 400 — every count at or below
+that knee — so the gate only opens where it was actually shut. `Bots.Recipe` reports the budget in
+force beside what it granted and **refused**, because a budget that is never refused is not what is
+limiting anything.
 
 ## Travelling
 

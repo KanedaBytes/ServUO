@@ -47,6 +47,34 @@ namespace Server.Custom
         public const int DefaultTarget = 60;
 
         /// <summary>
+        /// Route plans admitted per bot per behaviour tick. THE THROTTLE THAT KNEW NOTHING ABOUT
+        /// THE POPULATION, now told about it.
+        ///
+        /// `Custom.BotPlansPerTick` is a FLAT budget reset once per pass, so at 8 plans over a
+        /// 2-second tick the shard admitted four Traveler route plans a second whether it held 60
+        /// bots or 2000. The scale ramp measured what that costs (SCALE.md): concurrent travellers
+        /// double cleanly to 141 at 400 bots and then stall - 146 at 800, 129 at 1600, and 83 at
+        /// 2000, where 95% of the fleet stands still. Every resource was asleep throughout; the
+        /// ceiling was the admission rate and nothing else.
+        ///
+        /// WHY 0.02 RATHER THAN A ROUND DOUBLING. It is the rate that holds the travelling share at
+        /// the **36% the fleet actually reached at 400** - the knee, where the ramp found it
+        /// maximally alive and this cap only just binding. So the number does not invent a target;
+        /// it extends the one behaviour that was measured un-throttled. By Little's law against the
+        /// ~35-second journeys the graph produces, four plans a second sustain ~140 travellers, and
+        /// 0.02 x live keeps that fraction as the fleet grows.
+        ///
+        /// THE FLOOR IS WHAT KEEPS SMALL SHARDS IDENTICAL. 0.02 x 62 is 1.24, so at the shipped
+        /// target the floor of 8 binds and nothing changes - and it still binds at 100, 200 and 400,
+        /// which is every count the ramp measured at or below the knee. The rate only opens the gate
+        /// where the gate was actually shut.
+        /// </summary>
+        public const double DefaultPlansPerBotPerTick = 0.02;
+
+        /// <summary>A sane upper bound: one plan per bot per tick is already every bot, every tick.</summary>
+        public const double MaxPlansPerBotPerTick = 5.0;
+
+        /// <summary>
         /// uo-offline's HourCurve, verbatim (BotSessionManager.cs:51-57): the fraction of the target
         /// online at each LOCAL hour. Dead at 05:00, packed at 19:00-20:00.
         /// </summary>
@@ -64,6 +92,40 @@ namespace Server.Custom
         /// <summary>The world's live bot target at the curve's peak.</summary>
         [JsonProperty("target")]
         public int Target { get; set; }
+
+        /// <summary>Route plans admitted per bot per tick. See <see cref="DefaultPlansPerBotPerTick"/>.</summary>
+        [JsonProperty("plansPerBotPerTick")]
+        public double PlansPerBotPerTick { get; set; }
+
+        /// <summary>
+        /// The smallest plan budget a tick ever gets, however few bots are live.
+        ///
+        /// ZERO MEANS "ASK Custom.BotPlansPerTick", which is where this number lived before there
+        /// was a rate to floor - the same shape `caps` already uses to defer to PlayerCaps.cfg, and
+        /// for the same reason: one authority per number, with the file that shipped it first
+        /// keeping it until somebody deliberately says otherwise here.
+        /// </summary>
+        [JsonProperty("plansPerTickFloor")]
+        public int PlansPerTickFloor { get; set; }
+
+        /// <summary>
+        /// How many bots may plan a route on a tick holding <paramref name="live"/> bots.
+        ///
+        /// Ceiling rather than rounding, so a fleet small enough to want a fraction of a plan still
+        /// gets a whole one - and the floor is what actually decides that case at any shipped size.
+        /// </summary>
+        public int PlansFor(int live)
+        {
+            int floor = PlansPerTickFloor > 0
+                ? PlansPerTickFloor
+                : Server.Config.Get("Custom.BotPlansPerTick", 8);
+
+            double rate = PlansPerBotPerTick > 0.0 ? PlansPerBotPerTick : DefaultPlansPerBotPerTick;
+
+            int scaled = live <= 0 ? 0 : (int)Math.Ceiling(rate * live);
+
+            return scaled > floor ? scaled : floor;
+        }
 
         /// <summary>
         /// Each town's share of the target. EMPTY MEANS DERIVED, which is the intended state.
@@ -130,6 +192,8 @@ namespace Server.Custom
         public BotPopulationConfig()
         {
             Target = DefaultTarget;
+            PlansPerBotPerTick = DefaultPlansPerBotPerTick;
+            PlansPerTickFloor = 0;
             PerTown = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             PerSpawner = 6;
             SpawnerRange = 12;
@@ -300,6 +364,22 @@ namespace Server.Custom
                     "population.sessionMinutes [{0}, {1}] is not an ascending pair of positive minutes.",
                     SessionMinutes[0],
                     SessionMinutes[1]);
+            }
+
+            if (PlansPerBotPerTick < 0.0 || PlansPerBotPerTick > MaxPlansPerBotPerTick)
+            {
+                errors.Add(
+                    "population.plansPerBotPerTick is {0}; it is plans per bot per tick and must be 0..{1}.",
+                    PlansPerBotPerTick,
+                    MaxPlansPerBotPerTick);
+            }
+
+            if (PlansPerTickFloor < 0)
+            {
+                errors.Add(
+                    "population.plansPerTickFloor is {0}; it is a plan count and cannot be negative. "
+                    + "Zero means defer to Custom.BotPlansPerTick.",
+                    PlansPerTickFloor);
             }
 
             if (Curve != null && Curve.Length != 24)

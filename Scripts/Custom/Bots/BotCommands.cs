@@ -179,6 +179,11 @@ namespace Server.Custom
             var sampler = new NavPaceSampler();
             walker.Sampler = sampler;
 
+            // The fleet ratio rides this sampler's window rather than a timer of its own: the
+            // accumulators are always on, so opening the window here and reading it below costs
+            // nothing and means the two pace answers describe the same stretch of wall clock.
+            NavWalker.ResetFleetPace();
+
             PlayerBot sampled = bot;
 
             Timer.DelayCall(TimeSpan.FromSeconds(seconds), () =>
@@ -189,6 +194,12 @@ namespace Server.Custom
                 }
 
                 List<string> lines = sampler.Report(NavWalker.TickInterval);
+
+                // Appended to the same list rather than given a field of its own, because
+                // BotPaceSnapshot's whole argument is that the value is in the LINES - and because
+                // a reader comparing one bot against the fleet should not have to look in two
+                // places to do it.
+                lines.Add(NavWalker.DescribeFleetPace());
 
                 foreach (string line in lines)
                 {

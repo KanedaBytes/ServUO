@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 using Server.Items;
 using Server.Mobiles;
@@ -119,6 +120,44 @@ namespace Server.Custom
         /// </summary>
         private static readonly int[] _rungTotals = new int[RungCount];
 
+        // ---- how punctually the shared drive timer runs, and why THAT is the fleet pace ----
+        //
+        // NavPaceSampler measures one bot, and one bot is not the fleet: a mobile given 100ms/step
+        // walks 10 tiles a second where one given 200ms/step walks 5, on an identical shard. In the
+        // population scale ramp that artefact read exactly like a 50% collapse between two windows
+        // and came within one judgement call of stopping the run on a shard that was fine. So a
+        // fleet number is wanted. Two obvious ones were tried first and BOTH WERE WRONG, which is
+        // worth writing down because each looks right until it is run.
+        //
+        //   Measured step interval over promised step interval read **0.76 on an idle shard** -
+        //   steps apparently arriving faster than the pace allows, which cannot happen: DoStep
+        //   advances the clock by exactly PaceSeconds every step (NavActor.cs:498,513). The
+        //   wall-clock gap between two moves is simply not the pace; it also counts moves that
+        //   never went through the step clock, and AdvanceClock (NavActor.cs:417-424) clamps a
+        //   stale clock forward, so an idle stretch hands the next step a meaningless gap.
+        //
+        //   Per-step lateness at the gate - Core.TickCount minus NextStepTick when a step falls due
+        //   - read a 94-SECOND worst case on an idle shard, because the step clock only advances
+        //   inside DoStep: a walker that passes the gate without actually stepping leaves the clock
+        //   stale and banks its whole idle stretch as though the loop had been busy.
+        //
+        // Both failed the same way: they are per-walker, and a walker that is not really walking
+        // has no honest pace to report. THE DRIVER HAS NO SUCH PROBLEM. Every walker's steps are
+        // taken from one shared timer at TickInterval, so a step can only be late if this timer is
+        // late, and a step cannot be early at all. How punctually THIS runs is therefore the whole
+        // fleet's pace in one number, it needs no per-walker state, and it cannot be fooled by
+        // mixing 100ms and 200ms movers, by a mount, or by a walker standing still.
+        //
+        // It is also the number that MOVES UNDER LOAD, which is the job: Timer.Slice runs on the
+        // game thread, so when the loop cannot get round to it this interval stretches and every
+        // walker on the shard steps late together.
+        private static long _driveLastTick;
+        private static double _driveGapSumMs;
+        private static long _driveGapMaxMs;
+        private static int _drivePasses;
+        private static int _driveWalkersLast;
+        private static int _driveWalkersMax;
+
         /// <summary>Arrival tolerance when a waypoint does not override it.</summary>
         public const int DefaultArrivalRange = 2;
 
@@ -162,6 +201,7 @@ namespace Server.Custom
         /// reports progress that is not progress. "Did it get closer than ever?" does not.
         /// </summary>
         private int _bestDistance;
+
 
         /// <summary>
         /// Whether this hop has already re-aimed at a free tile inside its arrival's range.
@@ -739,6 +779,77 @@ namespace Server.Custom
                 _actor.NextStepTick - Core.TickCount,
                 (int)Math.Round(_actor.TransformedStepDelaySeconds * 1000.0),
                 (int)Math.Round(_actor.StepDelaySeconds * 1000.0));
+        }
+
+        /// <summary>One drive pass: how long since the last one, and how many walkers it served.</summary>
+        private static void NoteDrivePass(int walkers)
+        {
+            long now = Core.TickCount;
+
+            _driveWalkersLast = walkers;
+
+            if (walkers > _driveWalkersMax)
+            {
+                _driveWalkersMax = walkers;
+            }
+
+            if (_driveLastTick != 0)
+            {
+                // Wraparound-safe by subtraction, per CLAUDE.md section 15.
+                long gap = now - _driveLastTick;
+
+                if (gap >= 0)
+                {
+                    _driveGapSumMs += gap;
+                    _drivePasses++;
+
+                    if (gap > _driveGapMaxMs)
+                    {
+                        _driveGapMaxMs = gap;
+                    }
+                }
+            }
+
+            _driveLastTick = now;
+        }
+
+        /// <summary>
+        /// "walker driver: 11940 pass(es), 50.3ms mean of 50ms, 214ms worst; 137 walker(s), peak 141"
+        ///
+        /// The fleet answer where [BotPace is one bot, and the one that can be compared between two
+        /// populations. A tiles-per-second figure cannot be: it reports whichever mobile the
+        /// sampler caught, and a 200ms mover looks like half a 100ms one on an identical shard.
+        ///
+        /// Read the MEAN against TickInterval. At 50.0 the driver is keeping perfect time and no
+        /// walker on the shard can be stepping late for want of being asked. The worst case is the
+        /// longest any walker waited to be offered a step, which is a stall the client would feel.
+        /// </summary>
+        public static string DescribeFleetPace()
+        {
+            if (_drivePasses <= 0)
+            {
+                return "walker driver: no passes yet";
+            }
+
+            return String.Format(
+                CultureInfo.InvariantCulture,
+                "walker driver: {0} pass(es), {1:0.0}ms mean of {2:0}ms, {3}ms worst; "
+                + "{4} walker(s), peak {5}",
+                _drivePasses,
+                _driveGapSumMs / _drivePasses,
+                TickInterval.TotalMilliseconds,
+                _driveGapMaxMs,
+                _driveWalkersLast,
+                _driveWalkersMax);
+        }
+
+        /// <summary>Open a fresh window on the drive timer's punctuality.</summary>
+        public static void ResetFleetPace()
+        {
+            _driveGapSumMs = 0.0;
+            _driveGapMaxMs = 0;
+            _drivePasses = 0;
+            _driveWalkersMax = 0;
         }
 
         private void Advance()
@@ -2750,6 +2861,8 @@ namespace Server.Custom
 
             // Iterate a copy: a walker that finishes or faults removes itself from the list.
             NavWalker[] snapshot = _active.ToArray();
+
+            NoteDrivePass(snapshot.Length);
 
             for (int i = 0; i < snapshot.Length; i++)
             {
