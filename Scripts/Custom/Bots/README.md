@@ -3297,9 +3297,14 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
-- **THE POPULATION SCALE TEST, READY TO RUN AND DELIBERATELY NOT RUN.** *Deferred by Sean until
-  after the bot-class spike, because a `PlayerMobile` rewrite would change what the curve measures.
-  Everything it needs is shipped; this is the procedure, so the next session does not re-derive it.*
+- **THE POPULATION SCALE TEST — RUN on 15 September 2026. The results are in
+  [`SCALE.md`](SCALE.md).** Seven counts from 60 to 2000, and the answer is not a performance
+  number: **no stop rule fired at any count**, and the fleet stops getting livelier at about 400
+  bots because concurrent journeys are capped at ~140 by `Custom.BotPlansPerTick` divided by
+  `Custom.BotTickSeconds` — four Traveler plans a second, whatever the population. At 2000 bots 95%
+  of the fleet stands still and the bot tick costs 0.9% of its budget. `SCALE.md` proposes **400**
+  and says what it would take to move the ceiling. *The procedure below is kept as written, because
+  it is what was run; two of its rules needed correction in the doing, and `SCALE.md` says which.*
 
   `bots.json` ships `target: 60` against a graph with 115 arrival points, chosen as *"a fraction of
   upstream's 1600, and measure"* — and the measurement was never taken. `BotTickManager` reports
