@@ -3308,14 +3308,26 @@ simply does not model a bot whose job is to stay put.
 
 ### Later
 
-- **THE POPULATION SCALE TEST — RUN on 15 September 2026. The results are in
-  [`SCALE.md`](SCALE.md).** Seven counts from 60 to 2000, and the answer is not a performance
-  number: **no stop rule fired at any count**, and the fleet stops getting livelier at about 400
-  bots because concurrent journeys are capped at ~140 by `Custom.BotPlansPerTick` divided by
-  `Custom.BotTickSeconds` — four Traveler plans a second, whatever the population. At 2000 bots 95%
-  of the fleet stands still and the bot tick costs 0.9% of its budget. `SCALE.md` proposes **400**
-  and says what it would take to move the ceiling. *The procedure below is kept as written, because
-  it is what was run; two of its rules needed correction in the doing, and `SCALE.md` says which.*
+- **THE POPULATION SCALE TEST — RUN TWICE on 15 September 2026. The results are in
+  [`SCALE.md`](SCALE.md).**
+
+  **Ramp 1**, seven counts from 60 to 2000: **no stop rule fired at any count**, and the fleet
+  stopped getting livelier at about 400 bots because concurrent journeys were capped at ~140 by a
+  flat `Custom.BotPlansPerTick` of 8 over a 2-second tick — four Traveler plans a second whatever
+  the population. At 2000, 95% of the fleet stood still while the bot tick cost 0.9% of its budget.
+  So Ramp 1 found the throttle's ceiling, not the shard's.
+
+  **Ramp 2** scaled the budget with the live count (`population.plansPerBotPerTick`, commit
+  `bd7082e3`) and re-ran 800, 1600 and 2000. Travellers went **83 → 645** at 2000, the throttle
+  bound at every count (41,000–76,000 refusals a window, so demand was never the limit), and the
+  shard's own ceiling finally appeared: **whole-loop p99 110 ms at 2000**, with `cycles/s` falling
+  67.5 → 47.3 and the walker driver running 359 ms late at its worst. The bottleneck is contention
+  on the game thread from concurrent movement — not GC, which collected gen2 exactly six times a
+  window at every count of both ramps, and not saving, sectors or pathfinding.
+
+  Last passing count **1600**; `SCALE.md` proposes **800** as the default and says what would move
+  the ceiling. *The procedure below is kept as written, because it is what was run; two of its rules
+  needed correction in the doing, and `SCALE.md` says which.*
 
   `bots.json` ships `target: 60` against a graph with 115 arrival points, chosen as *"a fraction of
   upstream's 1600, and measure"* — and the measurement was never taken. `BotTickManager` reports

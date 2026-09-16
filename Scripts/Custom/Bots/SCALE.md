@@ -239,6 +239,12 @@ nothing — it simply asks for less.
 
 ## The ceiling, and what would move it
 
+> **Superseded by Ramp 2, below.** This ceiling was moved on the same day: the budget now scales
+> with the live count, and concurrent travellers went from 83 to **645** at 2000 bots. The
+> replacement ceiling is the game thread's movement path at roughly 650 concurrent travellers, and
+> it is a real shard limit rather than a configured one. Everything in this section describes the
+> shard as it was before commit `bd7082e3`.
+
 **The ceiling is about 140 concurrent long-distance journeys, and it is an admission rate, not a
 resource.** `Custom.BotPlansPerTick` (8) divided by `Custom.BotTickSeconds` (2) is four Traveler
 plans a second, and no population raises it.
@@ -279,3 +285,187 @@ and each is a measurement rather than a change:
 - **Three instruments were built for this and are now standing**: GC collection counts and a thread
   count on `ProcessHealth`, and `WorldCensus` (active sectors, awakened creatures, and the fleet's
   location by region rather than by home town). Commit `9eade4b4`, before the first window.
+
+---
+
+# Ramp 2 — throttle scaled, 15 September 2026
+
+Ramp 1 measured the throttle's ceiling. This measures the shard's.
+
+**What changed** (commit `bd7082e3`): the route-plan budget stopped being a flat number.
+`plansPerTick` is now `max(floor, ceil(rate x live))`, with `rate` in `bots.json` as
+`population.plansPerBotPerTick` (shipped **0.02**) and the old flat 8 surviving as
+`population.plansPerTickFloor`. The mechanism is one moved line — the budget is reset *after* the
+live count is known rather than before it. Nothing else about behaviour changed; the Shopper,
+Crafter and BankSitter bypass is exactly as it was.
+
+**0.02 was chosen to hold the travelling share at the 36% the fleet actually reached at 400 bots** —
+Ramp 1's knee, where the fleet was maximally alive and the cap only just binding. It extends a
+measured behaviour rather than inventing a target, and the floor still binds at 60, 100, 200 and
+400, so every count at or below that knee behaves exactly as before. That was verified before any
+window: at the shipped target `Bots.Recipe` reads `plans 8/tick at 62 bot(s)`.
+
+**It is ours, and no seam was cut.** uo-offline has no admission gate at all —
+`BehaviorTickManager.cs:22` ticks every live bot every pass, commenting *"with <500 bots this is
+trivially cheap"* — and this shard's own port survey recorded the absence
+(`docs-src/uo-offline-port-survey.md:337`, budget "none"). Only the 2-second interval is inherited.
+The budget and the number 8 were invented in `f7e22def` with no derivation of the value. No
+`MODIFICATIONS.md` entry: that file is scoped to upstream *ServUO* file edits and its rule 4
+excludes config.
+
+## The table, beside Ramp 1's
+
+| | cfg | live | **travelling** | p50 | p95 | **p99** | max | cps | tick~ | searches | gen2 | MB | save | /100 | walks | **budget** | **adm/s** | **refused** | driver~ | driver max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R1 | 800 | 784 | 146 | 15.1 | 28.6 | 37.7 | 219 | 62.8 | 14.1 | 26,419 | 6 | 450 | 0.37 | 0.35 | 5,762 | 8 | 4.0 | — | — | — |
+| **R2** | 800 | 761 | **240** | 14.7 | 32.5 | 42.5 | 271 | 67.5 | 19.6 | 40,174 | 6 | 499 | 0.36 | 0.22 | 9,072 | 16 | 6.6 | 44,688 | 61.3 | 66 |
+| R1 | 1600 | 1,575 | 129 | 15.2 | 30.6 | 40.3 | 243 | 64.4 | 18.8 | 25,103 | 6 | 500 | 0.39 | 0.40 | 6,005 | 8 | 4.0 | — | — | — |
+| **R2** | 1600 | 1,495 | **534** | 9.1 | 60.1 | 79.6 | 297 | 60.0 | 53.5 | 101,229 | 6 | 584 | 0.38 | 0.39 | 20,397 | 30 | 12.6 | 41,213 | 62.3 | 227 |
+| R1 | 2000 | 1,979 | 83 | 15.5 | 30.0 | 39.3 | 239 | 67.8 | 18.2 | 17,162 | 6 | 532 | 0.38 | 0.42 | 3,788 | 8 | 4.0 | — | — | — |
+| **R2** | 2000 | 1,900 | **645** | 8.5 | 78.4 | **110.1** | 357 | 47.3 | 79.5 | 125,793 | 6 | 634 | 0.40 | 0.27 | 24,234 | 38 | 15.8 | 76,257 | 68.8 | 359 |
+
+`driver~` / `driver max` are the shared walker timer's mean and worst interval in ms against its
+50 ms target — the fleet-wide pace figure added this session. Conditions are Ramp 1's exactly: flat
+curve for the session, `MeasurementProfile` off, no client connected, 15-minute settle, 10-minute
+window, home towns still Britain and Trinsic.
+
+## Did the throttle bind?
+
+**At every count, hard.** Refusals never fell below 41,000 in a ten-minute window:
+
+| cfg | budget/tick | granted/s | refused | verdict |
+| ---: | ---: | ---: | ---: | --- |
+| 800 | 16 | 6.6 | 44,688 | admission still the constraint |
+| 1600 | 30 | 12.6 | 41,213 | admission still the constraint |
+| 2000 | 38 | 15.8 | 76,257 | admission still the constraint |
+
+So **demand never became the limit.** Bots wanted to travel far more often than even the tripled
+budget allowed, at every count. The question the refusal counter was added to answer — whether
+travellers stop scaling because admission is shut or because nobody is asking — has an unambiguous
+answer here: they were asking, and the gate was still shut. Raising the rate further would buy more
+travellers again, right up until the loop gives out, which is what it then did.
+
+That the travelling share nonetheless held at **32–36% across all three counts** is the formula
+doing exactly what it was designed to do: 0.02 was picked to hold 36%, and it did.
+
+## First failing count: 2000. What gave out: the game loop.
+
+**Whole-loop p99 reached 110.1 ms against the 100 ms gate.** Nothing else came close — the save was
+0.40 s against 5 s, the ledger 0.27 against 1 per 100, max 357 ms against 1000, and the live count
+was 95% of configured.
+
+It is the loop, and the loop only:
+
+- **`cycles/s` fell 67.5 → 60.0 → 47.3** as the throttle opened. Ramp 1 never moved off ~64 at any
+  population, because in Ramp 1 the bots were not doing anything.
+- **p50 fell from 15.5 to 8.5 ms.** In Ramp 1 p50 sat at 15.6 ms at every count — the Windows timer
+  granularity, the signature of a loop that is mostly *asleep between wakeups*. At 2000 with the
+  throttle open the loop is genuinely busy for the first time in either ramp, and the distribution
+  goes bimodal: p50 8.5 against p95 78.4.
+- **The walker driver ran late**: worst interval 66 → 227 → **359 ms** against a 50 ms target, with
+  833 concurrent walkers on the last pass. That is the fleet stepping late together, and it is the
+  first time this shard has produced that symptom.
+
+It is **not** GC: gen2 was **6 collections per window at every count in both ramps**. Gen0 ran to
+32,740 at 2000, so allocation is heavy, but nothing is promoting. It is not saving, not sector
+activation (active sectors saturate — 3,048 → 3,781 → 4,169 against a nominal 47,500), and not tile
+pathfinding on its own (125,793 searches at 0.67 ms mean is about 14% of one core).
+
+What is left is **contention on the game thread from concurrent movement**: about fourteen drive
+passes a second each iterating 833 walkers, and roughly 4,500 actual `Move` calls a second, every
+one of them touching sectors, regions and the delta queues. Cost per bot rose 0.026 → 0.042 ms and
+per traveller 0.082 → 0.123 ms between 800 and 2000 — both superlinear, which is the shape of
+contention rather than of a fixed per-unit price.
+
+**Last passing count: 1600**, with 534 travellers, p99 79.6 ms and cycles/s 60.0.
+
+## Proposed default
+
+**Raise `population.target` from 60 to 800, keeping `plansPerBotPerTick` at the shipped 0.02.**
+
+This supersedes Ramp 1's proposal of 400, which was made when 400 was the most the throttle would
+let move. It is not a bigger number for its own sake — 800 is where the measured evidence sits:
+
+| | shipped 60 | Ramp 1's 400 | **proposed 800** | 1600 |
+| --- | ---: | ---: | ---: | ---: |
+| bots travelling | 17 | 141 | **240** | 534 |
+| whole-loop p99 | 63.1 | 33.5 | **42.5** | 79.6 |
+| cycles/s | 63.7 | 66.7 | **67.5** | 60.0 |
+| behaviour tick | 1.3 | 7.2 | **19.6 ms of 2000** | 53.5 |
+| managed heap | 405 | 477 | **499 MB** | 584 |
+| worst save | 0.31 | 0.35 | **0.36 s** | 0.38 |
+| walk failures /100 | 0.44 | 0.30 | **0.22** | 0.39 |
+
+800 gives **fourteen times the shipped fleet's visible activity** for a loop that is no busier than
+it is at 400 today — cycles/s is actually *higher* — and the walk ledger is the best of any window
+in either ramp. 1600 remains comfortably inside every rule and is the choice if maximum life is
+wanted, at the cost of p99 roughly doubling and cycles/s dropping 10%.
+
+Three caveats, all of which argue for 800 over 1600:
+
+1. **No client was connected in any window of either ramp.** A real player adds its own sector
+   footprint, its own network path and its own packets on the same thread whose tail has just become
+   the limiting figure. 800 leaves that headroom; 1600 spends most of it.
+2. **The curve returns in production.** A target of 800 means about 800 live at the 19:00 peak and
+   about 120 at the 05:00 trough, which is the intended breathing and now has a measured peak behind
+   it.
+3. **Cost is superlinear.** Per-bot tick cost rose 62% between 800 and 2000. Extrapolating past a
+   measured point is exactly what this document exists to stop.
+
+**An untested alternative worth the next session's time**, because it may be better value: cost
+tracks *travellers* more tightly than bots, so the same liveliness might be bought with fewer bodies
+by raising the rate instead of the population — 400 bots at a rate near 0.06 should admit about the
+same 240 travellers for ~477 MB and far fewer idle mobiles. That is arithmetic from these rows
+rather than a measurement, and per-traveller cost also rose across the ramp, so it needs its own
+window before anybody ships it.
+
+## The ceiling, and what would move it
+
+**The ceiling is now the game thread's movement path, at roughly 650 concurrent travellers.** That
+is a real shard limit rather than a configured one — which is what this session set out to find.
+
+Moving it means reducing what a step costs or how often one is offered, and the candidates are all
+measurements before they are changes:
+
+1. **The 50 ms drive timer is the obvious dial.** At 833 walkers it is about twelve thousand
+   `Tick()` calls a second, most of which are turned away at the NextMove gate having done nothing
+   but compare a clock. A slower driver, or a per-walker next-due queue instead of a full sweep,
+   would cut that without changing any bot's pace.
+2. **Confirm the attribution before acting on it.** The loop tail is measured; the split between the
+   walker sweep, `Mobile.Move`'s sector and delta-queue work, and tile pathfinding is inferred from
+   rates and shares rather than timed.
+3. **Re-measure with a client attached**, because every figure here is a headless shard.
+
+## By-product: the graph's weak points are now visible
+
+Opening the throttle quadrupled the walking, and the walk ledger stopped being noise. In Ramp 1 no
+hop failed more than once in any window; at 1600 the top six hops account for 47 of 80 failures:
+
+| hop | failures at 1600 | at 2000 |
+| --- | ---: | ---: |
+| `uo-wp-954` (arrival and its `-s1` leg) | 18 | 11 |
+| `uo-wp-875 -> (arrival)` | 8 | 6 |
+| `uo-wp-138-s1 -> uo-wp-138` | 8 | — |
+| `uo-wp-931 -> (arrival)` | 7 | 8 |
+| `uo-wp-913 -> uo-wp-913-s1` | 6 | 7 |
+
+Every one is `short-of-goal`, and the rate stayed healthy throughout (0.22–0.39 per 100). These are
+a handful of genuinely marginal hops that only enough traffic could localise. Naming them is the
+finding; fixing them is nav work for another session.
+
+## Method notes
+
+- **The fleet pace figure took three attempts, and the first two were plausible nonsense.** A ratio
+  of measured to promised step interval read **0.76 on an idle shard** — steps apparently arriving
+  faster than the pace allows, which cannot happen, because `DoStep` advances the clock by exactly
+  `PaceSeconds` every step. Per-step lateness at the gate then read a **94-second** worst case,
+  because the step clock only advances inside `DoStep`, so a walker that passes the gate without
+  stepping banks its whole idle stretch. Both failed the same way: they are per-walker, and a walker
+  that is not really walking has no honest pace. What works has no per-walker state at all — **how
+  punctually the shared drive timer runs**. It reads 61–69 ms against a 50 ms target, and its worst
+  case is the quantity that moved with load. The reasoning is kept on the fields in `NavWalker.cs`.
+- **Pace was not a gate in Ramp 2**, by instruction: `[BotPace auto` is one bot and is reported as
+  such. The driver figure is reported beside it as a finding.
+- **The p99 gate was re-anchored** on Ramp 1's 400 row (33.5 ms), its busiest passing window, rather
+  than on the idle 60-bot baseline — and unlike Ramp 1's, it fired, at exactly the count where the
+  loop stopped idling.
