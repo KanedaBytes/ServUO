@@ -2645,30 +2645,60 @@ town resolved at, so the day that happens it is visible rather than silent.
 What it produces today, on this graph:
 
 ```
-target 60 on Trammel: 60 bot(s) across 37 spawner(s), 17 of them fixed.
-  britain: share 38, pinned 19 - 3 bank, 5 station, 11 shop, 19 roam. anchor brit-square (plaza tag).
-  trinsic: share 22, pinned 19 - 6 bank, 3 station, 10 shop, 3 roam.  anchor trinsic-bank (bank).
+target 1000 on Trammel: 1000 bot(s) across 201 spawner(s), 21 of them fixed.
+  britain: share 722, pinned 30 - 18 shop, 6 bank, 6 station, 692 roam. roamers anchor on brit-square (plaza tag).
+  trinsic: share 278, pinned 19 - 10 shop, 259 roam, 3 station, 6 bank.  roamers anchor on trinsic-bank (bank).
 ```
 
-### 60, not 1600, and the probe hands you the number to raise it with
+**The pinned count does not scale with the target and is not meant to.** Those 49 are the fixed-role
+garrison — the bank crowds and the staffed benches — which never roll, never log out and never count
+toward the target, so a forge has its smith at 05:00 exactly as it does at 19:00. Everything above
+them is roamers.
 
-Upstream's `TargetCount` is `1600` (`BotPopulation.cs:150`). This graph has **115 arrival points**
-in total — Britain 88, Trinsic 27 — and `bots.json`'s own rule is that a site's capacity *is* its
-authored arrival count, so 1600 is not a number to inherit unexamined. The port survey's
-instruction for it was *"start at a fraction of it and measure"*.
+### 1000, not 60 and not 1600 — and it is now a measured number
 
-So `BotTickManager` now times its own pass — the `LiveRegistry` sweep, every behaviour's `Tick`,
-the lifecycle pass and the session pass, which together are the entire per-tick cost of the bot
-layer — and `Bots.Recipe` and `Bots.Population` both report it beside the live count:
+**The shipped `population.target` is 1000.** It was 60 for most of this system's life, and the
+reasoning for both is in [`SCALE.md`](SCALE.md), which is where to go before changing it again.
+
+Upstream's `TargetCount` is `1600` (`BotPopulation.cs:150`), shipped behind a comment reading *"with
+<500 bots this is trivially cheap"* and measured against nothing. The port survey's instruction for
+it was *"start at a fraction of it and measure"*, so this shard started at 60 — a fraction chosen
+against a 1,031-waypoint graph — and then, eventually, measured.
+
+Two ramps on 15 September 2026 did the measuring, on the current 4,155-waypoint eight-town graph:
+
+- **Ramp 1** took seven counts from 60 to 2000 and found the shard idle at every one of them. What
+  it also found was that the fleet stopped getting *livelier* above about 400 bots: concurrent
+  travellers stalled near 140 and then fell, until at 2000 bots 95% of the fleet stood still. The
+  cause was a flat plan-admission budget of 8 per tick, which is four route plans a second whatever
+  the population. **Ramp 1 measured the throttle, not the shard.**
+- **Ramp 2** made the budget scale with the live count and re-ran 800, 1600 and 2000. Travellers at
+  2000 went from 83 to **645**, and the shard's own ceiling finally appeared: whole-loop p99 crossed
+  100 ms at 2000, with `cycles/s` falling 67.5 → 47.3 and the walker driver running 359 ms late.
+  The bottleneck is contention on the game thread from concurrent movement — not GC, which collected
+  gen2 exactly six times a window at every count of both ramps, and not saving, sectors or
+  pathfinding.
+
+**1000 sits between Ramp 2's two passing windows**, 800 and 1600, both of which cleared every stop
+rule. At 800 the fleet held 240 travellers for a whole-loop p99 of 42.5 ms and a heap of 499 MB; at
+1600 it held 534 for 79.6 ms and 584 MB. 1000 buys most of the liveliness while leaving the loop
+tail — the figure that actually gave out — nearer the comfortable end of that range, and it keeps
+headroom for the thing neither ramp had: **a real client connected**, which adds its own sector
+footprint and network path to the same thread.
+
+`BotTickManager` times its own pass — the `LiveRegistry` sweep, every behaviour's `Tick`, the
+lifecycle pass and the session pass — and `Bots.Recipe` and `Bots.Population` report it beside the
+live count and beside the plan budget in force:
 
 ```
-tick 0.7 ms mean / 15 ms max of 2000 ms over 495 pass(es) at 51 bot(s)
+tick 19.6 ms mean / 82 ms max of 2000 ms over 900 pass(es) at 761 bot(s);
+plans 16/tick at 761 bot(s), 3971 granted / 44688 refused = 6.6/s granted
 ```
 
-Sixty bots cost a few hundredths of one percent of the tick budget. **Raising the target is now an
-arithmetic question rather than a nerve one**, which is the whole reason the measurement exists.
-Upstream measures nothing and ships 1600 behind a comment reading *"with <500 bots this is
-trivially cheap"* — two numbers that cannot both be opinions about the same code.
+**Raising the target is an arithmetic question rather than a nerve one**, which is the whole reason
+the measurement exists — and the refusal count is the half that says whether the budget is what is
+limiting anything at all. Note the tick stopwatch is *the brains only*: `NavWalker.DriveAll` moves
+bots on its own timer, and at these populations that is where the cost actually is.
 
 **And the one dial that pretended to raise it has been removed.** `Custom.MeasurementProfile` used
 to double `BotSession.TargetNow` — which is the session **ceiling**, how many lifecycle bots may be
