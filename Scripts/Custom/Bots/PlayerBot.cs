@@ -1287,6 +1287,13 @@ namespace Server.Custom
             // exactly the orphan this line exists to prevent. It covers the parked one too.
             BotMovement.ReleaseMount(this);
 
+            // THE LAST LOOK, after the pack, the bank box and the panniers have all been written
+            // down. Anything the ledger still thinks this bot is holding is units nothing can
+            // account for, and the census will never get the chance to say so - it walks LIVE
+            // bots, and this one is leaving. Counted as unexplained, which fails
+            // Bots.Conservation rather than quietly putting the books out (REVIEW.md F5).
+            BotGoodsLedger.NoteDeparture(this);
+
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);
 

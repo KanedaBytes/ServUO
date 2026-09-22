@@ -11,12 +11,20 @@
 //
 // THE EQUATION, over raw haul goods only (BotHaul.TrackedTypes - ore and logs):
 //
-//     in    = mined + seeded
-//     out   = accepted + lost          both terminal: the crafter turned it into something else,
-//                                      or it was destroyed
-//     held  = a live census of every bot's pack, panniers and bank box
+//     in    = opening + mined + seeded   opening is what the boot inherited from the world save
+//                                        before BotStartupPurge destroyed it
+//     out   = accepted + lost            terminal both ways: the crafter turned it into something
+//             + unexplained              else, or it was destroyed, or nothing can say
+//     held  = a census of every live bot's pack, panniers and bank box
 //
 //     in == out + held,  and unexplained == 0
+//
+// ALL THREE ARE READ AT ONE INSTANT, which is the census. `held` can only be known by walking the
+// bots; the sources and the exits move continuously. Comparing a live `seeded` against a
+// half-minute-old `held` reports every unit that entered or left in the gap as a discrepancy -
+// measured at six units on a quiet shard, which is one spawn's starting stash landing between the
+// walk and the read. That is a skew in the ruler rather than a hole in the books, so the census
+// snapshots its own totals and the health check reads those.
 //
 // BANKED IS NOT AN EXIT. A load in a bot's own bank box is still that bot's, so it is inside
 // `held` and is reported beside it rather than added to it. Counting it as delivered is part of
@@ -152,6 +160,26 @@ namespace Server.Custom
 
         /// <summary>Units held by live bots at the last census: pack, panniers and bank box.</summary>
         public static int Held { get; private set; }
+
+        // THE EQUATION IS READ AT ONE INSTANT, WHICH IS THE CENSUS.
+        //
+        // `Held` can only be known by walking the bots, and that happens every thirty seconds.
+        // The sources and the exits move continuously. Comparing a live `Seeded` against a
+        // half-minute-old `Held` therefore reports every unit that has entered or left in the gap
+        // as a discrepancy - measured at six units on a quiet shard, which is a spawn's worth of
+        // starting stash landing between the walk and the read. That is a skew in the ruler, not
+        // a hole in the books, and the way to stop reporting it is to take all three numbers at
+        // the same moment. So the census snapshots its own totals and the health check reads
+        // those; the live counters stay public for anything that wants the running figure.
+
+        public static int OpeningAtCensus { get; private set; }
+        public static int MinedAtCensus { get; private set; }
+        public static int SeededAtCensus { get; private set; }
+        public static int AcceptedAtCensus { get; private set; }
+        public static int LostAtCensus { get; private set; }
+        public static int LostStashAtCensus { get; private set; }
+        public static int LostHaulAtCensus { get; private set; }
+        public static int UnexplainedAtCensus { get; private set; }
 
         /// <summary>Live bots the last census walked.</summary>
         public static int Censused { get; private set; }
@@ -418,10 +446,34 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// A bot is leaving. Everything it could be seen holding has already been written down, so
+        /// whatever the ledger still believes it has is units nothing can account for.
+        ///
+        /// THE CENSUS CANNOT CATCH THIS ONE. It walks live bots; a bot that loses units silently
+        /// and is deleted inside the same thirty seconds is gone before the reconcile can see the
+        /// shortfall, and the books would simply be out by the difference with nothing said. This
+        /// is the last look, and it turns that silence into the alarm.
+        /// </summary>
+        public static void NoteDeparture(PlayerBot bot)
+        {
+            if (bot == null || bot.TrackedCustody <= 0)
+            {
+                return;
+            }
+
+            NoteUnexplained(bot, bot.TrackedCustody);
+
+            bot.TrackedCustody = 0;
+        }
+
+        /// <summary>
         /// Units that left custody with nothing to say where they went.
         ///
-        /// This is the F5 alarm. It is not written to the journal per bot - there is no item type
-        /// to name, only a difference - but it fails the health check, which is louder.
+        /// This is the F5 alarm, and it is counted on the OUT side: the units really have gone,
+        /// so leaving them off would put the books out by exactly the amount nobody could explain
+        /// and report the same fault twice in two different numbers. It is not written to the
+        /// journal per bot - there is no item type to name, only a difference - but it fails the
+        /// health check, which is louder.
         /// </summary>
         private static void NoteUnexplained(PlayerBot bot, int amount)
         {
@@ -432,10 +484,25 @@ namespace Server.Custom
 
             Unexplained += amount;
 
+            // Everything a search would need: which bot, what it was, where it stood and what it
+            // was doing when it went. A count alone would say the books are wrong without saying
+            // where to look, and this line is the only thing that does.
             Log.Warn(
-                "{0} lost {1} unit(s) of raw goods with nothing to account for it. Bots.Conservation has failed.",
+                "{0} ({1}, {2}) lost {3} unit(s) of raw goods at {4},{5} with nothing to account for it{6}. "
+                + "Bots.Conservation has failed.",
                 bot == null ? "a bot" : bot.Name,
-                amount);
+                bot == null ? "?" : bot.Class.ToString(),
+                bot == null ? "?" : (bot.DeletionReason ?? (bot.Deleted ? ReasonDeleted : "alive")),
+                amount,
+                bot == null ? 0 : bot.X,
+                bot == null ? 0 : bot.Y,
+                bot != null && bot.LastHandoverUtc != DateTime.MinValue
+                    ? String.Format(
+                        " (last hand-over at '{0}': offered {1}, accepted {2})",
+                        bot.LastHandoverId,
+                        bot.LastHandoverOffered,
+                        bot.LastHandoverAccepted)
+                    : "");
         }
 
         private static void SpendStash(PlayerBot bot, int amount)
@@ -510,6 +577,18 @@ namespace Server.Custom
             Held = held;
             Banked = banked;
             Censused = bots;
+
+            // AFTER the walk, because the walk itself moves them: an appeared unit is counted as
+            // mined and a vanished one as unexplained, both inside the loop above.
+            OpeningAtCensus = Opening;
+            MinedAtCensus = BotWorkSites.Mined;
+            SeededAtCensus = Seeded;
+            AcceptedAtCensus = Accepted;
+            LostAtCensus = Lost;
+            LostStashAtCensus = LostStash;
+            LostHaulAtCensus = LostHaul;
+            UnexplainedAtCensus = Unexplained;
+
             LastReconcileUtc = DateTime.UtcNow;
             HasReconciled = true;
         }
@@ -579,25 +658,25 @@ namespace Server.Custom
 
         public static HealthResult BuildHealthResult()
         {
-            int mined = BotWorkSites.Mined;
-            int input = Opening + mined + Seeded;
-            int output = Accepted + Lost;
+            int input = OpeningAtCensus + MinedAtCensus + SeededAtCensus;
+            int output = AcceptedAtCensus + LostAtCensus + UnexplainedAtCensus;
             int drift = input - (output + Held);
 
-            var text = new StringBuilder(480);
+            var text = new StringBuilder(520);
 
             text.AppendFormat(
-                "in: opening {0} + mined {1} + seeded {2} = {3}. "
-                + "out: accepted {4}, lost {5} ({6} stash, {7} haul); "
-                + "held {8} over {9} bot(s), {10} of it banked.",
-                Opening,
-                mined,
-                Seeded,
+                "at the census - in: opening {0} + mined {1} + seeded {2} = {3}. "
+                + "out: accepted {4}, lost {5} ({6} stash, {7} haul), unexplained {8}; "
+                + "held {9} over {10} bot(s), {11} of it banked.",
+                OpeningAtCensus,
+                MinedAtCensus,
+                SeededAtCensus,
                 input,
-                Accepted,
-                Lost,
-                LostStash,
-                LostHaul,
+                AcceptedAtCensus,
+                LostAtCensus,
+                LostStashAtCensus,
+                LostHaulAtCensus,
+                UnexplainedAtCensus,
                 Held,
                 Censused,
                 Banked);
@@ -642,7 +721,8 @@ namespace Server.Custom
             if (Unexplained > 0)
             {
                 text.AppendFormat(
-                    " {0} unit(s) left a bot's custody with nothing to account for it - that is REVIEW.md F5.",
+                    " {0} unit(s) left a bot's custody with nothing to account for it - that is REVIEW.md F5. "
+                    + "The console names each one.",
                     Unexplained);
 
                 return HealthResult.Fail(text.ToString());
@@ -650,8 +730,9 @@ namespace Server.Custom
 
             if (drift != 0)
             {
-                // Everything above is counted, so this can only be a bookkeeping mistake in this
-                // file rather than a lost load. It is still wrong, and saying so is the point.
+                // Not a lost load: every way units enter or leave custody is counted above, and a
+                // shortfall the census found would be `unexplained` rather than this. A non-zero
+                // drift can only be arithmetic in this file, and saying so is the point.
                 text.AppendFormat(" The books are out by {0} unit(s).", drift);
 
                 return HealthResult.Warn(text.ToString());

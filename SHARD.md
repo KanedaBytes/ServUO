@@ -912,15 +912,26 @@ of it.
 
 ```
 in    = opening + mined + seeded
-out   = accepted + lost
-held  = a live census of every bot's pack, panniers and bank box
+out   = accepted + lost + unexplained
+held  = a census of every live bot's pack, panniers and bank box
 
 in == out + held,  unexplained == 0
 ```
 
+**All three are read at one instant, which is the census.** `held` can only be known by walking the
+bots, every thirty seconds; the sources and the exits move continuously. Comparing a live `seeded`
+against a half-minute-old `held` reports everything that entered or left in the gap as a
+discrepancy - measured at six units on a quiet shard, one spawn's starting stash landing between
+the walk and the read. So the census snapshots its own totals and the check reads those. A non-zero
+**drift** can therefore only be arithmetic in `BotGoodsLedger` itself; a genuine shortfall is
+`unexplained`, which fails the check and names the bot on the console.
+
 `opening` is what the boot inherited from the world save before `BotStartupPurge` destroyed it; `seeded` is
 EquipmentTable's 3-15 unit spawn stash; `accepted` is what a crafter took over the counter, which is
-terminal because the raw becomes refined stock. **Banked is not an exit** - a bot's own bank box is inside
+terminal because the raw becomes refined stock. A bot that leaves with the ledger still believing it holds
+something - deleted inside the thirty seconds before the census could see the shortfall - has that residual
+counted as `unexplained` on its way out (`BotGoodsLedger.NoteDeparture`), so the one case the census cannot
+reach still reaches the alarm. **Banked is not an exit** - a bot's own bank box is inside
 `held`, and is reported beside it. `mined` is *reconciled* rather than metered: every thirty seconds
 `BotGoodsLedger` compares each live bot's actual holdings against `PlayerBot.TrackedCustody`, counts what
 appeared as mining and what vanished as **unexplained**, which is the F5 failure and fails the check.
