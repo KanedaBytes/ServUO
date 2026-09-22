@@ -235,6 +235,11 @@ namespace Server.Custom
             // (Scripts/Custom/Bots/WorkFixtures.cs). Pure functions; no mobiles.
             passed &= WorkFixtures.RunFixtures(report);
 
+            // The plan budget is served round-robin: with fewer plans than bots, every bot that asks
+            // is granted within a few passes and creation order does not decide who starves - with
+            // the old first-come order run as a control (Scripts/Custom/Bots/PlanFixtures.cs).
+            passed &= PlanFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 

@@ -219,6 +219,30 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// The stay boost: a bot arriving at a destination short of its standing crowd is likelier
+        /// to stay, halfway from its hand-over chance to certain. The crowd floor's twin on the
+        /// arrival side - one draws a bot to an empty bank, this keeps it there.
+        ///
+        /// NOT FOR A SINGLE-MINDED CLASS, for the crowd floor's reason (22 September 2026). The boost
+        /// exists to make an empty bank look lived in, and a gatherer at a bank is on an errand, not
+        /// a loiterer: it turned a Miner's bank hand-over into a longer stay far from the mine, which
+        /// is time off the face the floor exemption had just given back. Applied by class at every
+        /// destination, as the floor is, so at its own site a gatherer keeps the flat station 0.95
+        /// rather than 0.975. Bots README, Deviations, "Gatherers are single-minded again".
+        ///
+        /// Pure, so WorkFixtures can prove the exemption beside the floor's.
+        /// </summary>
+        public static double StayBoost(double chance, int shortfall, bool singleMinded)
+        {
+            if (singleMinded || shortfall <= 0)
+            {
+                return chance;
+            }
+
+            return chance + (1.0 - chance) * 0.5;
+        }
+
+        /// <summary>
         /// How much a site's distance discounts it: 1.0 underfoot, 0.5 at the configured
         /// half-distance, never zero for anywhere it can actually walk to.
         ///

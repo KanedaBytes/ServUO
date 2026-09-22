@@ -538,11 +538,13 @@ namespace Server.Custom
             }
 
             // An under-floor destination pulls harder: a bot that walked to a bank nobody is
-            // standing at should be likelier to stay than one arriving at a full house.
-            if (BotCrowds.Shortfall(destination) > 0)
-            {
-                chance += (1.0 - chance) * 0.5;
-            }
+            // standing at should be likelier to stay than one arriving at a full house. Not a
+            // single-minded class, whose bank is an errand - see BotDestinations.StayBoost.
+            chance = BotDestinations.StayBoost(
+                chance,
+                BotCrowds.Shortfall(destination),
+                BotSystem.Store != null && BotSystem.Store.Destinations != null
+                    && BotSystem.Store.Destinations.IsSingleMinded(bot.Class));
 
             if (Utility.RandomDouble() > chance)
             {

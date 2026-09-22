@@ -30,14 +30,17 @@ namespace Server.Custom
 
         private static readonly List<PlayerBot> _scratch = new List<PlayerBot>();
 
-        private static int _plansLeft;
-
-        // The admission ledger, over the same window ResetCost opens. _plansBudget is what the last
-        // pass actually granted itself, so a health line can say the budget IN FORCE rather than
-        // re-deriving it from a live count that has moved since.
-        private static int _plansGranted;
-        private static int _plansRefused;
+        // The plan budget and its ledger, over the same window ResetCost opens, served round-robin:
+        // see BotPlanRota for why the order is not the LiveRegistry's any more. _plansBudget is what
+        // the last pass actually granted itself, so a health line can say the budget IN FORCE rather
+        // than re-deriving it from a live count that has moved since.
+        private static readonly BotPlanRota<PlayerBot> _rota = new BotPlanRota<PlayerBot>();
         private static int _plansBudget;
+
+        // The bot being ticked, and where it sits in this pass's snapshot, so TryTakePlan can queue
+        // a refusal without its two callers having to name themselves. Null outside the loop.
+        private static PlayerBot _current;
+        private static int _currentIndex = -1;
 
         // Counters, reset each tick, reported by Bots.Population. They are the difference between
         // "the bots are standing still" and knowing WHY they are standing still.
@@ -238,23 +241,21 @@ namespace Server.Custom
         }
 
         /// <summary>Called by a behaviour before it plans. False means "not this tick".</summary>
+        /// <remarks>
+        /// ROUND-ROBIN, NOT FIRST COME FIRST SERVED (22 September 2026). A refused bot is queued, and
+        /// the next pass starts its behaviour loop at the first bot refused, so every bot that asks
+        /// is served within a few passes whatever order it was created in. Before, the loop always
+        /// began at the head of LiveRegistry and the probes' bots, appended last, starved once
+        /// refusals climbed with uptime. The rate - how many per pass - is PlansFor's, unchanged.
+        ///
+        /// BOTH SIDES ARE COUNTED, AND THE REFUSALS ARE THE INTERESTING HALF. A budget that is
+        /// never refused is not the thing limiting anything - so if travellers still fail to
+        /// scale with the population while this stays near zero, the number is set by DEMAND,
+        /// by how often a bot decides to travel at all, and raising the rate cannot move it.
+        /// </remarks>
         public static bool TryTakePlan()
         {
-            // BOTH SIDES ARE COUNTED, AND THE REFUSALS ARE THE INTERESTING HALF. A budget that is
-            // never refused is not the thing limiting anything - so if travellers still fail to
-            // scale with the population while this stays near zero, the number is set by DEMAND,
-            // by how often a bot decides to travel at all, and raising the rate cannot move it.
-            if (_plansLeft <= 0)
-            {
-                _plansRefused++;
-
-                return false;
-            }
-
-            _plansLeft--;
-            _plansGranted++;
-
-            return true;
+            return _rota.TryTake(_current, _currentIndex);
         }
 
         public static void NoteNoDestination()
@@ -334,7 +335,9 @@ namespace Server.Custom
             // why it could only ever be a flat number. Nothing between the snapshot and the
             // behaviour loop below takes a plan, so the move is free.
             _plansBudget = PlansFor(live);
-            _plansLeft = _plansBudget;
+
+            // And the rota says who is first in line for it: the bot refused first last pass.
+            int start = _rota.BeginPass(_scratch, _plansBudget);
 
             // The step census's denominator, taken BEFORE the brains run: the seconds just elapsed
             // belong to the phase each bot was holding during them, and a behaviour swapped by the
@@ -350,8 +353,11 @@ namespace Server.Custom
                 Log.Error(ex, "The step census pass faulted.");
             }
 
-            for (int i = 0; i < _scratch.Count; i++)
+            // ONLY THIS LOOP IS ROTATED. The census, the lifecycle and the session take the
+            // snapshot in its own order; the plan budget is the one thing the order decides.
+            for (int step = 0; step < live; step++)
             {
+                int i = (start + step) % live;
                 PlayerBot bot = _scratch[i];
 
                 // Re-check: an earlier bot's Tick may have deleted this one.
@@ -393,6 +399,9 @@ namespace Server.Custom
                     continue;
                 }
 
+                _current = bot;
+                _currentIndex = i;
+
                 try
                 {
                     behavior.Tick(bot);
@@ -402,7 +411,14 @@ namespace Server.Custom
                     // One faulting brain must not stop the others, and it must not be silent.
                     Log.Error(ex, "{0}'s {1} behaviour faulted.", bot.Name, behavior.SerializableName);
                 }
+                finally
+                {
+                    _current = null;
+                    _currentIndex = -1;
+                }
             }
+
+            _rota.EndPass();
 
             // The lifecycle rides this same pass on its own slower accumulator. One scan, two
             // cadences: a second timer would mean a second walk of a registry that also holds
@@ -494,8 +510,7 @@ namespace Server.Custom
             _passMeanMs = 0.0;
             _passMaxMs = 0;
             _passes = 0;
-            _plansGranted = 0;
-            _plansRefused = 0;
+            _rota.Reset();
         }
 
         /// <summary>
@@ -540,20 +555,24 @@ namespace Server.Custom
         /// started; refused says whether this budget is what is deciding that. Near-zero refusals
         /// beside travellers that will not scale means the limit is DEMAND - how often a bot
         /// chooses to travel - and no rate here can move it.
+        ///
+        /// The longest wait is the rota's: passes from a bot's first refusal to its grant. First
+        /// come, first served had no bound on it, and that is what starved the probes.
         /// </summary>
         public static string DescribePlans()
         {
             double seconds = _passes * Interval.TotalSeconds;
 
             return String.Format(
-                "plans {0}/tick at {1} bot(s), {2} granted / {3} refused{4}",
+                "plans {0}/tick at {1} bot(s), {2} granted / {3} refused{4}; longest wait {5} pass(es)",
                 _plansBudget,
                 _passBots,
-                _plansGranted,
-                _plansRefused,
+                _rota.Granted,
+                _rota.Refused,
                 seconds > 0.0
-                    ? String.Format(" = {0:0.0}/s granted", _plansGranted / seconds)
-                    : "");
+                    ? String.Format(" = {0:0.0}/s granted", _rota.Granted / seconds)
+                    : "",
+                _rota.LongestWait);
         }
     }
 }

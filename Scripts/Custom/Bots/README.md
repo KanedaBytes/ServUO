@@ -468,6 +468,17 @@ over the nine logged picks the weights expect 4.6 own-site picks; 3 were seen. T
 about 20-25 gatherer picks per ten minutes whether it is sampled every 10 s or every 4 s, so the pick
 rate, not ring eviction, is what keeps the Miner sample small.
 
+**The stay boost is skipped too (22 September 2026, Sean's decision), for the floor's reason.** An
+arrival at a destination short of its standing crowd used to be likelier to stay for everybody:
+the hand-over chance moved halfway to certain, so a Miner's bank 0.4 became 0.7 at an empty bank.
+It is the crowd floor's twin on the arrival side, one drawing a bot to an empty bank and the other
+keeping it there, and it exists for the same loiterers. For a class named in
+`destinations.singleMinded` it is now skipped, because a gatherer's bank is an errand, and every
+minute it spends there is a minute off the face. `BotDestinations.StayBoost` returns the chance
+unchanged for a single-minded class, applied by class at every destination as the floor is, so at
+its own site a gatherer keeps the flat station 0.95 rather than 0.975. `WorkFixtures` proves it
+beside the floor: at a bank three short, a Miner stays 0.4 and a Swordsman's rises to 0.7.
+
 **The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
 (`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
 (`DestinationType.cs:325-332`). Those are the target — but here a Fisherman arriving at a dock
@@ -1668,6 +1679,20 @@ resource sits idle. So the budget is now `max(floor, ceil(rate × live))` with t
 that knee — so the gate only opens where it was actually shut. `Bots.Recipe` reports the budget in
 force beside what it granted and **refused**, because a budget that is never refused is not what is
 limiting anything.
+
+**It is served round-robin, and it was not always (22 September 2026).** The budget used to be granted
+first come, first served down `LiveRegistry`'s own order, a `List` that new bots are appended to. The
+budget is refused most of the time by design, so the bots near the head were served whenever they
+asked and the newest, always at the tail, starved as refusals climbed with uptime: 79%, 86% and then
+95% on one boot, and the `[BotSmoke` probes' bots, created last, never got a plan, so `Bots.Shift`
+and `Bots.Life` failed on a shard that had been up a while (`WORK-INVESTIGATION.md`, status block).
+Now `BotPlanRota` starts each pass's behaviour loop at the first bot refused on the pass before,
+found by identity so a logout ahead of it does not move the line, and every bot that asks is served
+within `ceil(askers / budget)` passes. The rate is untouched; only who stands first changed. The
+census, the lifecycle and the session still take the snapshot in its own order. `Bots.Recipe` adds
+the **longest wait** in passes, from a bot's first refusal to its grant, which first come, first
+served never bounded. `PlanFixtures` proves it on `[CoreSmoke`, and runs the old order as a
+control that must starve the tail.
 
 ## Travelling
 

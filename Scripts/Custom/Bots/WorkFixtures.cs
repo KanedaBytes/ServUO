@@ -35,6 +35,7 @@ namespace Server.Custom
                 passed &= FixtureSingleMindedLumberjack(report);
                 passed &= FixtureOthersUnchanged(report);
                 passed &= FixtureCrowdFloorSkipsSingleMinded(report);
+                passed &= FixtureStayBoostSkipsSingleMinded(report);
                 passed &= FixtureOpenDoorwayIsNotFail(report);
             }
             catch (Exception ex)
@@ -253,6 +254,43 @@ namespace Server.Custom
                     miner,
                     warriorBase,
                     warrior));
+        }
+
+        /// <summary>
+        /// The stay boost passes a single-minded class by, as the crowd floor does: at a bank three
+        /// short of its crowd a Miner keeps the bank's plain hand-over chance, a Warrior's rises
+        /// halfway to certain, and at a bank with its crowd neither moves - so the fixture cannot
+        /// pass by the boost having gone for everybody.
+        /// </summary>
+        private static bool FixtureStayBoostSkipsSingleMinded(List<string> report)
+        {
+            BotDestinationConfig config = BotSystem.Store.Destinations;
+
+            double bank = BotLifecycle.Config_.HandoffChance("bank");
+
+            double miner = BotDestinations.StayBoost(bank, 3, config.IsSingleMinded(BotClass.Miner));
+            double warrior = BotDestinations.StayBoost(bank, 3, config.IsSingleMinded(BotClass.Warrior));
+            double warriorFull = BotDestinations.StayBoost(bank, 0, config.IsSingleMinded(BotClass.Warrior));
+            double minerFull = BotDestinations.StayBoost(bank, 0, config.IsSingleMinded(BotClass.Miner));
+
+            return Expect(
+                report,
+                bank > 0.0 && bank < 1.0
+                    && Near(miner, bank)
+                    && Near(warrior, bank + (1.0 - bank) * 0.5)
+                    && Near(warriorFull, bank)
+                    && Near(minerFull, bank),
+                String.Format(
+                    "the stay boost skips a single-minded class: at an under-crowded bank a Miner stays {0:0.###}, a Warrior {1:0.###}",
+                    miner,
+                    warrior),
+                String.Format(
+                    "bank hand-over {0}; three short: Miner {1}, Warrior {2}; crowd met: Miner {3}, Warrior {4}",
+                    bank,
+                    miner,
+                    warrior,
+                    minerFull,
+                    warriorFull));
         }
 
         /// <summary>
