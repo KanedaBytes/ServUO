@@ -214,6 +214,13 @@ namespace Server.Custom
             // check and every store (Scripts/Custom/Core/SaveIntegrity.cs, fixtures).
             passed &= SaveIntegrity.RunFixtures(report);
 
+            // The shard's half of the bridge protocol: a commit based on the live version is
+            // written and one based on an older version is refused naming the writer, a restore
+            // checks both the live file and the .bak, token names parse, a boot sweeps what a
+            // previous boot left, and the ack says which request it answers
+            // (Scripts/Custom/Core/BridgeFixtures.cs).
+            passed &= BridgeFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 

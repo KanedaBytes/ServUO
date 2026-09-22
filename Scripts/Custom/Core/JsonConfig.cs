@@ -161,8 +161,14 @@ namespace Server.Custom
             return true;
         }
 
-        /// <summary>Writes a config using the compact one-object-per-line layout.</summary>
-        public static bool TrySave<T>(string relativePath, T value, out string error)
+        /// <summary>
+        /// Writes a config using the compact one-object-per-line layout.
+        ///
+        /// `by` names the writer for DataFileLedger, so an editor save that arrives based on an
+        /// older version of the file can be refused with "last written ... by NavigationSystem.Save"
+        /// rather than "changed on disk". Callers that name nobody are recorded as "the shard".
+        /// </summary>
+        public static bool TrySave<T>(string relativePath, T value, out string error, string by = null)
         {
             error = null;
 
@@ -175,7 +181,7 @@ namespace Server.Custom
             try
             {
                 JToken token = JToken.FromObject(value, JsonSerializer.Create(CreateSettings()));
-                return TrySaveToken(relativePath, token, out error);
+                return TrySaveToken(relativePath, token, out error, by);
             }
             catch (Exception ex)
             {
@@ -214,7 +220,7 @@ namespace Server.Custom
             }
         }
 
-        public static bool TrySaveToken(string relativePath, JToken token, out string error)
+        public static bool TrySaveToken(string relativePath, JToken token, out string error, string by = null)
         {
             error = null;
 
@@ -230,12 +236,18 @@ namespace Server.Custom
             // .bak beside it was the bridge's, not the shard's. Same bytes, same UTF-8 without a
             // BOM, same line endings - only the moment the live file changes is different.
             string written;
+            string text = SerializeCompact(token);
 
-            if (!AtomicFile.Write(Resolve(relativePath), SerializeCompact(token), out written))
+            if (!AtomicFile.Write(Resolve(relativePath), text, out written))
             {
                 error = "Could not write " + relativePath + ": " + written;
                 return false;
             }
+
+            // The version the file is now at, and who put it there, for a refused editor commit
+            // to quote (DataFileCommit). Hashed from the text rather than re-read from disk: same
+            // bytes, no second read.
+            DataFileLedger.Note(relativePath, DataFileCommit.Hash16Text(text), by);
 
             return true;
         }

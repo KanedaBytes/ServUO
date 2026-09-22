@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Server.Custom
 {
@@ -9,9 +10,36 @@ namespace Server.Custom
     /// Watches Data/Live/requests/ for token files and runs the matching command path.
     ///
     /// This is the whole editor-to-shard channel. The bridge drops a file, the shard acts and
-    /// writes an ack beside it. No sockets, no RPC, no protocol version, and it survives either
-    /// side restarting - a token written while the shard is down is picked up when it comes back.
-    /// It is also debuggable with `type` and `del`, which an HTTP API is not.
+    /// writes an ack beside it. No sockets, no RPC, no protocol version. It is also debuggable
+    /// with `type` and `del`, which an HTTP API is not.
+    ///
+    /// EVERY REQUEST HAS AN ID (from 22 September 2026; REVIEW.md F3). The token is
+    /// `&lt;name&gt;.&lt;id&gt;.token`, the ack `&lt;name&gt;.&lt;id&gt;.ack.json`, and the ack
+    /// echoes the id. Before this the token was `&lt;name&gt;.token`: one fixed file per
+    /// operation, so a second request published while the first was being run was deleted,
+    /// unread, by the first one's cleanup, and two requests dropped between two polls collapsed
+    /// into one. A nonce in the body let a waiter refuse somebody else's ack; it could not keep
+    /// the request alive. Now two requests for one operation are two files, and nothing here
+    /// ever touches a file it did not claim.
+    ///
+    /// THE POLL, IN ORDER: list the directory; for each name that parses, CLAIM it by renaming
+    /// `.token` to `.claimed` (atomic - either this poll owns it or the bridge withdrew it a
+    /// moment earlier, and a rename that throws is skipped); read the claimed file; dispatch;
+    /// delete the claimed file; write the ack. So the bridge can read the state off the disk: a
+    /// `.token` is queued (and may be withdrawn - the bridge deletes it on a timeout and reports
+    /// NotRun), a `.claimed` is running, an ack is done, and none of the three is Unknown.
+    ///
+    /// STALE FILES FROM A PREVIOUS BOOT ARE SWEPT, NEVER RUN. Initialize deletes every token,
+    /// claimed file, ack and staged file it finds, and the previous boot's health.json, before
+    /// the timer starts. This reverses a property the header used to promise - "a token written
+    /// while the shard is down is picked up when it comes back" - deliberately: a request was
+    /// addressed to the process that was running when it was written, and a boot that ran a
+    /// `shutdown` or a `commit` somebody dropped an hour ago would be doing something nobody
+    /// is waiting for. The bridge sees the token gone with no ack and says Unknown; a hand
+    /// driver drops the token again.
+    ///
+    /// Acks older than ten minutes are pruned once a minute; the bridge reads its own within
+    /// seconds and a hand driver within a session.
     ///
     /// The poller is a plain repeating Timer, not a LoopQueue post: a Timer callback already runs
     /// on the game thread, so LoopQueue would only add a hop. LoopQueue stays the seam if the
@@ -24,6 +52,21 @@ namespace Server.Custom
         public const string RequestDirectory = "Data/Live/requests";
 
         private static readonly TimeSpan Interval = TimeSpan.FromSeconds(1.0);
+
+        /// <summary>
+        /// `&lt;name&gt;.&lt;id&gt;.token`. The name is the bridge whitelist's TOKEN_NAME; the id
+        /// is what the bridge generates (twelve hex) or whatever a hand driver typed. Matched
+        /// ordinally on the file name, never through a Directory.GetFiles pattern: on .NET
+        /// Framework a three-character pattern such as "*.tmp" also matches longer extensions.
+        /// </summary>
+        private static readonly Regex TokenName = new Regex(
+            @"^([a-z][a-z0-9-]{0,63})\.([a-z0-9]{1,32})\.token$", RegexOptions.Compiled);
+
+        private static readonly TimeSpan AckRetention = TimeSpan.FromMinutes(10.0);
+
+        private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(60.0);
+
+        private static DateTime _lastPrune = DateTime.MinValue;
 
         /// <summary>
         /// A token bigger than this is not a token. The bridge writes a few dozen bytes; anything
@@ -54,9 +97,150 @@ namespace Server.Custom
 
         public static void Initialize()
         {
+            // Before the timer, so nothing from a previous boot is ever run by this one.
+            Sweep();
+
             HealthCheck.Register("Bridge.Poller", BuildHealthResult);
 
             Timer.DelayCall(Interval, Interval, Poll);
+        }
+
+        /// <summary>
+        /// `save.abc123.token` into ("save", "abc123"). False for the old `save.token` form and for
+        /// anything else, which the poll deletes with a line saying what the form is.
+        /// </summary>
+        public static bool TryParseTokenName(string fileName, out string name, out string id)
+        {
+            name = null;
+            id = null;
+
+            Match match = fileName == null ? null : TokenName.Match(fileName);
+
+            if (match == null || !match.Success)
+            {
+                return false;
+            }
+
+            name = match.Groups[1].Value;
+            id = match.Groups[2].Value;
+            return true;
+        }
+
+        /// <summary>
+        /// Deletes what a previous boot left behind: every token, claimed token, ack, staging
+        /// file and staged commit, and the previous boot's health.json (so the bridge's "current
+        /// bootId" is absent rather than stale until this boot writes its own). Returns the file
+        /// names removed. Test seam: the directories are parameters so the fixtures sweep a
+        /// scratch tree.
+        /// </summary>
+        public static IList<string> Sweep(string requestDirectory, IList<string> stagedDirectories, string healthPath)
+        {
+            var removed = new List<string>();
+
+            SweepDirectory(requestDirectory, new[] { ".token", ".claimed", ".ack.json", ".tmp" }, removed);
+
+            if (stagedDirectories != null)
+            {
+                for (int i = 0; i < stagedDirectories.Count; i++)
+                {
+                    SweepDirectory(stagedDirectories[i], new[] { ".staged" }, removed);
+                }
+            }
+
+            try
+            {
+                if (healthPath != null && File.Exists(healthPath))
+                {
+                    File.Delete(healthPath);
+                    removed.Add(Path.GetFileName(healthPath));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not remove the previous boot's {0}: {1}", healthPath, ex.Message);
+            }
+
+            return removed;
+        }
+
+        private static void SweepDirectory(string directory, string[] suffixes, List<string> removed)
+        {
+            try
+            {
+                if (String.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                foreach (string file in Directory.GetFiles(directory))
+                {
+                    string fileName = Path.GetFileName(file);
+                    bool matches = false;
+
+                    for (int i = 0; i < suffixes.Length && !matches; i++)
+                    {
+                        matches = fileName.EndsWith(suffixes[i], StringComparison.Ordinal);
+                    }
+
+                    if (!matches)
+                    {
+                        continue;
+                    }
+
+                    File.Delete(file);
+                    removed.Add(fileName);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not sweep {0}: {1}", directory, ex.Message);
+            }
+        }
+
+        private static void Sweep()
+        {
+            var stagedDirectories = new List<string>();
+
+            stagedDirectories.Add(Path.Combine(Core.BaseDirectory, "Data", "Custom"));
+
+            try
+            {
+                string spawnRoot = Path.Combine(Core.BaseDirectory, GGSpawnCommands.SpawnRoot);
+
+                if (Directory.Exists(spawnRoot))
+                {
+                    stagedDirectories.AddRange(Directory.GetDirectories(spawnRoot));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not list {0} for the boot sweep: {1}", GGSpawnCommands.SpawnRoot, ex.Message);
+            }
+
+            IList<string> removed = Sweep(
+                Path.Combine(Core.BaseDirectory, RequestDirectory),
+                stagedDirectories,
+                Path.Combine(Core.BaseDirectory, HealthSnapshot.OutputPath));
+
+            if (removed.Count == 0)
+            {
+                Log.Info("Request directory clean; nothing from a previous boot to sweep.");
+                return;
+            }
+
+            const int shown = 12;
+            var names = new List<string>();
+
+            for (int i = 0; i < removed.Count && i < shown; i++)
+            {
+                names.Add(removed[i]);
+            }
+
+            Log.Info(
+                "Swept {0} file(s) from a previous boot, none run: {1}{2}",
+                removed.Count,
+                String.Join(", ", names.ToArray()),
+                removed.Count > shown ? String.Format(" and {0} more", removed.Count - shown) : "");
         }
 
         private static void Poll()
@@ -79,7 +263,7 @@ namespace Server.Custom
                     return;
                 }
 
-                files = Directory.GetFiles(directory, "*.token");
+                files = Directory.GetFiles(directory);
             }
             catch (Exception ex)
             {
@@ -89,16 +273,95 @@ namespace Server.Custom
 
             for (int i = 0; i < files.Length; i++)
             {
-                Handle(files[i]);
+                string fileName = Path.GetFileName(files[i]);
+
+                if (!fileName.EndsWith(".token", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string name, id;
+
+                if (!TryParseTokenName(fileName, out name, out id))
+                {
+                    // The old fixed-name form, or a typo. Deleted rather than left: a token that
+                    // sits on disk for ever looks exactly like a shard that never noticed it.
+                    TryDelete(files[i], fileName);
+                    Log.Warn("Token '{0}' has no request id and was not run; the form is <name>.<id>.token", fileName);
+                    continue;
+                }
+
+                string claimed = Path.Combine(directory, name + "." + id + ".claimed");
+
+                try
+                {
+                    File.Move(files[i], claimed);
+                }
+                catch
+                {
+                    // Withdrawn by the bridge between the listing and now (its timeout deletes an
+                    // unclaimed token and reports NotRun), or claimed already. Either way not ours.
+                    continue;
+                }
+
+                Handle(claimed, name, id);
+            }
+
+            Prune(directory);
+        }
+
+        /// <summary>Acks nobody has read for ten minutes are removed, once a minute.</summary>
+        private static void Prune(string directory)
+        {
+            DateTime now = DateTime.UtcNow;
+
+            if (now - _lastPrune < PruneInterval)
+            {
+                return;
+            }
+
+            _lastPrune = now;
+
+            try
+            {
+                foreach (string file in Directory.GetFiles(directory))
+                {
+                    if (!file.EndsWith(".ack.json", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (now - File.GetLastWriteTimeUtc(file) > AckRetention)
+                    {
+                        File.Delete(file);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not prune old acks: {0}", ex.Message);
             }
         }
 
-        private static void Handle(string path)
+        private static void TryDelete(string path, string label)
         {
-            string name = Path.GetFileNameWithoutExtension(path);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Could not delete {0}.", label);
+            }
+        }
+
+        private static void Handle(string path, string name, string id)
+        {
             string body = null;
             bool ok;
+            string outcome = null;
             string message;
+            string extraJson = null;
             IList<string> errors = NoDetails;
             IList<string> warnings = NoDetails;
 
@@ -109,12 +372,13 @@ namespace Server.Custom
                 if (info.Length > MaxTokenBytes)
                 {
                     ok = false;
+                    outcome = "notrun";
                     message = String.Format("token is {0} bytes; the limit is {1}", info.Length, MaxTokenBytes);
                 }
                 else
                 {
                     body = File.ReadAllText(path).Trim();
-                    ok = Dispatch(name, body, out message, out errors, out warnings);
+                    ok = Dispatch(name, id, body, out message, out errors, out warnings, out extraJson);
                 }
             }
             catch (Exception ex)
@@ -123,29 +387,13 @@ namespace Server.Custom
                 message = ex.Message;
             }
 
-            // Delete BEFORE THE ACKNOWLEDGEMENT, and always - which is AFTER the dispatch above,
-            // and the difference is not pedantry. The token sits on disk, read and not yet
-            // deleted, for as long as the request takes to run; a second request published into
-            // that window is deleted here, unread, by this one's cleanup. That is REVIEW.md's F3,
-            // it is a property of this ordering rather than a bug in it, and the fix is a request
-            // identity rather than a different order - the bridge's interim guard is to refuse a
-            // publish while a token for that operation is still on disk. The comment used to read
-            // "delete FIRST", and the fake shard in the editor tests read it as "before dispatch"
-            // and deleted up front, which left the suite unable to reproduce the window at all.
-            //
-            // Unconditional, whatever happened: a token that survives its own failure is retried
-            // on every tick for ever, and a token left on disk after a malformed request looks
-            // exactly like one the shard never noticed, which is the worst of both.
-            try
-            {
-                File.Delete(path);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Could not delete the request token {0}.", name);
-            }
+            // The claimed file goes BEFORE THE ACKNOWLEDGEMENT, and always: the ack is the last
+            // word, and a claimed file that outlived it would read as "still running" to the
+            // bridge. Unconditional, whatever happened - a token that survives its own failure
+            // would be a file nothing ever picks up again.
+            TryDelete(path, name + "." + id + ".claimed");
 
-            WriteAck(name, body, ok, message, errors, warnings);
+            WriteAck(name, id, body, ok, outcome ?? (ok ? "completed" : "faulted"), message, errors, warnings, extraJson);
 
             _handled++;
             _lastRequest = name;
@@ -154,12 +402,12 @@ namespace Server.Custom
 
             if (ok)
             {
-                Log.Info("Request '{0}': {1}", name, message);
+                Log.Info("Request '{0}' ({1}): {2}", name, id, message);
             }
             else
             {
                 _failed++;
-                Log.Warn("Request '{0}' failed: {1}", name, message);
+                Log.Warn("Request '{0}' ({1}) failed: {2}", name, id, message);
             }
         }
 
@@ -171,79 +419,138 @@ namespace Server.Custom
         /// exactly the bug that costs an afternoon.
         /// </summary>
         private static bool Dispatch(
-            string name, string body, out string message,
-            out IList<string> errors, out IList<string> warnings)
+            string name, string id, string body, out string message,
+            out IList<string> errors, out IList<string> warnings, out string extraJson)
         {
             string error;
 
             errors = NoDetails;
             warnings = NoDetails;
+            extraJson = null;
 
             switch (name.ToLowerInvariant())
             {
+                // The four plain reloads: what a hand driver drops after editing a file by hand,
+                // and what an editor save used to drop after writing the file itself. The editor
+                // now goes through `commit`, which replaces the file and then runs exactly these
+                // (DataFileCommit.Reload*), so the message is the same either way.
                 case "nav-reload":
-                    if (!NavigationSystem.TryReload(out error, out errors))
-                    {
-                        message = error;
-                        return false;
-                    }
-
-                    warnings = NavigationSystem.DataWarnings;
-
-                    message = String.Format("{0} waypoint(s), {1} destination(s), {2} warning(s)",
-                        NavigationSystem.Graph.NodeCount,
-                        NavigationSystem.Destinations.Count,
-                        NavigationSystem.DataWarnings.Count);
-                    return true;
+                    return DataFileCommit.ReloadNavigation(null, out message, out errors, out warnings);
 
                 case "dailylife-reload":
-                    if (!DailyLifeCommands.TryReload(out error, out errors))
-                    {
-                        message = error;
-                        return false;
-                    }
-
-                    warnings = DailyLifeSystem.ConfigWarnings;
-
-                    message = String.Format("{0} config warning(s)", DailyLifeSystem.ConfigWarnings.Count);
-                    return true;
+                    return DataFileCommit.ReloadDailyLife(null, out message, out errors, out warnings);
 
                 // Restricted zones have no warning tier at all: they load, or they do not.
                 case "zones-reload":
-                    if (!RestrictedZoneSystem.TryReload(out error, out errors))
-                    {
-                        message = error;
-                        return false;
-                    }
+                    return DataFileCommit.ReloadZones(null, out message, out errors, out warnings);
 
-                    message = String.Format("{0} restricted zone(s)", RestrictedZoneSystem.Zones.Count);
-                    return true;
-
-                // The editor's per-save reload. The body is a file NAME relative to Spawns/Custom -
-                // never a path - and everything after the first space is the bridge's nonce.
-                //
-                // Resolved and range-checked on this side as well as in the bridge's whitelist. A
-                // sandbox enforced only by the caller is a sandbox enforced by whoever calls next.
+                // One spawn file. The body is a file NAME relative to Spawns/Custom - never a
+                // path. Resolved and range-checked on this side as well as in the bridge's
+                // whitelist: a sandbox enforced only by the caller is a sandbox enforced by
+                // whoever calls next.
                 case "spawn-reload":
+                    return DataFileCommit.ReloadSpawnFile(FirstWord(body) ?? "", out message, out errors, out warnings);
+
+                // ---- the editor's writes -------------------------------------------------------
+                //
+                // THE SHARD IS THE WRITER of the editor's data files (from 22 September 2026;
+                // REVIEW.md, "Restore has a lost-update hole"). The bridge stages the new bytes
+                // beside the target as <live>.<id>.staged and drops this token; the compare with
+                // the version the save was based on and the replace happen here, on the game
+                // thread, where every other writer of these files runs - so nothing can land
+                // between the check and the rename, and a refusal names who did land, and when,
+                // from DataFileLedger. Body: "file=<key> base=<hash|none> wrote=<hash> reload=yes|no".
+                // The id is the token's; nothing in the body is a path.
+                case "commit":
                 {
-                    string relative = (body ?? "").Trim();
-                    int space = relative.IndexOf(' ');
+                    Dictionary<string, string> fields = DataFileCommit.ParseFields(body);
+                    string key, baseHash, wrote, reloadWord;
 
-                    if (space >= 0)
+                    fields.TryGetValue("file", out key);
+                    fields.TryGetValue("base", out baseHash);
+                    fields.TryGetValue("wrote", out wrote);
+                    fields.TryGetValue("reload", out reloadWord);
+
+                    DataFileTarget target;
+                    string keyError;
+
+                    if (!DataFileCommit.TryResolveKey(key, out target, out keyError))
                     {
-                        relative = relative.Substring(0, space);
-                    }
-
-                    string spawnSummary;
-
-                    if (!GGSpawnCommands.TryReloadFile(relative, out spawnSummary, out error))
-                    {
-                        message = error;
+                        message = "commit refused: " + keyError;
                         return false;
                     }
 
-                    message = spawnSummary;
-                    return true;
+                    if (!DataFileCommit.IsVersion(baseHash) || !DataFileCommit.IsVersion(wrote) || wrote == DataFileCommit.NoFile)
+                    {
+                        message = "commit needs base=<hash|none> and wrote=<hash> (sixteen hex digits each)";
+                        return false;
+                    }
+
+                    var spec = new CommitSpec
+                    {
+                        Id = id,
+                        Base = baseHash,
+                        Wrote = wrote,
+                        Reload = !Insensitive.Equals(reloadWord, "no")
+                    };
+
+                    CommitResult result;
+                    bool committed = DataFileCommit.TryCommit(target, spec, out result);
+
+                    message = result.Message;
+                    errors = result.Errors;
+                    warnings = result.Warnings;
+                    extraJson = "\"commit\": " + result.ToJson();
+                    return committed;
+                }
+
+                // The .bak back over the live file - "discard" in the editor - with BOTH versions
+                // checked: the live file must still be the one the caller saw, and the .bak must
+                // be the backup the caller means. Body: "file=<key> base=<hash> backup=<hash>".
+                // The replaced live file becomes the new .bak (see DataFileCommit's header for
+                // why that is the only order that keeps spawn-reload's unload correct).
+                case "restore":
+                {
+                    Dictionary<string, string> fields = DataFileCommit.ParseFields(body);
+                    string key, baseHash, backupHash, reloadWord;
+
+                    fields.TryGetValue("file", out key);
+                    fields.TryGetValue("base", out baseHash);
+                    fields.TryGetValue("backup", out backupHash);
+                    fields.TryGetValue("reload", out reloadWord);
+
+                    DataFileTarget target;
+                    string keyError;
+
+                    if (!DataFileCommit.TryResolveKey(key, out target, out keyError))
+                    {
+                        message = "restore refused: " + keyError;
+                        return false;
+                    }
+
+                    if (!DataFileCommit.IsVersion(baseHash) || baseHash == DataFileCommit.NoFile
+                        || !DataFileCommit.IsVersion(backupHash) || backupHash == DataFileCommit.NoFile)
+                    {
+                        message = "restore needs base=<hash> and backup=<hash> (sixteen hex digits each)";
+                        return false;
+                    }
+
+                    var spec = new RestoreSpec
+                    {
+                        Id = id,
+                        Base = baseHash,
+                        Backup = backupHash,
+                        Reload = !Insensitive.Equals(reloadWord, "no")
+                    };
+
+                    CommitResult result;
+                    bool restored = DataFileCommit.TryRestore(target, spec, out result);
+
+                    message = result.Message;
+                    errors = result.Errors;
+                    warnings = result.Warnings;
+                    extraJson = "\"commit\": " + result.ToJson();
+                    return restored;
                 }
 
                 case "nav-audit":
@@ -1154,7 +1461,8 @@ namespace Server.Custom
 
                     for (int i = 0; i < words.Length; i++)
                     {
-                        // The bridge appends its nonce as '#abc'; it is not an argument.
+                        // A '#word' is not an argument: the bridge used to append its nonce that
+                        // way, and a hand-typed body still may.
                         if (words[i].StartsWith("#"))
                         {
                             continue;
@@ -1217,7 +1525,7 @@ namespace Server.Custom
                     {
                         string part = parts[i];
 
-                        // The bridge appends its nonce as '#abc'; it is not an argument.
+                        // A '#word' is not an argument (a hand-typed body may carry one).
                         if (part.StartsWith("#"))
                         {
                             continue;
@@ -1427,9 +1735,10 @@ namespace Server.Custom
                     return true;
                 }
 
-                // The body IS the message, in full - no FirstWord here, and no nonce to strip
-                // either, which is why `broadcast` is not in the bridge's NONCED set: appending
-                // "#a1b2c3d4" to what every player is about to read is not a thing to do.
+                // The body IS the message, in full - no FirstWord here. (This is why the request
+                // id lives in the file name and not in the body: appending "#a1b2c3d4" to what
+                // every player is about to read was not a thing to do, so `broadcast` had no
+                // identity at all until the file name carried one.)
                 case "broadcast":
                 {
                     string text = (body ?? "").Trim();
@@ -1587,8 +1896,9 @@ namespace Server.Custom
         /// them will not.
         /// </summary>
         /// <summary>
-        /// The first space-delimited word of a body, skipping the bridge's `#nonce`. Bodies that
-        /// take one optional argument all want this and nothing more.
+        /// The first space-delimited word of a body, skipping any `#word` (the bridge used to
+        /// append its nonce that way). Bodies that take one optional argument all want this and
+        /// nothing more.
         /// </summary>
         /// <summary>An ItemID written either way round - "0x0B20" or "2848".</summary>
         private static bool TryParseId(string word, out int id)
@@ -1645,7 +1955,7 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// "x,y,width,height" out of a token body, ignoring the bridge's '#nonce' and any words.
+        /// "x,y,width,height" out of a token body, ignoring any '#word' and any other words.
         ///
         /// Shared by nav-rejoin and nav-adopt so the two cannot drift on what a region looks like;
         /// nav-adopt keeps its own loop because it also reads the `rebase` word out of the same
@@ -1682,19 +1992,33 @@ namespace Server.Custom
             return false;
         }
 
-        private static void WriteAck(
-            string name, string token, bool ok, string message,
-            IList<string> errors, IList<string> warnings)
+        /// <summary>
+        /// The ack's text. `id` is the token's and is what the bridge matches on; `outcome` is one
+        /// of completed, faulted or notrun (LoopQueue.cs, the outcome contract - an ack can never
+        /// say unknown, because an ack is by definition an answer); `extraJson` is an optional
+        /// already-formatted member such as the `commit` object. Public so the fixtures can parse
+        /// what a real ack says.
+        /// </summary>
+        public static string BuildAck(
+            string name, string id, string token, bool ok, string outcome, string message,
+            IList<string> errors, IList<string> warnings, string extraJson)
         {
             var builder = new StringBuilder(256);
 
             builder.Append("{\n");
             builder.Append("  \"request\": ").Append(Json.Quote(name)).Append(",\n");
+            builder.Append("  \"id\": ").Append(Json.Quote(id)).Append(",\n");
+            builder.Append("  \"outcome\": ").Append(Json.Quote(outcome)).Append(",\n");
             builder.Append("  \"token\": ").Append(Json.Quote(token)).Append(",\n");
             builder.Append("  \"ok\": ").Append(ok ? "true" : "false").Append(",\n");
             builder.Append("  \"message\": ").Append(Json.Quote(message)).Append(",\n");
             AppendDetails(builder, "errors", errors);
             AppendDetails(builder, "warnings", warnings);
+
+            if (!String.IsNullOrEmpty(extraJson))
+            {
+                builder.Append("  ").Append(extraJson).Append(",\n");
+            }
 
             // On EVERY ack, not only save's: the completed persistence generation and this
             // process's identity. A shutdown ack then says which generation the shard stopped at, a
@@ -1705,11 +2029,19 @@ namespace Server.Custom
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append("\n");
             builder.Append("}\n");
 
-            string error;
+            return builder.ToString();
+        }
 
-            if (!AtomicFile.Write(RequestDirectory + "/" + name + ".ack.json", builder.ToString(), out error))
+        private static void WriteAck(
+            string name, string id, string token, bool ok, string outcome, string message,
+            IList<string> errors, IList<string> warnings, string extraJson)
+        {
+            string error;
+            string text = BuildAck(name, id, token, ok, outcome, message, errors, warnings, extraJson);
+
+            if (!AtomicFile.Write(RequestDirectory + "/" + name + "." + id + ".ack.json", text, out error))
             {
-                Log.Error("Could not write the ack for '{0}': {1}", name, error);
+                Log.Error("Could not write the ack for '{0}' ({1}): {2}", name, id, error);
             }
         }
 

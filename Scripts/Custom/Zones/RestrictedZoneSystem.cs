@@ -148,7 +148,7 @@ namespace Server.Custom
         {
             var store = new RestrictedZoneStore { Zones = new List<RestrictedZoneRecord>(_records) };
 
-            if (!JsonConfig.TrySave(ConfigPath, store, out error))
+            if (!JsonConfig.TrySave(ConfigPath, store, out error, "the shard (RestrictedZoneSystem.Save)"))
             {
                 Log.Error("Could not write {0}: {1}", ConfigPath, error);
                 return false;

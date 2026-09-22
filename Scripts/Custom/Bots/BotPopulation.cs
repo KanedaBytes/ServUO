@@ -637,7 +637,18 @@ namespace Server.Custom
 
             text.Append("</Spawns>");
 
-            return AtomicFile.Write(GeneratedPath(map), text.ToString(), out error);
+            string xml = text.ToString();
+
+            if (!AtomicFile.Write(GeneratedPath(map), xml, out error))
+            {
+                return false;
+            }
+
+            // The editor can save this file too; a save based on the version before this write is
+            // refused naming this writer (DataFileCommit, DataFileLedger).
+            DataFileLedger.Note(GeneratedPath(map), DataFileCommit.Hash16Text(xml), "the shard (BotPopulation.Write)");
+
+            return true;
         }
 
         /// <summary>

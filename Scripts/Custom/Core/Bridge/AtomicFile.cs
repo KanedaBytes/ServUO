@@ -82,6 +82,51 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// Puts an already-written file over another in one step, keeping the previous file beside
+        /// it as <paramref name="backupSuffix"/> (".bak") when there was one.
+        ///
+        /// The commit half of an editor save (DataFileCommit): the bridge stages the new bytes
+        /// beside the target, and this is the rename. Full paths, because the caller has already
+        /// resolved them - the fixtures run this on a scratch tree, not under Core.BaseDirectory.
+        /// The backup argument is passed whenever the destination exists, for the reason the
+        /// binary Write gives: with a backup named, the rare ERROR_UNABLE_TO_MOVE_REPLACEMENT can
+        /// never leave no destination at all. Same volume is required and is a property of the
+        /// layout (everything under the shard root); a move across volumes would be a copy.
+        /// </summary>
+        public static bool Replace(string sourceFullPath, string destinationFullPath, string backupSuffix, out string error)
+        {
+            error = null;
+
+            try
+            {
+                if (File.Exists(destinationFullPath))
+                {
+                    File.Replace(
+                        sourceFullPath, destinationFullPath,
+                        backupSuffix == null ? null : destinationFullPath + backupSuffix);
+                }
+                else
+                {
+                    string directory = Path.GetDirectoryName(destinationFullPath);
+
+                    if (!String.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+
+                    File.Move(sourceFullPath, destinationFullPath);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
         public static bool Write(string relativePath, string contents, out string error)
         {
             error = null;

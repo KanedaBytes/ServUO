@@ -858,7 +858,7 @@ namespace Server.Custom
                 return false;
             }
 
-            return JsonConfig.TrySave(ConfigPath, _store, out error);
+            return JsonConfig.TrySave(ConfigPath, _store, out error, "the shard (NavigationSystem.Save)");
         }
 
         /// <summary>
