@@ -16,9 +16,10 @@
 > **Two findings came out of the live runs:**
 > - **A fixed census race.** With gatherers really mining, the census double-counted ore that landed
 >   between behaviour ticks, which read as F5 losses. Fixed, with `HaulFixtures` rule 6.
-> - **An open question.** Only 11-13% of gatherer picks chose their own site, because our crowd
->   floor makes empty far-town banks pull ×4. That is a decision, recorded in the Bots README
->   Deviations row *Gatherers are single-minded again*.
+> - **An open question, since decided.** Only 11-13% of gatherer picks chose their own site, because
+>   our crowd floor makes empty far-town banks pull ×4. **Done, 22 September 2026:** a class named in
+>   `destinations.singleMinded` no longer feels the floor (`BotDestinations.CrowdFloor`,
+>   `WorkFixtures`). Recorded in the Bots README Deviations row *Gatherers are single-minded again*.
 > - **Seen, not fixed: `Nav.Doors` can fail under traffic.** It read Fail after both `[BotSmoke`
 >   runs and Ok at every boot. The engine patch (MODIFICATIONS entry 6) is intact:
 >   `FastAStarAlgorithm.cs:106`, and both walk audits passed.
@@ -30,6 +31,10 @@
 >     busy.
 >   - **For Sean.** What the check should say when its doorway is in use (Warn, retry, or choose
 >     the door on the route) is his call. It guards an upstream edit.
+>   - **Done, 22 September 2026.** The check prefers an anchor whose doors are all shut; where a
+>     door stands open, a route around the closed one reports Ok, *doorway door open, patch not
+>     re-verified this pass*. Fail is kept for every door shut and still no route through one
+>     (`BotDoorCheck.ClassifyBotRoute`, `WorkFixtures`).
 
 Read-only investigation of 22 September 2026, at `982fa8c7`. Nothing in the code, config or data was
 changed; this file is the only commit. It **proposes**; the decisions are Sean's.

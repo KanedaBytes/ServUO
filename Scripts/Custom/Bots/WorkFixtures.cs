@@ -35,6 +35,7 @@ namespace Server.Custom
                 passed &= FixtureSingleMindedLumberjack(report);
                 passed &= FixtureOthersUnchanged(report);
                 passed &= FixtureCrowdFloorSkipsSingleMinded(report);
+                passed &= FixtureOpenDoorwayIsNotFail(report);
             }
             catch (Exception ex)
             {
@@ -252,6 +253,44 @@ namespace Server.Custom
                     miner,
                     warriorBase,
                     warrior));
+        }
+
+        /// <summary>
+        /// Nav.Doors (BotDoorCheck.ClassifyBotRoute): a door standing open beside the route makes a
+        /// route around the closed one unverifiable, never a Fail - the false alarm after every
+        /// [BotSmoke once the inn corridor got busy. With every door shut, around and no route are
+        /// still Fail, so the fixture cannot pass by never failing. Here beside the work fixtures
+        /// because the busy corridor was the gatherers' doing, and because this file is already
+        /// on [CoreSmoke.
+        /// </summary>
+        private static bool FixtureOpenDoorwayIsNotFail(List<string> report)
+        {
+            BotDoorCheck.DoorPlan openAround = BotDoorCheck.ClassifyBotRoute(true, false, true);
+            BotDoorCheck.DoorPlan openNoRoute = BotDoorCheck.ClassifyBotRoute(false, false, true);
+            BotDoorCheck.DoorPlan shutAround = BotDoorCheck.ClassifyBotRoute(true, false, false);
+            BotDoorCheck.DoorPlan shutNoRoute = BotDoorCheck.ClassifyBotRoute(false, false, false);
+            BotDoorCheck.DoorPlan through = BotDoorCheck.ClassifyBotRoute(true, true, false);
+            BotDoorCheck.DoorPlan openThrough = BotDoorCheck.ClassifyBotRoute(true, true, true);
+
+            bool ok = BotDoorCheck.StatusFor(openAround) != HealthStatus.Fail
+                && BotDoorCheck.StatusFor(openNoRoute) != HealthStatus.Fail
+                && BotDoorCheck.StatusFor(shutAround) == HealthStatus.Fail
+                && BotDoorCheck.StatusFor(shutNoRoute) == HealthStatus.Fail
+                && through == BotDoorCheck.DoorPlan.Through
+                && openThrough == BotDoorCheck.DoorPlan.Through;
+
+            return Expect(
+                report,
+                ok,
+                "Nav.Doors: an open doorway door is not a Fail; every door shut and routed around still is",
+                String.Format(
+                    "open+around {0} ({1}), open+no route {2} ({3}), shut+around {4} ({5}), shut+no route {6} ({7}), through {8}, open+through {9}",
+                    openAround, BotDoorCheck.StatusFor(openAround),
+                    openNoRoute, BotDoorCheck.StatusFor(openNoRoute),
+                    shutAround, BotDoorCheck.StatusFor(shutAround),
+                    shutNoRoute, BotDoorCheck.StatusFor(shutNoRoute),
+                    through,
+                    openThrough));
         }
 
         private static bool Expect(List<string> report, bool condition, string ok, string fail)

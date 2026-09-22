@@ -96,7 +96,12 @@ read when it was. **Where the two disagree, this section is the one that has bee
   a street waypoint to a shop arrival *through* the door tile, a plain `PlayerMobile` does not, the
   bot's step onto that tile opens the door and lands, and `AlwaysIgnoreDoors` is false afterwards.
   Cached rather than live, because `HealthCheck.RunAll` runs every sixty seconds and the subject is
-  a real bot; it runs at `ServerStarted` and with `[BotSmoke`.
+  a real bot; it runs at `ServerStarted` and with `[BotSmoke`. **A door standing open at the
+  anchor is Ok, not Fail** (22 September 2026): with a bot in the doorway the only closed door left
+  is its neighbour, which the route never passes, so the check reports *doorway door open, patch
+  not re-verified this pass* with the last pass that did verify it. Fail means every door was shut
+  and the bot still could not plan through one (`BotDoorCheck.ClassifyBotRoute`, asserted by
+  `WorkFixtures` on `[CoreSmoke`).
 - **`[WalkAudit` walks two probe classes and reports per class**, from 12 September 2026 - a
   `BaseCreature` for the daily-life walkers and `NavCreatureActor`, and a real `PlayerBot` for the
   fleet and `NavPlayerActor`. The gate is 2,510 / 0 failed / 0 fragile **per class**, and the bot

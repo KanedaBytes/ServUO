@@ -49,6 +49,17 @@
 // Putting it there would also cost Nav.Actor's ledger a new entry. The NAME stays Nav.Doors
 // because what it asserts is a navigation contract and it reads beside Nav.Movement, Nav.Data and
 // Nav.Actor in the [CoreSmoke health block.
+//
+// AN OPEN DOORWAY IS Ok, NOT Fail (22 September 2026). The inn anchor has two doors three tiles
+// apart. When a bot stands in the doorway, its door is open and FindDoor used to take the OTHER one,
+// which the route never passes: the bot walked through the open doorway, "around" the closed door,
+// and the check reported MODIFICATIONS entry 6 reverted after every [BotSmoke - with the engine
+// patch intact and both walk audits passing. An open door beside the route means the question
+// cannot be asked this pass, which is a different fact from the answer being no. So the check now
+// prefers an anchor whose doors are all shut, and where it cannot have one, a route that fails or
+// goes around while a door there stands open reports Ok, "doorway door open, patch not re-verified
+// this pass". Fail stays reserved for the patch being absent: every door shut and the bot still
+// cannot plan through one. ClassifyBotRoute is the decision, pure, and WorkFixtures asserts it.
 
 using System;
 using System.Collections.Generic;
@@ -66,6 +77,50 @@ namespace Server.Custom
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
 
         private static HealthResult _last;
+
+        /// <summary>The detail of this boot's last pass that really exercised the patch.</summary>
+        private static string _lastVerified;
+
+        /// <summary>What the bot's planned route says about the door gate.</summary>
+        public enum DoorPlan
+        {
+            /// <summary>Routed through the closed door: the patch is there. Go on to halves two and three.</summary>
+            Through,
+
+            /// <summary>A door beside the route stands open, so a route that avoids the closed one proves nothing.</summary>
+            Unverifiable,
+
+            /// <summary>Every door shut and no route at all.</summary>
+            NoRoute,
+
+            /// <summary>Every door shut and the route went around the closed one.</summary>
+            Around
+        }
+
+        /// <summary>
+        /// The decision, pure. An open door beside the route can only ever make a failing route
+        /// unverifiable - never turn a route through the closed door into anything but Through.
+        /// </summary>
+        public static DoorPlan ClassifyBotRoute(bool routed, bool throughChosenDoor, bool doorwayOpen)
+        {
+            if (routed && throughChosenDoor)
+            {
+                return DoorPlan.Through;
+            }
+
+            if (doorwayOpen)
+            {
+                return DoorPlan.Unverifiable;
+            }
+
+            return routed ? DoorPlan.Around : DoorPlan.NoRoute;
+        }
+
+        /// <summary>The status Run reports for each plan; Through is Ok unless a later half fails.</summary>
+        public static HealthStatus StatusFor(DoorPlan plan)
+        {
+            return plan == DoorPlan.NoRoute || plan == DoorPlan.Around ? HealthStatus.Fail : HealthStatus.Ok;
+        }
 
         /// <summary>
         /// An outside stand tile and an inside tile with a door between them, from the edges the
@@ -150,15 +205,36 @@ namespace Server.Custom
 
             BaseDoor door = null;
             Anchor anchor = null;
+            bool doorwayOpen = false;
+            bool anyOpen = false;
 
-            for (int i = 0; i < Anchors.Length && door == null; i++)
+            var closed = new BaseDoor[Anchors.Length];
+            var open = new bool[Anchors.Length];
+
+            for (int i = 0; i < Anchors.Length; i++)
             {
-                door = FindDoor(map, Anchors[i]);
+                closed[i] = FindDoor(map, Anchors[i], out open[i]);
+                anyOpen |= open[i];
+            }
 
-                if (door != null)
+            // A clean doorway first - a closed door with nothing open beside it, so a route that
+            // avoids it means what it says. Only then one with a door standing open.
+            for (int pass = 0; pass < 2 && door == null; pass++)
+            {
+                for (int i = 0; i < Anchors.Length && door == null; i++)
                 {
-                    anchor = Anchors[i];
+                    if (closed[i] != null && (pass == 1 || !open[i]))
+                    {
+                        door = closed[i];
+                        anchor = Anchors[i];
+                        doorwayOpen = open[i];
+                    }
                 }
+            }
+
+            if (door == null && anyOpen)
+            {
+                return Store(NotReVerified("every door at the anchors is open, so there is no closed door to route through"));
             }
 
             if (door == null)
@@ -199,7 +275,19 @@ namespace Server.Custom
                 var botPath = new MovementPath(bot, anchor.Inside);
                 List<Point2D> botTiles = TilesOf(anchor.Outside, botPath);
 
-                if (!botPath.Success)
+                DoorPlan plan = ClassifyBotRoute(botPath.Success, botTiles.Contains(doorTile), doorwayOpen);
+
+                if (plan == DoorPlan.Unverifiable)
+                {
+                    return Store(NotReVerified(String.Format(
+                        "{0}: a door beside the route stands open and the bot {1} the closed one at {2},{3}",
+                        anchor.Name,
+                        botPath.Success ? "routed around" : "could not route past",
+                        doorTile.X,
+                        doorTile.Y)));
+                }
+
+                if (plan == DoorPlan.NoRoute)
                 {
                     return Fail(String.Format(
                         "a bot could not route {0} at all ({1} -> {2}). MODIFICATIONS entry 6 is "
@@ -209,7 +297,7 @@ namespace Server.Custom
                         anchor.Inside));
                 }
 
-                if (!botTiles.Contains(doorTile))
+                if (plan == DoorPlan.Around)
                 {
                     return Fail(String.Format(
                         "a bot routed {0} in {1} step(s) but AROUND the closed door at {2},{3} - "
@@ -335,6 +423,8 @@ namespace Server.Custom
 
                 Log.Info("Nav door check - {0}", detail);
 
+                _lastVerified = detail;
+
                 return Store(HealthResult.Ok(detail));
             }
             catch (Exception ex)
@@ -373,13 +463,22 @@ namespace Server.Custom
         /// "unlocked only" notion, so a bot's route WILL plan through a locked door and then fail
         /// to open it - the known limit entry 6 records and the `locked-door` ledger cause counts.
         /// A check built on one would be asserting the bug.
+        ///
+        /// <paramref name="anyOpen"/> says whether an unlocked door on the same floor within the
+        /// same search stands OPEN - most often because a bot is standing in the doorway. The
+        /// doorway door is then likely the open one and the closed door returned is its neighbour,
+        /// which the route has no reason to pass; see the header, "An open doorway is Ok".
         /// </summary>
-        private static BaseDoor FindDoor(Map map, Anchor anchor)
+        private static BaseDoor FindDoor(Map map, Anchor anchor, out bool anyOpen)
         {
+            anyOpen = false;
+
             var mid = new Point3D(
                 (anchor.Outside.X + anchor.Inside.X) / 2,
                 (anchor.Outside.Y + anchor.Inside.Y) / 2,
                 anchor.Outside.Z);
+
+            BaseDoor found = null;
 
             IPooledEnumerable<Item> items = map.GetItemsInRange(mid, DoorSearch);
 
@@ -389,7 +488,7 @@ namespace Server.Custom
                 {
                     var door = item as BaseDoor;
 
-                    if (door == null || door.Open || door.Locked || door.Deleted)
+                    if (door == null || door.Locked || door.Deleted)
                     {
                         continue;
                     }
@@ -401,7 +500,14 @@ namespace Server.Custom
                         continue;
                     }
 
-                    return door;
+                    if (door.Open)
+                    {
+                        anyOpen = true;
+                    }
+                    else if (found == null)
+                    {
+                        found = door;
+                    }
                 }
             }
             finally
@@ -409,7 +515,23 @@ namespace Server.Custom
                 items.Free();
             }
 
-            return null;
+            return found;
+        }
+
+        /// <summary>
+        /// Ok, and says so plainly: the patch was not exercised this pass. Carries the last pass
+        /// this boot that did exercise it, so the line still says when the patch was last seen.
+        /// </summary>
+        private static HealthResult NotReVerified(string why)
+        {
+            string detail = String.Format(
+                "doorway door open, patch not re-verified this pass ({0}). Last verified this boot: {1}",
+                why,
+                _lastVerified ?? "not yet");
+
+            Log.Info("Nav door check - {0}", detail);
+
+            return HealthResult.Ok(detail);
         }
 
         /// <summary>
