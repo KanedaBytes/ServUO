@@ -37,6 +37,24 @@
 >     door stands open, a route around the closed one reports Ok, *doorway door open, patch not
 >     re-verified this pass*. Fail is kept for every door shut and still no route through one
 >     (`BotDoorCheck.ClassifyBotRoute`, `WorkFixtures`).
+> - **Seen, not fixed: the plan budget starves the newest bots, and that is what fails
+>   `Bots.Shift` and `Bots.Life`.** `BotTickManager` grants `TryTakePlan` first come, first served,
+>   in `LiveRegistry` order. That is a `List` with new bots appended, so a probe's bots are always
+>   served last. The budget is refused most of the time by design (`SCALE.md`), and the refusal
+>   share climbed with uptime on boot `894f75ab`: 79%, 86%, then 95% (485,532 refused against
+>   27,727 granted, about 236 refused requests per pass).
+>   - **What the probes' own botlog showed on the second `[BotSmoke`.** The life probe's eleven
+>     Travelers were handed over at 21:46:22 and never departed; the lifecycle probe read *"only 1
+>     of 12 changed behaviour"*. The work probe's walk-in miner never left the bank, and it wrote no
+>     `no route in` note, so it never got as far as routing. Its face miner stood on a tile the
+>     organic miners had worked bare and needed a plan to move. The first `[BotSmoke` of the boot,
+>     at 79%, passed `Bots.Life` and failed `Bots.Shift` the same way.
+>   - **Not the crowd-floor change.** Hauling and walk-in weights are untouched, and the gate sits
+>     before any weight is read. The change's only part is that more organic Miners now work
+>     `brit-mine-north`, the probe's site.
+>   - **For Sean.** A fair budget (start each pass where the last one stopped, or serve the
+>     longest-waiting first) changes fleet-wide scheduling that `SCALE.md` measured, so it is his
+>     call. Until then, both probes can fail on a shard that has been up a while.
 
 Read-only investigation of 22 September 2026, at `982fa8c7`. Nothing in the code, config or data was
 changed; this file is the only commit. It **proposes**; the decisions are Sean's.
