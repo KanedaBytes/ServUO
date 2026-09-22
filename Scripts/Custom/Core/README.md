@@ -200,3 +200,12 @@ check for the foundation layer.
 Because ServUO's console cannot invoke staff commands, set `Custom.CoreSmokeOnStart=True` in
 `Config/Custom.cfg` to run it automatically at startup. Useful headlessly (over SSH, or in CI);
 leave it `False` on a live shard.
+
+**Fixture suites it runs.** `SaveIntegrity.RunFixtures` (the disk side of a save),
+`BridgeFixtures.RunFixtures` (the shard's half of the request protocol) and
+`HaulFixtures.RunFixtures` (delivery conservation, REVIEW.md F5). Each is one
+`public static bool RunFixtures(List<string> report)` plus one `passed &=` line in
+`CoreSmoke.Finish`, and each reports `  ok: <what holds>` or `  FAIL: <the actual values>`. The
+first two build a scratch tree under the OS temp directory; `HaulFixtures` builds real bots on
+`Map.Internal` instead, because what it tests is items moving between containers, and deletes
+them in a `finally`.

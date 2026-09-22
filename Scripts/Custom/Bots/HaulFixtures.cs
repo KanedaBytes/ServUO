@@ -212,7 +212,7 @@ namespace Server.Custom
                 miner = Make(BotClass.Miner);
 
                 Type raw = BotHarvest.YieldFor(BotClass.Miner);
-                BaseCreature beast = BotPackAnimals.SpawnFor(miner);
+                BaseCreature beast = Harness(miner);
 
                 if (raw == null || beast == null || beast.Backpack == null)
                 {
@@ -363,12 +363,14 @@ namespace Server.Custom
                 BotGoodsLedger.NoteContainerLoss(miner, miner.Backpack, FixtureReason);
                 BotHaul.ConsumeFrom(miner.Backpack, raw, Int32.MaxValue);
 
-                // Three units of stash and four of haul, and the record must say which was which.
-                Put(miner, raw, 3);
-                BotGoodsLedger.NoteSeeded(miner, 3);
+                // NOW MAKE IT LOOK LIKE A BOT THAT CAME OUT OF A WORLD SAVE, which is the only
+                // kind the purge ever meets: seven units in the pack that nothing THIS boot has
+                // counted, and the stash-versus-haul split that PlayerBot.Deserialize reads back
+                // off the save. TrackedCustody is transient, so a loaded bot's really is zero.
+                Put(miner, raw, 7);
 
-                Put(miner, raw, 4);
-                BotGoodsLedger.NoteMined(miner, 4);
+                miner.TrackedCustody = 0;
+                miner.StashRemaining = 3;
 
                 int lostBefore = BotGoodsLedger.Lost;
                 int stashBefore = BotGoodsLedger.LostStash;
@@ -382,6 +384,15 @@ namespace Server.Custom
                     BotGoodsLedger.Opening - openingBefore == 7,
                     "the purge counts what a boot inherited before it destroys it, so the books can balance",
                     "the opening balance rose by " + (BotGoodsLedger.Opening - openingBefore) + " rather than 7");
+
+                int openingAfter = BotGoodsLedger.Opening;
+
+                BotStartupPurge.Prepare(miner);
+
+                ok &= Expect(report,
+                    BotGoodsLedger.Opening == openingAfter,
+                    "and counts each bot's holdings in once, never twice",
+                    "a second pass over the same bot added " + (BotGoodsLedger.Opening - openingAfter) + " more");
 
                 string name = miner.Name;
 
@@ -435,6 +446,35 @@ namespace Server.Custom
             bot.MoveToWorld(new Point3D(0, 0, 0), Map.Internal);
 
             return bot;
+        }
+
+        /// <summary>
+        /// Give a fixture bot a pack beast, by hand.
+        ///
+        /// NOT BotPackAnimals.SpawnFor, and the difference is deliberate: SpawnFor refuses a bot
+        /// on Map.Internal outright (BotPackAnimal.cs:158), because in production a beast with no
+        /// map is a stray waiting to happen. That rule is not what rule 2 is about. What is under
+        /// test here is what happens to a beast that IS harnessed when a hand-over is refused, so
+        /// the fixture builds one the same way SpawnFor does and leaves the spawn rule alone.
+        /// </summary>
+        private static BaseCreature Harness(PlayerBot bot)
+        {
+            BaseCreature beast = new BotPackLlama();
+
+            beast.MoveToWorld(new Point3D(bot.X + 1, bot.Y + 1, bot.Z), bot.Map);
+
+            if (!beast.SetControlMaster(bot))
+            {
+                beast.Delete();
+                return null;
+            }
+
+            beast.ControlTarget = bot;
+            beast.ControlOrder = OrderType.Follow;
+
+            bot.PackAnimal = beast;
+
+            return beast;
         }
 
         /// <summary>

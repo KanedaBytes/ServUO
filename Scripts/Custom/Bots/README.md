@@ -449,6 +449,22 @@ which is a **better** position than upstream's on that case. The locked non-hous
 rather than guessed at - `NavWalkFailures` reports it as the `locked-door` cause - and the second
 edit is taken only if that number justifies it.
 
+### A hand-over settles, where theirs just moved the number
+
+Upstream's `BotEconomy.DeliverMaterials` (uo-offline `BotEconomy.cs:273-345`) deletes the whole haul
+to count it, pays the gatherer for all of it, and lets `CrafterStock.Add` take what fits — the
+overflow "goes to the shop", which is a sentence rather than a code path. That is coherent on their
+side because the gold covers it. Here the gold is 7f, so the goods have to survive on their own:
+`BotWorkDelivery.Settle` moves only what the receiver takes and leaves the remainder in the pack.
+**The conservation rules are ours; upstream has no answer to port.** See *Delivery conservation*
+under **Working**, and REVIEW.md F5.
+
+The one half that IS theirs is the pack beast's ordering. Their caller disposes of it *after*
+`DeliverMaterials` returns (`TravelerBehavior.cs:2484-2508`) — to a stables when one is in reach,
+loose when none is. Ours released it three lines before the buyer had even been looked for, which
+is what made a refused hand-over lose the pannier half of the load as well. There is no stables
+destination on this graph, so what we keep is their no-stables path with their ordering.
+
 ### A haul goes to the nearest STAFFED bench, not to any bench of the trade
 
 Upstream's haul weighting is a pure type switch (`DestinationCatalog.cs:191-206`): `Bank => 2.0`,
@@ -2452,10 +2468,11 @@ that already matched the trade.
 ### The hand-over, and what does not change hands
 
 `BotWorkDelivery` fires on arrival, **before** the handoff rolls: arriving is what completes the
-errand, and a declined handoff would otherwise send the bot away still loaded. The ore comes out of
-the pack and the panniers, and if a Crafter of the matching trade is working within 12 tiles it goes
-into that crafter's stock. Otherwise it goes to the bank box — the "no buyer today" ending, not a
-failure.
+errand, and a declined handoff would otherwise send the bot away still loaded. If a Crafter of the
+matching trade is working within 12 tiles, it is offered the load and takes what its stock cap
+allows. Otherwise the receiver is the bot's own bank box — the "no buyer today" ending, not a
+failure. Either way **only what the receiver accepts moves**, and the remainder stays in the pack;
+see *Delivery conservation* below.
 
 **No gold moves, in either direction.** Upstream paid the gatherer 2–4gp a unit out of the crafter's
 purse and refused the sale when the crafter was broke; that is the economy, and the economy is 7f.
@@ -2466,6 +2483,49 @@ loudest tell there is.
 A crafter that runs out says so — `craft_need`, which is what wires `{mat}` — and then **stays dry
 until somebody brings it something**. That is not a gap. It is the motive the whole loop exists to
 create, and upstream papered over it by buying a restock for gold every three minutes.
+
+### Delivery conservation
+
+REVIEW.md **F5**, fixed 22 September 2026. Delivery used to report a success it had already
+destroyed. In order: it cleared `HaulPending`, **deleted** every matching item in the pack and the
+panniers to count them, deleted the pack beast with whatever was still aboard, and only then went
+looking for somebody to hand the load to. A smith at `CrafterStock.StockCap` (250), or a bank box
+that refused the drop, meant the load had gone — and `NoteDelivery(hauled)` recorded the whole of
+it as delivered anyway. A full bank was enough to expose it; no concurrency was required.
+
+The four rules it now keeps, Sean's, for deliveries only (REVIEW.md owner question 3, answered for
+this and no more):
+
+| | |
+| --- | --- |
+| **1. Settle only what the receiver accepts** | The load is *counted* in the pack and the panniers without being emptied, the receiver says how much it wants, `BotHaul.Consume` removes exactly that, and the remainder stays where it was. Nothing is deleted to make the numbers match. |
+| **2. Release the animal after the hand-over** | `BotHaul.ReleaseIfEmpty` runs after the settlement and only when the panniers hold none of the good. An interrupted hand-over leaves animal and load together. |
+| **3. No logout mid-delivery** | `BotSession.CanLogoutNow` already refused `HaulPending`; the hole was the three-to-six-second beat after it, where a gatherer's shift could end and `EndShift` shoulder a load before the delete fired. `FinishLogout` re-checks and **stands the bot down**. |
+| **4. Losses are recorded, never silent** | `BotGoodsLedger` appends item, amount, bot, place and reason to `Data/Live/goods-lost.jsonl`, splitting the spawn stash from the haul, and `Bots.Conservation` reports the whole equation. SHARD.md, *A haul is conserved, and what is not is written down*, is the written form. |
+
+**The bank box moves real items now.** The old `Bank()` did `Activator.CreateInstance(raw)` and set
+`Amount` — a brand new plain stack, with the hue, name, weight and loot type of the originals gone —
+and deleted *that* when `TryDropItem` refused it. `BotHaul.MoveToBank` moves the actual stacks, and
+divides one through `Mobile.LiftItemDupe` (`Server/Mobile.cs:4697`), which is the engine's own split
+and copies every one of those properties onto the piece it makes.
+
+**The counters measure acceptance.** `BotWorkSites.Delivered` is units a receiver took, not units
+offered; `NoteBankDelivery` fires on the settlement rather than on the destination's *type*, so a
+no-buyer bank-box fallback at a forge is a bank delivery and arriving at a bank with an empty pack
+is not one; and a hand-over that moved nothing is no longer counted as a delivery at all.
+
+**What it costs, said plainly.** A bench sitting at its cap now means ore accumulates in gatherer
+packs instead of draining to a bank box, until `GathererBehavior.Capacity` (60, or 120 with a beast)
+stops that bot mining. That is the rule Sean chose over banking the overflow, and the health line
+reports `held` and the count of part-refused hand-overs so it is visible rather than inferred.
+
+**Upstream has no answer here and that is the seam.** `BotEconomy.DeliverMaterials`
+(uo-offline `BotEconomy.cs:273-345`) deletes the haul exactly as ours did, and its overflow past the
+stock cap "goes to the shop" — a sentence, not a code path; it is harmless there because gold
+changes hands for the whole load, and gold is 7f. What upstream *does* answer is rule 2: its caller
+disposes of the beast **after** `DeliverMaterials` returns (`TravelerBehavior.cs:2484-2508`), walking
+it to a stables or turning it loose when none is in reach. Ours had it three lines before the buyer
+was even looked for.
 
 ### Clocking in is a gate, not a formality
 
@@ -2513,6 +2573,21 @@ inside `BaseCreature.AddFollowers` sits behind an `is PlayerMobile` guard a bot 
 is **released by deleting it** on delivery — upstream's own path when no stables is in range. Plus
 their orphan reaper (a *dead* master keeps the beast waiting; only a deleted or off-facet one
 orphans it), their world-load stray sweep, and delete-on-owner-delete.
+
+**Released AFTER the hand-over, not before it** (REVIEW.md F5, rule 2). `BotHaul.ReleaseIfEmpty` is
+the gate: the beast goes only when its panniers hold none of the good, so a refused or partial
+hand-over leaves animal and load together and the pair walks on. `BotPackAnimals.Release` itself now
+writes the panniers down as a loss before deleting — its comment used to say *"the delivery hook
+empties them first, so this is a guard rather than a discard"*, and that stopped being true the
+moment delivery was allowed to leave a remainder. Every other caller — a deleted owner, an
+empty-handed end of shift, a probe tearing down — genuinely does discard.
+
+> **Seam: nothing in this tree ever loads the panniers.** `HarvestSystem.Give` puts yield into
+> `bot.Backpack` only, so `PanniersOf` is read at three sites and written at none, and the capacity
+> the beast buys (60 → 120) is realised entirely in the backpack. Rule 2 is therefore
+> correct-but-inert in production today and is proved by `HaulFixtures` rather than by a live haul;
+> it becomes load-bearing the day a load actually rides the beast. Filling them was not this
+> session's work.
 
 ## Class-weighted destinations
 

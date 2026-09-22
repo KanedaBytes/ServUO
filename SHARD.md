@@ -897,6 +897,50 @@ the live file **and** the `.bak` and keeps the file it replaced as the new `.bak
 `[CoreSmoke`'s **bridge fixtures** (`BridgeFixtures.cs`) prove each on a scratch tree; the
 protocol's written authority is `tools/editor/README.md`, *The request channel*.
 
+### A haul is conserved, and what is not is written down
+
+From 22 September 2026 (REVIEW.md F5). A hand-over settles **only what the receiver takes**: the load is
+counted in the pack and the panniers without being emptied, the receiver says how much it wants, exactly
+that much is removed, and the remainder stays where it was. A bank box that refuses the drop leaves the
+load in the pack - the old code built a replacement stack and deleted it. The pack animal is released
+after the settlement and only when its panniers are empty, so an interrupted hand-over leaves animal and
+load together. A bot carrying an undelivered load is never chosen for a logout, and one that picks a load
+up in the three-to-six-second beat between "gtg" and vanishing stands down instead of being deleted on top
+of it.
+
+**`Bots.Conservation`** is the standing check, and it is an equation rather than a description:
+
+```
+in    = opening + mined + seeded
+out   = accepted + lost
+held  = a live census of every bot's pack, panniers and bank box
+
+in == out + held,  unexplained == 0
+```
+
+`opening` is what the boot inherited from the world save before `BotStartupPurge` destroyed it; `seeded` is
+EquipmentTable's 3-15 unit spawn stash; `accepted` is what a crafter took over the counter, which is
+terminal because the raw becomes refined stock. **Banked is not an exit** - a bot's own bank box is inside
+`held`, and is reported beside it. `mined` is *reconciled* rather than metered: every thirty seconds
+`BotGoodsLedger` compares each live bot's actual holdings against `PlayerBot.TrackedCustody`, counts what
+appeared as mining and what vanished as **unexplained**, which is the F5 failure and fails the check.
+
+**Losses go to `Data/Live/goods-lost.jsonl`**, one JSON object per line, appended and rotated to `.1` past
+4 MB - upstream's `event-journal.jsonl` shape. Each record carries `utc`, `why`, `bot`, `serial`, `class`,
+`map`, `x`, `y`, `item`, `amount`, the `stash`/`haul` split, and the bot's last hand-over when it had one,
+so a record can say *this load reached a bench, the bench was full, and then the bot logged out*. The
+reasons are `boot-purge`, `logout`, `death`, `spawn-refused`, `reclass`, `pack-animal-released`,
+`probe-strip`, `probe` and `deleted`.
+
+**The stash is reported apart from the haul** because a restart destroys a fleet's worth of starting kit
+and a genuinely lost delivery must not disappear into it. `PlayerBot` serializes `StashRemaining` - the one
+transient that is written - purely so the split survives the restart it is reporting on; settlement spends
+the stash first, which is the conservative direction.
+
+A measured restart at the shipped population reads, for example, `404 boot-purge (404 stash, 0 haul)`:
+everything the purge destroyed was spawn kit and no delivery was in flight. `HaulFixtures` proves the five
+cases from `[CoreSmoke`.
+
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is
 refusing to save. Run it after every upstream merge.

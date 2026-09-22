@@ -81,6 +81,14 @@ namespace Server.Custom
         public const string ReasonDeath = "death";
         public const string ReasonDeleted = "deleted";
         public const string ReasonReclass = "reclass";
+
+        /// <summary>
+        /// The curve had no room for a bot the spawner had already built and dressed. Its own
+        /// reason because it is the one loss that is nobody's mistake: EquipmentTable seeds the
+        /// stash in the constructor and BotSession.AllowSpawn refuses at the end of the seed,
+        /// so the kit exists for as long as it takes to decide it should not.
+        /// </summary>
+        public const string ReasonSpawnRefused = "spawn-refused";
         public const string ReasonProbeStrip = "probe-strip";
         public const string ReasonProbe = "probe";
         public const string ReasonPackAnimal = "pack-animal-released";
@@ -221,12 +229,18 @@ namespace Server.Custom
 
             int held = BotHaul.Custody(bot);
 
-            if (held <= 0)
+            // ONLY THE PART NOTHING HAS COUNTED YET. At boot that is all of it - a deserialized
+            // bot's TrackedCustody is zero, because the field is transient and the census has
+            // never seen it. On a bot this boot already accounted for, it is nothing, and saying
+            // so is what stops the opening balance double-counting units the seed or the ground
+            // had already put on the books.
+            int unaccounted = held - bot.TrackedCustody;
+
+            if (unaccounted > 0)
             {
-                return;
+                Opening += unaccounted;
             }
 
-            Opening += held;
             bot.TrackedCustody = held;
         }
 

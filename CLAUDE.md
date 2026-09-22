@@ -15,8 +15,9 @@ which closes the editor restore lost-update finding with it), **F4 fixed** (a ca
 `Saves/Custom/Manifest.json` carries the save generation; the boot refuses a tree whose world and
 custom files disagree), the **save acknowledgement fixed** (an ack means a completed generation,
 and every ack carries `generation` and `bootId`), and the **LoopQueue outcome contract written**
-(`Completed` / `Faulted` / `NotRun` / `Unknown`; no ack is never done and never failed). **F5**
-(delivery reports success after destroying the load) is scheduled before 7f.
+(`Completed` / `Faulted` / `NotRun` / `Unknown`; no ack is never done and never failed). **F5 fixed** (22 September 2026: a hand-over settles only what the receiver takes, the remainder stays
+in the hauler's pack, the pack animal is released after the hand-over rather than before it, and a load
+lost anyway is written to `Data/Live/goods-lost.jsonl` with `Bots.Conservation` reporting the books).
 Its section 11 was the documentation-discrepancy list and is closed.
 
 All file:line references below were verified against this tree (assembly 57.4).

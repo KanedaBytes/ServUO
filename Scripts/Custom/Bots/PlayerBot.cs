@@ -1125,6 +1125,13 @@ namespace Server.Custom
             // A fixture is never refused: the bank crowd exists at 05:00 as it does at noon.
             if (Role != BotRole.Fixed && Spawner != null && !BotSession.AllowSpawn())
             {
+                // NAMED, because the refusal really does destroy goods and the ledger found it:
+                // RollOutfit has already given a gatherer its 3-15 unit spawn stash by the time
+                // the curve decides there is no room for this bot. A first boot at target 1000
+                // measured 112 units going this way. That is the refusal working as designed
+                // rather than a defect, and "spawn-refused" is what stops it reading as one.
+                DeletionReason = BotGoodsLedger.ReasonSpawnRefused;
+
                 Delete();
             }
         }
