@@ -95,6 +95,13 @@ namespace Server.Custom
         private static string _lastResult;
         private static DateTime? _lastUtc;
 
+        // After ConsoleTap's Initialize at 900, so the sweep's one console line lands in
+        // Data/Live/console.json as well as in the window. Scripts/Misc/Timestamp.cs replaces
+        // Console.Out from an untagged Initialize, and until the tap re-wraps it at 900 anything
+        // printed goes to the window alone - which is where the sweep line went on the first boot
+        // of this protocol, and why the sweep looked silent from the bridge's side. Nothing here
+        // needs to run early: a health check registration and a timer.
+        [CallPriority(910)]
         public static void Initialize()
         {
             // Before the timer, so nothing from a previous boot is ever run by this one.
