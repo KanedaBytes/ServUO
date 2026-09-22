@@ -26,8 +26,8 @@ namespace Server.Custom
     /// </summary>
     public sealed class BotPlanRota<T> where T : class
     {
-        // How often the wait ledger forgets bots that have left the order. Cheap either way; the
-        // point is only that a logged-out bot that was refused is not held for the life of the boot.
+        // How often the wait ledger forgets bots that have left the order or stopped asking. Cheap
+        // either way; the point is only that a refused bot is not held for the life of the boot.
         private const int PruneEveryPasses = 30;
 
         private int _start;
@@ -39,16 +39,27 @@ namespace Server.Custom
         private T _firstRefused;
         private int _firstRefusedIndex = -1;
 
-        // Pass number of each waiting bot's first refusal since its last grant.
-        private readonly Dictionary<T, long> _waitingSince = new Dictionary<T, long>();
+        // Each waiting bot's first refusal of its current run of refusals, and its latest one. A
+        // wait is a run of CONSECUTIVE refused passes: a bot refused as a Traveler and then made
+        // Idle by the lifecycle has stopped asking, and the gap before it next asks is not time
+        // spent in the queue. Counting it read 95 passes on a live boot where a round of the rota
+        // at that budget was under 50.
+        private readonly Dictionary<T, Waiting> _waiting = new Dictionary<T, Waiting>();
+
+        private struct Waiting
+        {
+            public long Since;
+            public long Last;
+        }
 
         public long Granted { get; private set; }
 
         public long Refused { get; private set; }
 
         /// <summary>
-        /// The longest a bot waited, in passes, from its first refusal to its grant, since the last
-        /// Reset. The live evidence that the rota is fair: first come, first served had no bound.
+        /// The longest a bot waited, in passes, from its first refusal to its grant, asking every pass
+        /// in between, since the last Reset. The live evidence that the rota is fair: first come,
+        /// first served had no bound.
         /// </summary>
         public long LongestWait { get; private set; }
 
@@ -89,7 +100,7 @@ namespace Server.Custom
                 _resume = null;
             }
 
-            if (_pass % PruneEveryPasses == 0 && _waitingSince.Count > 0)
+            if (_pass % PruneEveryPasses == 0 && _waiting.Count > 0)
             {
                 Prune(order);
             }
@@ -115,10 +126,16 @@ namespace Server.Custom
                         _firstRefusedIndex = index;
                     }
 
-                    if (!_waitingSince.ContainsKey(item))
+                    Waiting waiting;
+
+                    // A bot that skipped a pass without asking starts a new run.
+                    if (!_waiting.TryGetValue(item, out waiting) || _pass - waiting.Last > 1)
                     {
-                        _waitingSince[item] = _pass;
+                        waiting.Since = _pass;
                     }
+
+                    waiting.Last = _pass;
+                    _waiting[item] = waiting;
                 }
 
                 return false;
@@ -127,13 +144,14 @@ namespace Server.Custom
             _left--;
             Granted++;
 
-            long since;
+            Waiting was;
 
-            if (item != null && _waitingSince.TryGetValue(item, out since))
+            if (item != null && _waiting.TryGetValue(item, out was))
             {
-                _waitingSince.Remove(item);
+                _waiting.Remove(item);
 
-                long wait = _pass - since;
+                // Only a run that reached the pass before this one ends in this grant.
+                long wait = _pass - was.Last <= 1 ? _pass - was.Since : 0;
 
                 if (wait > LongestWait)
                 {
@@ -170,17 +188,18 @@ namespace Server.Custom
             var present = new HashSet<T>(order);
             var gone = new List<T>();
 
-            foreach (T key in _waitingSince.Keys)
+            // Gone from the order, or stopped asking: either way the run is over.
+            foreach (KeyValuePair<T, Waiting> entry in _waiting)
             {
-                if (!present.Contains(key))
+                if (!present.Contains(entry.Key) || _pass - entry.Value.Last > 1)
                 {
-                    gone.Add(key);
+                    gone.Add(entry.Key);
                 }
             }
 
             for (int i = 0; i < gone.Count; i++)
             {
-                _waitingSince.Remove(gone[i]);
+                _waiting.Remove(gone[i]);
             }
         }
     }

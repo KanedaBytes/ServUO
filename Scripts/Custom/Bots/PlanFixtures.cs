@@ -30,6 +30,7 @@ namespace Server.Custom
                 passed &= FixtureEveryBotWithinPasses(report);
                 passed &= FixtureSparseAskers(report);
                 passed &= FixtureChurn(report);
+                passed &= FixtureWaitIsConsecutive(report);
                 passed &= FixtureOldOrderStarvesTheTail(report);
             }
             catch (Exception ex)
@@ -169,6 +170,75 @@ namespace Server.Custom
                     first ?? "-",
                     exact,
                     exactAfter));
+        }
+
+        /// <summary>
+        /// The longest wait counts a run of refused passes, not the time since a bot was first
+        /// refused. Two bots, one plan a pass: the second is refused, stops asking for fifty passes
+        /// (the lifecycle made it Idle), then asks again and is served - a wait of 0, not 51. And two
+        /// bots that always ask take turns and each reads a wait of 1, so the measure is not blind.
+        /// </summary>
+        private static bool FixtureWaitIsConsecutive(List<string> report)
+        {
+            var rota = new BotPlanRota<string>();
+            var bots = new List<string> { "a", "b" };
+
+            // Pass 1: a is served, b refused.
+            rota.BeginPass(bots, 1);
+            rota.TryTake("a", 0);
+            rota.TryTake("b", 1);
+            rota.EndPass();
+
+            // Fifty passes where nobody asks.
+            for (int i = 0; i < 50; i++)
+            {
+                rota.BeginPass(bots, 1);
+                rota.EndPass();
+            }
+
+            // b asks again and is served first (the rota starts at it).
+            rota.BeginPass(bots, 1);
+            bool back = rota.TryTake("b", 1);
+            rota.EndPass();
+
+            long afterGap = rota.LongestWait;
+
+            // Now a real run: x and c both ask every pass, one plan a pass, walked the way
+            // OnTick walks. Each is refused once and served the pass after, so the longest wait is
+            // 1 - the measure sees a real run, and the rota never lets one bot take every plan.
+            var rota2 = new BotPlanRota<string>();
+            var pair = new List<string> { "x", "c" };
+            int cServed = 0;
+
+            for (int pass = 0; pass < 6; pass++)
+            {
+                int start = rota2.BeginPass(pair, 1);
+
+                for (int step = 0; step < pair.Count; step++)
+                {
+                    int i = (start + step) % pair.Count;
+
+                    if (rota2.TryTake(pair[i], i) && pair[i] == "c")
+                    {
+                        cServed++;
+                    }
+                }
+
+                rota2.EndPass();
+            }
+
+            bool served = cServed == 3;
+
+            return Expect(
+                report,
+                back && afterGap == 0 && served && rota2.LongestWait == 1,
+                "a wait is consecutive refused passes: 0 after a bot stopped asking for 50; two bots always asking at 1 a pass take turns, longest wait 1",
+                String.Format(
+                    "after the gap: served {0}, longest wait {1}; two always asking: c served 3 of 6 is {2}, longest wait {3}",
+                    back,
+                    afterGap,
+                    served,
+                    rota2.LongestWait));
         }
 
         /// <summary>

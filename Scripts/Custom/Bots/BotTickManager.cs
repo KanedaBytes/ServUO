@@ -556,8 +556,8 @@ namespace Server.Custom
         /// beside travellers that will not scale means the limit is DEMAND - how often a bot
         /// chooses to travel - and no rate here can move it.
         ///
-        /// The longest wait is the rota's: passes from a bot's first refusal to its grant. First
-        /// come, first served had no bound on it, and that is what starved the probes.
+        /// The longest wait is the rota's: a run of consecutive refused passes ending in a grant.
+        /// First come, first served had no bound on it, and that is what starved the probes.
         /// </summary>
         public static string DescribePlans()
         {

@@ -1690,8 +1690,9 @@ Now `BotPlanRota` starts each pass's behaviour loop at the first bot refused on 
 found by identity so a logout ahead of it does not move the line, and every bot that asks is served
 within `ceil(askers / budget)` passes. The rate is untouched; only who stands first changed. The
 census, the lifecycle and the session still take the snapshot in its own order. `Bots.Recipe` adds
-the **longest wait** in passes, from a bot's first refusal to its grant, which first come, first
-served never bounded. `PlanFixtures` proves it on `[CoreSmoke`, and runs the old order as a
+the **longest wait** in passes, a run of consecutive refusals ending in a grant (a bot that stops
+asking, say made Idle by the lifecycle, starts a new run), which first come, first served never
+bounded. `PlanFixtures` proves it on `[CoreSmoke`, and runs the old order as a
 control that must starve the tail.
 
 ## Travelling
