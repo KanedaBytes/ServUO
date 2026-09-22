@@ -437,6 +437,18 @@ to Britain the long way round. The Lumberjack's odds are what one far site buys:
 road tiles from either bank, so the distance term leaves it a sixth of the roll. A second wood nearer
 home (`brit-lumber-south`, below) is the lever, not a bigger number.
 
+**Measured live, and the replica was optimistic — open, for Sean.** In the first ten-minute window at
+the shipped population, 7 gatherers clocked in (before this row: 0-2). But only 11% of the gatherer
+picks the botlog recorded chose their own site, because most of the rest went to **banks in far
+towns**. The replica assumed every crowd floor was met. At a bank nobody stands at, `BotCrowds`
+multiplies the weight by up to 4 (`life.crowds.bank` 3), so upstream's occasional-errand 0.3 becomes
+1.2 at each of the empty far-town banks, and a Miner that walks to Jhelom's bank rolls its next pick
+from 700 road tiles away. Re-run with those banks empty: a Britain Miner 58.7%, a Trinsic one 24.1%,
+a Lumberjack 11%, with banks taking 25-60% of the roll. The crowd floor is ours, not upstream's
+(*The bank crowd is a garrison AND a pull*), and it was kept here deliberately. Whether a
+single-minded class should feel it is the next decision. Exempting `singleMinded` classes from the
+floor is one line in `BotDestinations.Pick`.
+
 **The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
 (`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
 (`DestinationType.cs:325-332`). Those are the target — but here a Fisherman arriving at a dock

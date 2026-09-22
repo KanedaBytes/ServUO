@@ -1,5 +1,36 @@
 # Why gatherers are not working - investigation memo
 
+> **Status, 22 September 2026, later the same day.** Recommendations 1-3 are done and **4 (coloured
+> ore) is deferred to 7f, untouched**. The memo below is kept as written.
+>
+> - **1, reporting:** `Bots.Work` names every stationless class in the same line as the excluded
+>   sites (`BotSystem.WorkVerdict`, `WorkFixtures`), and `BotWorkSites.Validate` runs at
+>   `[CallPriority(920)]`, so its boot warnings reach `console.json`.
+> - **2, weights:** upstream's gatherer override is restored as data (`destinations.singleMinded`).
+>   The Fisherman is held for the dock session, by Sean's decision.
+> - **3, sites:** `yew-grove` and `minoc-mine` are on the graph. See the Bots README.
+>
+> Live, at the shipped population, two ten-minute windows saw **7 and 9 clock-ins**, against 0-2
+> here. Both windows had Lumberjacks at Yew Grove and Miners at all three faces.
+>
+> **Two findings came out of the live runs:**
+> - **A fixed census race.** With gatherers really mining, the census double-counted ore that landed
+>   between behaviour ticks, which read as F5 losses. Fixed, with `HaulFixtures` rule 6.
+> - **An open question.** Only 11-13% of gatherer picks chose their own site, because our crowd
+>   floor makes empty far-town banks pull ×4. That is a decision, recorded in the Bots README
+>   Deviations row *Gatherers are single-minded again*.
+> - **Seen, not fixed: `Nav.Doors` can fail under traffic.** It read Fail after both `[BotSmoke`
+>   runs and Ok at every boot. The engine patch (MODIFICATIONS entry 6) is intact:
+>   `FastAStarAlgorithm.cs:106`, and both walk audits passed.
+>   - **The cause is in the check.** `BotDoorCheck.FindDoor` takes the first closed door within
+>     3 tiles of the anchor midpoint. At every boot that is the inn doorway door at 1464,1524.
+>   - **When that door stands open** (a bot was seen on its tile), the check takes the *other* inn
+>     door at 1461,1524, which the route never passes through. It then reports a reverted patch.
+>   - **Why now.** The inn sits on the `brit-mine-north` corridor, and single-minded Miners made it
+>     busy.
+>   - **For Sean.** What the check should say when its doorway is in use (Warn, retry, or choose
+>     the door on the route) is his call. It guards an upstream edit.
+
 Read-only investigation of 22 September 2026, at `982fa8c7`. Nothing in the code, config or data was
 changed; this file is the only commit. It **proposes**; the decisions are Sean's.
 
