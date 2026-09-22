@@ -126,9 +126,36 @@ test.beforeEach(() => {
     }
 });
 
-function runShard(respond) {
-    shard = fakeShard.start({ dir: REQUESTS, respond });
+function runShard(respond, options) {
+    shard = fakeShard.start({ dir: REQUESTS, respond, resolve: whitelist.resolveSave, ...(options || {}) });
     return shard;
+}
+
+/** The unclaimed tokens on disk for an operation, by file name. */
+function tokensNamed(name) {
+    return whitelist.listTokens(name);
+}
+
+/** Every request file on disk of one kind - '.token', '.claimed', '.ack.json' - by file name. */
+function requestFiles(suffix) {
+    return fs.readdirSync(REQUESTS).filter((entry) => entry.endsWith(suffix));
+}
+
+/** Staged commit files beside the data files. None should ever be left behind. */
+function stagedFiles() {
+    const dirs = [path.dirname(NAV), path.join(root, 'Spawns', 'Custom', 'trammel')];
+    return dirs.flatMap((dir) => fs.readdirSync(dir).filter((entry) => entry.endsWith('.staged')));
+}
+
+/**
+ * The shape of a 409 from the shard, for asserting the bridge quotes it: the shard's message, the
+ * two hashes, and the writer and time from its ledger.
+ */
+function assertRefusal(body, expected, actual) {
+    assert.strictEqual(body.expected, expected, 'expected');
+    assert.strictEqual(body.actual, actual, 'actual');
+    assert.ok(body.changedBy, 'the refusal names who last wrote the file');
+    assert.match(body.error, new RegExp(`is at ${actual}, not the ${expected} this save was based on; last written .* by `));
 }
 
 /**
@@ -194,24 +221,53 @@ test('/api/shapes carries the hash each file was read at', async () => {
 
 // ---- the stale-write guard ---------------------------------------------------------------------
 
-test('a save from a stale editor is refused and writes nothing', async () => {
+test('a save from a stale editor is refused by the shard, in its words, and writes nothing', async () => {
+    // THE CHECK IS THE SHARD'S NOW (22 September 2026). The bridge stages the bytes and asks; the
+    // shard compares the live file with the version the save was based on, on the game thread
+    // where its own writers run, and its refusal names the file, both hashes, and who last wrote
+    // it. The bridge quotes that as the 409's `error` and touches nothing.
     const before = fs.readFileSync(NAV, 'utf8');
-    const { status, body } = await call('POST', '/api/save/navigation', moveWaypoint('deadbeef'));
+
+    runShard(() => assert.fail('the reload half must never run for a refused commit'));
+
+    const { status, body } = await call('POST', '/api/save/navigation', moveWaypoint('deadbeefdeadbeef'));
 
     assert.strictEqual(status, 409);
-    assert.match(body.error, /navigation\.json changed on disk since you loaded it/);
-    assert.strictEqual(body.actual, hashOf(before));
+    assertRefusal(body, 'deadbeefdeadbeef', hashOf(before));
+    assert.match(body.error, /^navigation\.json is at/, 'the error is the shard message, not a bridge paraphrase');
+    assert.strictEqual(body.written, false);
     assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before, 'the file was written anyway');
     assert.strictEqual(fs.existsSync(NAV + '.bak'), false, 'a rejected save left a .bak');
+    assert.deepStrictEqual(stagedFiles(), [], 'a rejected save left its staged file behind');
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['commit']);
+});
+
+test('a save has to say which version it is based on', async () => {
+    // baseHash used to be optional, and a save without one was checked against nothing
+    // (REVIEW.md, the restore lost-update finding). Now it is refused before anything is staged.
+    const before = fs.readFileSync(NAV, 'utf8');
+    const { baseHash, ...noBase } = moveWaypoint('x');
+    const { status, body } = await call('POST', '/api/save/navigation', noBase);
+
+    assert.strictEqual(status, 400);
+    assert.match(body.error, /has to say which version of navigation\.json it is based on/);
+    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before);
+    assert.deepStrictEqual(stagedFiles(), []);
+    assert.deepStrictEqual(requestFiles('.token'), [], 'nothing was asked of the shard');
+
+    // And a hash that is not a hash is the same refusal, not a shard round trip.
+    const junk = await call('POST', '/api/save/navigation', moveWaypoint('not-a-hash'));
+
+    assert.strictEqual(junk.status, 400);
 });
 
 // ---- the happy path ----------------------------------------------------------------------------
 
-test('a save writes a .bak, the new file, a token, and reads its own ack', async () => {
+test('a save stages the file, the shard commits it keeping a .bak, and the answer quotes the id and generation', async () => {
     const before = fs.readFileSync(NAV, 'utf8');
     const moved = someWaypoint();
 
-    runShard(() => ({ ok: true, message: '75 waypoint(s), 27 destination(s), 0 warning(s)' }));
+    runShard(() => ({ ok: true, message: '75 waypoint(s), 27 destination(s), 0 warning(s)', generation: 7 }));
 
     const { status, body } = await call(
         'POST', '/api/save/navigation', moveWaypoint(hashOf(before)));
@@ -229,12 +285,19 @@ test('a save writes a .bak, the new file, a token, and reads its own ack', async
     assert.notStrictEqual(after, before);
     assert.ok(after.includes(`"id":"${moved}","map":"Trammel","x":1500,"y":1500,"z":0`));
     assert.strictEqual(body.hash, hashOf(after));
+    assert.strictEqual(body.backupHash, hashOf(before), 'the answer names the version the .bak holds');
+    assert.match(body.id, /^[0-9a-f]{12}$/, 'the answer quotes the request id');
+    assert.strictEqual(body.generation, 7, 'the answer quotes the generation the shard answered at');
+    assert.strictEqual(body.outcome, 'completed');
 
-    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['nav-reload']);
-    assert.match(shard.seen[0].body, /^#[0-9a-f]{8}$/, 'the token carried no nonce');
+    // One request, `commit`, whose body is the key and the two versions - never a path.
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['commit']);
+    assert.strictEqual(shard.seen[0].id, body.id);
+    assert.strictEqual(shard.seen[0].body, `file=navigation base=${hashOf(before)} wrote=${hashOf(after)} reload=yes`);
 
-    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'nav-reload.token')), false,
-        'the token was left on disk');
+    assert.deepStrictEqual(requestFiles('.token'), [], 'a token was left on disk');
+    assert.deepStrictEqual(requestFiles('.claimed'), [], 'a claimed token was left on disk');
+    assert.deepStrictEqual(stagedFiles(), [], 'the staged file was left beside the data file');
 });
 
 test('a written file whose reload is refused is a 200 carrying the shard reason', async () => {
@@ -272,7 +335,11 @@ test('warnings from a successful reload come back alongside the success', async 
     assert.deepStrictEqual(body.warnings, ["waypoint 'brit-plaza-1' has no edges"]);
 });
 
-test('a shard that never answers is reported as that, not as a failed write', async () => {
+test('a shard that commits and then never answers is unknown, and written is what the disk says', async () => {
+    // The fake's commit replaces the file and then `respond` (the reload half) returns null: a
+    // shard that died between the write and the ack. The bridge cannot vouch for the reload, but
+    // it can see that the file on disk is the version this save wrote - so written:true, reload
+    // unknown, which is the one honest answer.
     runShard(() => null);
 
     const { status, body } = await call(
@@ -281,15 +348,19 @@ test('a shard that never answers is reported as that, not as a failed write', as
     assert.strictEqual(status, 200);
     assert.strictEqual(body.written, true);
     assert.strictEqual(body.reloaded, false);
-    assert.match(body.message, /did not answer/);
+    assert.strictEqual(body.outcome, 'unknown');
+    assert.match(body.message, /did not answer the commit request within \ds\. Its outcome is unknown/);
+    assert.match(body.message, /The file on disk is the version this save wrote/);
+    assert.strictEqual(body.hash, hashOf(fs.readFileSync(NAV, 'utf8')));
 });
 
 // ---- the stale ack -----------------------------------------------------------------------------
 
 test('an ack left over from a previous run is not read as this run answer', async () => {
-    // The bug this closes: the shard overwrites <name>.ack.json in place and never deletes it, and
-    // /api/ack reports "pending" only when the file is ABSENT.
-    fakeShard.writeAck(REQUESTS, 'nav-reload', '#stale', {
+    // The bug this closes: the shard used to overwrite <name>.ack.json in place and never delete
+    // it, and /api/ack reported "pending" only when the file was ABSENT. Now every ack is named by
+    // its request's id, so an earlier run's ack is a different file the bridge never opens.
+    fakeShard.writeAck(REQUESTS, 'commit', 'stalestalest', '', {
         ok: false, message: 'an answer from some earlier run'
     });
 
@@ -359,7 +430,8 @@ test('a dry run of a fatally invalid edit is a 422 naming the shape', async () =
 
     assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before, 'a dry run wrote to the file');
     assert.strictEqual(fs.existsSync(NAV + '.bak'), false);
-    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'nav-reload.token')), false);
+    assert.deepStrictEqual(requestFiles('.token'), [], 'a dry run asked the shard for something');
+    assert.deepStrictEqual(stagedFiles(), [], 'a dry run staged a file');
 });
 
 test('a real save is not blocked by the validator, because the shard is the authority', async () => {
@@ -383,24 +455,91 @@ test('a real save is not blocked by the validator, because the shard is the auth
 
 // ---- restore -----------------------------------------------------------------------------------
 
-test('restore puts the file back to the bytes before the save', async () => {
+test('restore puts the file back to the bytes before the save, and keeps what it replaced as the .bak', async () => {
+    const before = fs.readFileSync(NAV, 'utf8');
+
+    runShard(() => ({ ok: true, message: 'reloaded' }));
+
+    const saved = await call('POST', '/api/save/navigation', moveWaypoint(hashOf(before)));
+    const written = fs.readFileSync(NAV, 'utf8');
+
+    assert.notStrictEqual(written, before);
+
+    // Both versions: the file as this tab wrote it, and the .bak that save made.
+    const { status, body } = await call('POST', '/api/restore/navigation', {
+        baseHash: saved.body.hash, backupHash: saved.body.backupHash
+    });
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.restored, true);
+    assert.strictEqual(body.reloaded, true);
+    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before);
+    assert.strictEqual(body.hash, hashOf(before));
+
+    // The file the restore undid is the new .bak. spawn-reload unloads from the .bak, so the
+    // .bak has to be what the world was running - and that is what this closes: a restore that
+    // kept the old .bak orphaned every spawner the undone save had created.
+    assert.strictEqual(fs.readFileSync(NAV + '.bak', 'utf8'), written);
+    assert.strictEqual(body.backupHash, hashOf(written));
+    assert.match(body.id, /^[0-9a-f]{12}$/);
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['commit', 'restore']);
+    assert.strictEqual(shard.seen[1].body, `file=navigation base=${saved.body.hash} backup=${saved.body.backupHash}`);
+});
+
+test('restore over a file somebody else wrote since is refused, in the shard words', async () => {
+    // Tab A saves; tab B saves; tab A discards. Without the check, A's restore would put A's .bak
+    // - which is now B's pre-save file, not A's - over B's work, and A would believe it had undone
+    // its own save. Both versions are checked, so the restore is refused and nothing moves.
+    const before = fs.readFileSync(NAV, 'utf8');
+
+    runShard(() => ({ ok: true, message: 'reloaded' }));
+
+    const a = await call('POST', '/api/save/navigation', moveWaypoint(hashOf(before)));
+    const b = await call('POST', '/api/save/navigation', {
+        baseHash: a.body.hash,
+        updates: [{ id: `wp:${someWaypoint()}`, kind: 'point', map: 'Trammel', points: [[1600, 1600, 0]], props: { id: someWaypoint() } }]
+    });
+
+    assert.strictEqual(b.status, 200);
+
+    const afterB = fs.readFileSync(NAV, 'utf8');
+    const { status, body } = await call('POST', '/api/restore/navigation', {
+        baseHash: a.body.hash, backupHash: a.body.backupHash
+    });
+
+    assert.strictEqual(status, 409);
+    assert.match(body.error, new RegExp(`^navigation\\.json is at ${b.body.hash}, not the ${a.body.hash} this restore was based on`));
+    assert.strictEqual(body.written, false);
+    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), afterB, 'the restore moved the file anyway');
+
+    // And the other half: the live file is right but the .bak is not the backup this tab means.
+    const wrongBackup = await call('POST', '/api/restore/navigation', {
+        baseHash: b.body.hash, backupHash: a.body.backupHash
+    });
+
+    assert.strictEqual(wrongBackup.status, 409);
+    assert.match(wrongBackup.body.error, /navigation\.json\.bak is at .*, not the .* this restore expected/);
+    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), afterB);
+});
+
+test('restore has to say both versions', async () => {
     const before = fs.readFileSync(NAV, 'utf8');
 
     runShard(() => ({ ok: true, message: 'reloaded' }));
 
     await call('POST', '/api/save/navigation', moveWaypoint(hashOf(before)));
 
-    assert.notStrictEqual(fs.readFileSync(NAV, 'utf8'), before);
+    const bare = await call('POST', '/api/restore/navigation');
 
-    const { status, body } = await call('POST', '/api/restore/navigation');
-
-    assert.strictEqual(status, 200);
-    assert.strictEqual(body.restored, true);
-    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before);
+    assert.strictEqual(bare.status, 400);
+    assert.match(bare.body.error, /baseHash.*backupHash/);
+    assert.notStrictEqual(fs.readFileSync(NAV, 'utf8'), before, 'a restore without versions restored');
 });
 
 test('restore with nothing to restore says so rather than inventing a file', async () => {
-    const { status, body } = await call('POST', '/api/restore/navigation');
+    const { status, body } = await call('POST', '/api/restore/navigation', {
+        baseHash: await currentHash(), backupHash: 'deadbeefdeadbeef'
+    });
 
     assert.strictEqual(status, 409);
     assert.match(body.error, /no backup to restore/);
@@ -451,14 +590,17 @@ test('an oversized body is answered rather than dropped', async () => {
 
 test('a nav save the size of a whole-facet adopt is read, not refused for size', async () => {
     // Two megabytes was over the old one-megabyte limit, and a whole-Trammel adopt is several. The
-    // stale baseHash is what answers here - a 409 proves the body was read and parsed.
+    // stale baseHash is what answers here - a 409 from the shard proves the body was read, parsed,
+    // and staged.
+    runShard(() => ({ ok: true, message: 'never reached' }));
+
     const response = await fetch(origin + '/api/save/navigation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-GG-Auth': bridge.SESSION_SECRET },
-        body: JSON.stringify({ baseHash: 'x', filler: 'a'.repeat(2 * 1024 * 1024) })
+        body: JSON.stringify({ baseHash: 'deadbeefdeadbeef', filler: 'a'.repeat(2 * 1024 * 1024) })
     });
 
-    assert.notStrictEqual(response.status, 413);
+    assert.strictEqual(response.status, 409);
 });
 
 // ---- spawners -----------------------------------------------------------------------------------
@@ -527,16 +669,58 @@ test('saving a spawn file writes a .bak and asks for that file by name, not the 
     assert.strictEqual(after.split('\n').length, before.split('\n').length,
         'editing a spawn list changed the shape of the file');
     // GG mobile in the world on every save.
-    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['spawn-reload']);
-    assert.match(shard.seen[0].body, /^trammel\/GG_OldMarta\.xml #[0-9a-f]{8}$/);
+    // The shard's commit reloads the one file by name after the replace; the token the bridge
+    // dropped is the commit, and its body carries the key rather than a path.
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['commit']);
+    assert.match(shard.seen[0].body, /^file=spawn:trammel\/GG_OldMarta\.xml base=[0-9a-f]{16} wrote=[0-9a-f]{16} reload=yes$/);
+    assert.strictEqual(body.backupHash, hashOf(before));
+});
+
+test('a brand-new spawn file is created from the version none', async () => {
+    // The Spawner tool can name a file that does not exist yet. There is no hash to base that on,
+    // so the editor sends null, the bridge spells it `none`, and the shard accepts `none` only for
+    // a file that is absent - a second create onto the file that now exists is refused.
+    const key = 'spawn:trammel/GG_Brand_New.xml';
+    const file = whitelist.resolveSpawnFile(key);
+
+    fs.rmSync(file, { force: true });
+    fs.rmSync(file + '.bak', { force: true });
+
+    runShard(() => ({ ok: true, message: 'trammel/GG_Brand_New.xml: removed 0, imported 1 spawner(s)' }));
+
+    const { body: listed } = await call('GET', '/api/spawners');
+    const shape = listed.shapes.find((s) => s.id.includes('GG_OldMarta'));
+    const created = await call('POST', `/api/save/${key}`, {
+        baseHash: null,
+        creates: [{ ...shape, id: 'spawner:trammel/GG_Brand_New.xml#0', points: [[1481, 1651, 20]], props: { ...shape.props, Name: 'Spawner_Brand_New' } }]
+    });
+
+    assert.strictEqual(created.status, 200, JSON.stringify(created.body));
+    assert.strictEqual(created.body.written, true);
+    assert.strictEqual(created.body.backupHash, 'none');
+    assert.ok(fs.existsSync(file));
+    assert.strictEqual(fs.existsSync(file + '.bak'), false, 'a created file has no .bak');
+    assert.match(shard.seen[0].body, /base=none/);
+
+    const again = await call('POST', `/api/save/${key}`, { baseHash: null, updates: [] });
+
+    assert.strictEqual(again.status, 409);
+    assert.match(again.body.error, /already exists/);
+
+    fs.rmSync(file, { force: true });
 });
 
 test('a stale spawn save is refused, and a stock file cannot be saved at all', async () => {
     const before = fs.readFileSync(GG_FILE, 'utf8');
-    const stale = await call('POST', `/api/save/${GG_KEY}`, { baseHash: 'deadbeef', updates: [] });
+
+    runShard(() => assert.fail('the reload half must never run for a refused commit'));
+
+    const stale = await call('POST', `/api/save/${GG_KEY}`, { baseHash: 'deadbeefdeadbeef', updates: [] });
 
     assert.strictEqual(stale.status, 409);
+    assertRefusal(stale.body, 'deadbeefdeadbeef', hashOf(before));
     assert.strictEqual(fs.readFileSync(GG_FILE, 'utf8'), before);
+    assert.deepStrictEqual(stagedFiles(), []);
 
     for (const name of ['spawn:trammel/notgg.xml', 'spawn:../../etc/passwd.xml', 'stock:trammel']) {
         const { status } = await call('POST', `/api/save/${encodeURIComponent(name)}`, { updates: [] });
@@ -644,6 +828,12 @@ test('every reload the editor can ask for exists in the shard dispatcher', async
     for (const match of bridgeSource.matchAll(/writeToken\(\s*'([a-z-]+)'/g)) {
         wanted.add(match[1]);
     }
+
+    for (const match of bridgeSource.matchAll(/requestAndWait\(\s*'([a-z-]+)'/g)) {
+        wanted.add(match[1]);
+    }
+
+    assert.ok(wanted.has('commit') && wanted.has('restore'), 'the two write tokens are asked for by literal name');
 
     for (const name of wanted) {
         assert.ok(poller.includes(`case "${name}":`),
@@ -976,14 +1166,15 @@ test('the restart launcher is one fixed script, with nothing the caller supplies
         'a restart rebuilds, so a failed build still refuses to launch');
 });
 
-// ---- the request window (REVIEW.md F3, interim) -------------------------------------------------
+// ---- the request channel (REVIEW.md F3) --------------------------------------------------------
 
-test('a second request for the same operation is refused while the first is still on disk', async () => {
+test('a second request for the same operation is refused while the first is still unclaimed', async () => {
     // No fake shard: the token stays where the bridge put it, which is exactly the state of a
-    // shard that has not polled yet. Overwriting it would discard a request somebody asked for.
+    // shard that has not polled yet. A second file would only queue behind it; a 409 says so.
     const first = await call('POST', '/api/request/nav-reload');
 
     assert.strictEqual(first.status, 202);
+    assert.match(first.body.id, /^[0-9a-f]{12}$/, 'the answer carries the request id');
 
     const second = await call('POST', '/api/request/nav-reload');
 
@@ -991,7 +1182,7 @@ test('a second request for the same operation is refused while the first is stil
     assert.match(second.body.error, /has not picked up/);
 
     // And the first request is still intact - the refusal protected it rather than replacing it.
-    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'nav-reload.token')), true);
+    assert.deepStrictEqual(tokensNamed('nav-reload'), [`nav-reload.${first.body.id}.token`]);
 });
 
 test('a pending request does not block a different operation', async () => {
@@ -1002,8 +1193,13 @@ test('a pending request does not block a different operation', async () => {
     assert.strictEqual(other.status, 202, 'busy is per operation, not a global lock');
 });
 
-test('a token is published by rename, and leaves no staging file behind', async () => {
-    const { status, body } = await call('POST', '/api/request/nav-reload');
+test('a token is named by its id, published by rename, and leaves no staging file behind', async () => {
+    // A raw body, as the editor sends one - `call` would JSON-quote it.
+    const response = await fetch(origin + '/api/request/nav-reload', {
+        method: 'POST', headers: { 'X-GG-Auth': bridge.SESSION_SECRET }, body: 'some body'
+    });
+    const status = response.status;
+    const body = await response.json();
 
     assert.strictEqual(status, 202);
 
@@ -1011,11 +1207,12 @@ test('a token is published by rename, and leaves no staging file behind', async 
 
     assert.deepStrictEqual(left, [], 'the staged file is renamed, not copied and left');
 
-    // The staging name must not end in .token either, or the poller's *.token glob would pick a
-    // half-written file up as a request.
-    const written = fs.readFileSync(path.join(REQUESTS, 'nav-reload.token'), 'utf8');
+    // The staging name must not end in .token either, or the poller's name filter would pick a
+    // half-written file up as a request. The body is the arguments and nothing else: the id is in
+    // the file name, where it identifies the ack too.
+    const written = fs.readFileSync(path.join(REQUESTS, `nav-reload.${body.id}.token`), 'utf8');
 
-    assert.strictEqual(written.trim(), '#' + body.nonce, 'the whole token, not a truncated one');
+    assert.strictEqual(written.trim(), 'some body', 'the whole token, not a truncated one, and no nonce');
 
     const source = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
 
@@ -1023,21 +1220,151 @@ test('a token is published by rename, and leaves no staging file behind', async 
         'writeFileSync truncates before it writes; a poll landing in that window reads half a token');
 });
 
-test('the fake shard dispatches before it deletes, as RequestPoller does', async () => {
-    // The ordering IS the contract, and the fake had it backwards: it deleted up front, so the
-    // window in which the shard holds a token it has read did not exist in the tests at all.
-    let tokenDuringDispatch = null;
+test('the fake shard claims before it dispatches, as RequestPoller does', async () => {
+    // The ordering IS the contract. The claim - a rename of the token - is what lets the bridge
+    // read a request's state off the disk: a token is queued and may be withdrawn, a claimed
+    // token is running, and neither is ever deleted by anybody else's cleanup (F3).
+    let during = null;
 
-    runShard((name) => {
-        tokenDuringDispatch = fs.existsSync(path.join(REQUESTS, name + '.token'));
+    runShard((name, body, id) => {
+        during = {
+            token: fs.existsSync(path.join(REQUESTS, `commit.${id}.token`)),
+            claimed: fs.existsSync(path.join(REQUESTS, `commit.${id}.claimed`))
+        };
+
         return { ok: true, message: 'ok' };
     });
 
     const { body } = await call('POST', '/api/save/navigation', moveWaypoint(await currentHash()));
 
     assert.strictEqual(body.reloaded, true);
-    assert.strictEqual(tokenDuringDispatch, true,
-        'the token is still on disk while the request runs - that window is F3');
+    assert.deepStrictEqual(during, { token: false, claimed: true },
+        'while the request runs its token has been renamed to .claimed, and the .token is gone');
+    assert.deepStrictEqual(requestFiles('.claimed'), [], 'the claimed file outlived the ack');
+});
+
+test('an ack carrying a different id is ignored and reported, and the request stays unanswered', async () => {
+    // The fake writes the ack in the right file but with somebody else's id inside: an answer
+    // that is not this request's, however it got there. It must never satisfy the request. (An
+    // ack under another FILE name is never opened at all - that is what naming the file by the id
+    // buys, and the stale-ack test above covers it.)
+    runShard(() => ({ ok: true, message: 'an answer for somebody else' }), { ackId: 'somebodyelse' });
+
+    const result = await bridge.requestAndWait('health', '', 600);
+
+    assert.strictEqual(result.outcome, 'unknown');
+    assert.strictEqual(result.ack, null);
+    assert.deepStrictEqual(result.ignored, [`an ack for request somebodyelse, not ${result.id}`]);
+    assert.match(result.message, /outcome is unknown/);
+    assert.match(result.message, /Ignored: an ack for request somebodyelse/);
+
+    // And through the editor's route, the same verdict: the file is there, and it is not an answer.
+    const seen = await call('GET', `/api/ack/health/${result.id}`);
+
+    assert.strictEqual(seen.body.pending, true);
+    assert.strictEqual(seen.body.state, 'ignored');
+    assert.deepStrictEqual(seen.body.ignored, [`an ack for request somebodyelse, not ${result.id}`]);
+});
+
+test('an ack from a previous boot is ignored and reported: the current boot is what health.json says', async () => {
+    // health.json is the shard's own statement of which boot is running. The fake answers as
+    // boot A while the file says boot B - a previous process's ack, which never satisfies a
+    // request however well its id matches.
+    fs.writeFileSync(whitelist.FILES.health, JSON.stringify({ utc: new Date().toISOString(), bootId: 'boot-b', generation: 3, worst: 'Ok', checks: [] }));
+
+    try {
+        runShard(() => ({ ok: true, message: 'from the old boot' }), { bootId: 'boot-a' });
+
+        const result = await bridge.requestAndWait('health', '', 600);
+
+        assert.strictEqual(result.outcome, 'unknown');
+        assert.strictEqual(result.ack, null);
+        assert.deepStrictEqual(result.ignored, ['an ack from boot boot-a, but the shard is at boot boot-b (health.json)']);
+
+        // With health.json naming the fake's boot, the same ack is this request's.
+        fs.writeFileSync(whitelist.FILES.health, JSON.stringify({ utc: new Date().toISOString(), bootId: 'boot-a', generation: 3, worst: 'Ok', checks: [] }));
+
+        const accepted = await bridge.requestAndWait('health', '', 600);
+
+        assert.strictEqual(accepted.outcome, 'completed');
+        assert.strictEqual(accepted.ack.bootId, 'boot-a');
+    } finally {
+        fs.rmSync(whitelist.FILES.health, { force: true });
+    }
+});
+
+test('the ack match is a pure judgement: no id, another id, another boot, or this request', () => {
+    const ack = (extra) => ({ utc: '2026-09-22T00:00:00Z', ok: true, id: 'abc', bootId: 'b1', ...extra });
+
+    assert.strictEqual(bridge.matchAck(null, 'abc', 'b1').matched, false);
+    assert.strictEqual(bridge.matchAck(null, 'abc', 'b1').reason, null, 'not an ack yet has no reason to report');
+    assert.match(bridge.matchAck(ack({ id: undefined }), 'abc', 'b1').reason, /no request id/);
+    assert.match(bridge.matchAck(ack({ id: 'xyz' }), 'abc', 'b1').reason, /for request xyz, not abc/);
+    assert.match(bridge.matchAck(ack({ bootId: 'b0' }), 'abc', 'b1').reason, /from boot b0, but the shard is at boot b1/);
+    assert.match(bridge.matchAck(ack({ bootId: undefined }), 'abc', 'b1').reason, /no bootId while the shard is at boot b1/);
+    assert.strictEqual(bridge.matchAck(ack({}), 'abc', 'b1').matched, true);
+    assert.strictEqual(bridge.matchAck(ack({ bootId: 'anything' }), 'abc', null).matched, true,
+        'with no health.json there is no boot to check against');
+});
+
+test('a request the shard never claims is NotRun, withdrawn, and retried once and only once', async () => {
+    // No fake shard at all: the shard is down. The token sits unclaimed until the timeout, the
+    // bridge withdraws it (nothing ran - that is what NotRun means), asks once more with a fresh
+    // id, and then stops. Two tokens were written, none is left, and nothing was staged or written.
+    const before = fs.readFileSync(NAV, 'utf8');
+    const started = Date.now();
+    const { status, body } = await call('POST', '/api/save/navigation', moveWaypoint(hashOf(before)));
+
+    assert.strictEqual(status, 503);
+    assert.strictEqual(body.outcome, 'notrun');
+    assert.strictEqual(body.written, false);
+    assert.match(body.error, /did not pick up the save \(requests [0-9a-f]{12} and [0-9a-f]{12}\); nothing was written/);
+    assert.ok(Date.now() - started >= 2 * bridge.ACK_TIMEOUT_MS, 'two full waits happened');
+    assert.ok(Date.now() - started < 4 * bridge.ACK_TIMEOUT_MS, 'and not a third');
+
+    assert.deepStrictEqual(requestFiles('.token'), [], 'a withdrawn token was left on disk');
+    assert.deepStrictEqual(stagedFiles(), [], 'a staged file was left after NotRun');
+    assert.strictEqual(fs.readFileSync(NAV, 'utf8'), before);
+    assert.strictEqual(fs.existsSync(NAV + '.bak'), false);
+
+    // The same through requestAndWait without the retry: one wait, one withdraw.
+    const single = await bridge.requestAndWait('health', '', 300);
+
+    assert.strictEqual(single.outcome, 'notrun');
+    assert.strictEqual(single.retried, undefined);
+    assert.deepStrictEqual(requestFiles('.token'), []);
+});
+
+test('a request the shard claimed and never answered is Unknown, never retried', async () => {
+    // claimOnly: the fake renames the token and then dies. The claimed file is what a crash leaves.
+    runShard(null, { claimOnly: true });
+
+    const result = await bridge.requestAndWait('health', '', 600, { retryNotRun: true });
+
+    assert.strictEqual(result.outcome, 'unknown');
+    assert.strictEqual(result.retried, undefined, 'unknown is never retried as if nothing happened');
+    assert.match(result.message, /did not answer the health request within 1s\. Its outcome is unknown - it may have run, or still be running/);
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['health']);
+    assert.deepStrictEqual(requestFiles('.claimed'), [`health.${result.id}.claimed`], 'the claimed file says running');
+
+    const seen = await call('GET', `/api/ack/health/${result.id}`);
+
+    assert.deepStrictEqual(seen.body, { pending: true, state: 'running' });
+});
+
+test('a queued request reads as queued through the ack route, and a bad id is refused', async () => {
+    const { body } = await call('POST', '/api/request/nav-reload');
+    const queued = await call('GET', `/api/ack/nav-reload/${body.id}`);
+
+    assert.deepStrictEqual(queued.body, { pending: true, state: 'queued' });
+
+    // No id, an empty id, an id that fails the pattern. (A traversal in the path never reaches
+    // this route: the URL parser folds it onto a static path the sandbox refuses with a 403.)
+    for (const bad of ['/api/ack/nav-reload', '/api/ack/nav-reload/', '/api/ack/nav-reload/NOPE']) {
+        const { status } = await call('GET', bad);
+
+        assert.strictEqual(status, 400, bad);
+    }
 });
 
 // ---- the security gate (REVIEW.md section 2) ----------------------------------------------------
@@ -1053,7 +1380,7 @@ test('a cross-port same-site write is refused, secret or no secret', async () =>
 
     assert.strictEqual(status, 403);
     assert.match(body.error, /cross-site/);
-    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'shutdown.token')), false);
+    assert.deepStrictEqual(tokensNamed('shutdown'), []);
 });
 
 test("Sec-Fetch-Site: none is refused too - a bookmark is not the editor", async () => {
@@ -1089,7 +1416,7 @@ test('a mutating request with no metadata and no secret is refused', async () =>
 
     assert.strictEqual(response.status, 403);
     assert.match((await response.json()).error, /X-GG-Auth/);
-    assert.strictEqual(fs.existsSync(path.join(REQUESTS, 'shutdown.token')), false);
+    assert.deepStrictEqual(tokensNamed('shutdown'), []);
 });
 
 test('the same request with the session secret is accepted', async () => {
@@ -1174,35 +1501,38 @@ test('the host check reads the port off the socket, not off a constant', () => {
 
 // ---- the save acknowledgement is a completed generation (REVIEW.md, save acknowledgement) -------
 
-test('a save token carries a nonce, and its ack is matched by it and carries the generation', async () => {
-    // Until 21 September 2026 `save` was not in NONCED: the token was an empty file and the ack was
-    // matched by nothing but existing. A stale save.ack.json was "saved".
-    fakeShard.writeAck(REQUESTS, 'save', '', { ok: true, message: 'an old save', generation: 3 });
+test('a save request has an id, and its ack is matched by it and carries the generation', async () => {
+    // Until 21 September 2026 the save token was an empty file and the ack was matched by nothing
+    // but existing: a stale save.ack.json was "saved". The nonce closed that; the id (22 September)
+    // replaces the nonce and names the ack file too, so a stale ack is a file nobody opens.
+    fakeShard.writeAck(REQUESTS, 'save', 'olderrun', '', { ok: true, message: 'an old save', generation: 3 });
 
     runShard((name) => ({ ok: true, message: 'world saved in 0.10s, generation 7 complete', generation: 7 }));
 
     const { status, body } = await call('POST', '/api/request/save');
 
     assert.strictEqual(status, 202);
-    assert.match(body.nonce || '', /^[0-9a-f]{8}$/, 'the save request has no nonce');
+    assert.match(body.id || '', /^[0-9a-f]{12}$/, 'the save request has no id');
 
     let ack = null;
 
     for (let i = 0; i < 50 && !ack; i++) {
         await new Promise((resolve) => setTimeout(resolve, 40));
 
-        const answer = await call('GET', '/api/ack/save');
+        const answer = await call('GET', `/api/ack/save/${body.id}`);
 
-        if (answer.body && answer.body.utc && String(answer.body.token).endsWith('#' + body.nonce)) {
+        if (answer.body && answer.body.utc && answer.body.id === body.id) {
             ack = answer.body;
         }
     }
 
     assert.ok(ack, 'this run\'s ack never arrived');
     assert.strictEqual(ack.generation, 7, 'the ack does not carry the generation the fake reported');
+    assert.strictEqual(ack.outcome, 'completed');
     assert.ok(ack.bootId, 'the ack does not name the answering process');
     assert.deepStrictEqual(shard.seen.map((t) => t.name), ['save']);
-    assert.match(shard.seen[0].body, /^#[0-9a-f]{8}$/, 'the token body should be the nonce alone');
+    assert.strictEqual(shard.seen[0].body, '', 'the token body should be empty: the id is in the file name');
+    assert.strictEqual(shard.seen[0].id, body.id);
 });
 
 test('the save judgement: no ack is unknown, ok without a generation is not saved', () => {
@@ -1280,5 +1610,14 @@ test('a reload the shard never answers is reported as unknown, not failed', asyn
     const { body } = await call('POST', '/api/save/navigation', moveWaypoint(await currentHash()));
 
     assert.strictEqual(body.reloaded, false);
+    assert.strictEqual(body.outcome, 'unknown');
     assert.match(body.message, /outcome is unknown/);
+});
+
+test('the bridge hash of nothing is the shard constant for it', () => {
+    // DataFileCommit.EmptyHash on the C# side; the two must agree for a save based on an empty
+    // file - and the fake shard hashes bytes the way the shard does.
+    assert.strictEqual(hashOf(''), 'e3b0c44298fc1c14');
+    assert.strictEqual(fakeShard.hash16(NAV), hashOf(fs.readFileSync(NAV, 'utf8')));
+    assert.strictEqual(bridge.versionOf(path.join(root, 'no-such-file')), null);
 });

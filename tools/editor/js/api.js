@@ -121,8 +121,8 @@ export const api = {
      * Asks the shard to do something by dropping a request token.
      *
      * This returns as soon as the token is written, not when the shard has acted - the shard
-     * polls once a second and the two processes are deliberately not coupled. Call ack() to find
-     * out what happened.
+     * polls once a second and the two processes are deliberately not coupled. The answer carries
+     * the request's `id`; call awaitAck() with it to find out what happened.
      */
     request: (name, body = '') =>
         fetch(`/api/request/${name}`, { method: 'POST', body }).then((response) => {
@@ -135,36 +135,47 @@ export const api = {
             return response.json();
         }),
 
-    ack: (name) => request('GET', `/api/ack/${name}`),
+    /** The ack for ONE request, or `{pending: true, state}` while there is none. */
+    ack: (name, id) => request('GET', `/api/ack/${name}/${id}`),
 
     /**
      * Polls for a request's ack, giving up rather than hanging if the shard is down.
      *
-     * `nonce` comes back from request(). Without it this reads whichever ack happens to be on
-     * disk, and the shard overwrites that file in place rather than deleting it - so from the
-     * second request of a session onwards, the previous run's answer would be returned instantly
-     * and believed. The bridge clears the ack before dropping the token as well; this is the half
-     * that survives two editor tabs asking at once.
+     * `id` comes back from request(). Every request has one (REVIEW.md F3), the ack file is named
+     * by it, and the bridge answers /api/ack/<name>/<id> only with the ack that carries it and the
+     * shard's current boot - an ack for another request, or from a previous boot, is reported as
+     * `ignored` and never returned as this one's. Two editor tabs asking at once therefore each
+     * get their own answer, and neither can read the other's.
      */
-    async awaitAck(name, { nonce = null, timeoutMs = 8000 } = {}) {
+    async awaitAck(name, { id, timeoutMs = 8000 } = {}) {
         const deadline = Date.now() + timeoutMs;
+        const ignored = [];
 
         for (;;) {
-            const ack = await this.ack(name);
-            const mine = ack && !ack.pending && ack.utc
-                && (!nonce || String(ack.token || '').endsWith(`#${nonce}`));
+            const ack = await this.ack(name, id);
 
-            if (mine) {
+            if (ack && !ack.pending && ack.utc && ack.id === id) {
                 return ack;
             }
 
+            if (ack && ack.pending && Array.isArray(ack.ignored)) {
+                for (const reason of ack.ignored) {
+                    if (!ignored.includes(reason)) {
+                        ignored.push(reason);
+                    }
+                }
+            }
+
             if (Date.now() > deadline) {
-                // Not "failed": the token may still be on disk for a shard that is saving, or
-                // down, and the poller runs it when it next looks. The outcome contract
-                // (Scripts/Custom/Core/LoopQueue.cs) is that no answer means unknown.
+                // Not "failed": the shard may be saving, or slow, or down, and the outcome
+                // contract (Scripts/Custom/Core/LoopQueue.cs) is that no answer means unknown.
+                // `state` says what the disk says: queued means the shard never looked at it.
+                const state = ack && ack.pending && ack.state ? ` (request ${id}: ${ack.state})` : '';
+
                 throw new Error(
-                    `The shard did not answer within ${Math.round(timeoutMs / 1000)}s. The request's `
-                    + 'outcome is unknown - it may still run when the shard picks the token up.');
+                    `The shard did not answer within ${Math.round(timeoutMs / 1000)}s${state}. The request's `
+                    + 'outcome is unknown - it may have run, or still be running.'
+                    + (ignored.length > 0 ? ` Ignored: ${ignored.join('; ')}.` : ''));
             }
 
             await new Promise((resolve) => setTimeout(resolve, 400));
@@ -172,12 +183,15 @@ export const api = {
     },
 
     /**
-     * Saves one file and asks the shard to reload it.
+     * Saves one file: the bridge stages it and the shard commits it against `baseHash`.
      *
-     * `edits` is {baseHash, updates, creates, deletes}. The answer is
-     * {written, reloaded, message, errors, warnings, hash} - and note that a write whose reload
-     * was refused resolves rather than throwing, because the file IS on disk and the caller has
-     * to be told that rather than sent down the "nothing happened" path.
+     * `edits` is {baseHash, updates, creates, deletes}; `baseHash` is required (null for a file
+     * that does not exist yet). The answer is {written, reloaded, message, errors, warnings,
+     * hash, backupHash, id, generation} - and note that a write whose reload was refused resolves
+     * rather than throwing, because the file IS on disk and the caller has to be told that rather
+     * than sent down the "nothing happened" path. A 409 is the shard refusing the version, with
+     * its message and {expected, actual, changedAt, changedBy} in `error.payload`; a 503 is a
+     * shard that never picked the save up (nothing written); a 504 is an outcome unknown.
      */
     save: (file, edits) => request('POST', `/api/save/${file}`, edits),
 
@@ -206,6 +220,13 @@ export const api = {
         throw error;
     },
 
-    /** Puts a file back to the .bak the last save left, which is what discard needs. */
-    restore: (file) => request('POST', `/api/restore/${file}`)
+    /**
+     * Puts a file back to the .bak the last save left, which is what discard needs.
+     *
+     * `versions` is {baseHash, backupHash}: the version the live file must still be at, and the
+     * version of the .bak the caller means (the `backupHash` the save answered with). The shard
+     * refuses either mismatch with a 409, and then the right thing is to reload, not to put
+     * anything back.
+     */
+    restore: (file, versions) => request('POST', `/api/restore/${file}`, versions)
 };

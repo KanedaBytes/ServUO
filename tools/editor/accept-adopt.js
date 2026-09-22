@@ -19,9 +19,10 @@
 //     the module that exists precisely so that rule is testable outside app.js;
 //   * the same unproject() turns shapes back into our JSON layout;
 //   * the same replicated validator runs on the dry run;
-//   * the same stale-file check refuses on a baseHash mismatch, so a proposal walked against one
-//     version of the graph cannot land on another;
-//   * the same .bak, temp-file-and-rename write, and the same reload token afterwards.
+//   * the same version check - made by the SHARD, on the game thread, against the baseHash this
+//     sends - refuses a proposal walked against one version of the graph from landing on another;
+//   * the same staged commit: the bridge stages the file beside navigation.json, the shard
+//     replaces it keeping the .bak, and reloads.
 //
 // A REBASE PROPOSAL IS THE REASON IT IS NEEDED. An ordinary adopt is all creates and a person can
 // click Save. A rebase also carries `removals` - waypoints of OURS the proposed road runs through -
@@ -203,17 +204,21 @@ async function main() {
     const result = JSON.parse(saved.text);
 
     if (saved.status === 409) {
-        fail('navigation.json changed since the proposal was walked'
+        // The shard's own refusal, in its words: it names the writer and the time.
+        fail(`navigation.json changed since the proposal was walked: ${result.error}`
             + ` (proposal saw ${result.expected}, the file is at ${result.actual}).`
             + ' Re-run the adopt against the current graph.');
     }
 
     if (saved.status !== 200 || !result.written) {
+        // 503 is a shard that never picked the commit up (nothing written); 504 is an outcome
+        // unknown. Both carry the reason in `error`.
         fail(`the save failed (${saved.status}): ${result.error || saved.text}`);
     }
 
     console.log('');
-    console.log(`accept-adopt: written. hash ${result.hash}, backup ${result.backup}.`);
+    console.log(`accept-adopt: written. hash ${result.hash}, backup ${result.backup} (${result.backupHash}),`
+        + ` request ${result.id}, generation ${result.generation}.`);
     console.log(`accept-adopt: reloaded ${result.reloaded} - ${result.message}`);
 
     for (const warning of result.warnings || []) {
@@ -226,7 +231,8 @@ async function main() {
     // shard refused is not an accepted proposal.
     if (!result.reloaded) {
         fail('the file was written but the shard refused to reload it.'
-            + ' Use POST /api/restore/navigation to put the .bak back.');
+            + ` Put the .bak back with POST /api/restore/navigation and the body`
+            + ` {"baseHash":"${result.hash}","backupHash":"${result.backupHash}"}.`);
     }
 }
 

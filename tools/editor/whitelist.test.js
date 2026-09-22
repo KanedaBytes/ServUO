@@ -80,7 +80,7 @@ test('a save name is a key, not a path, so there is nothing to traverse', () => 
 test('every writable file names a reload request', () => {
     for (const [name, request] of Object.entries(whitelist.WRITABLE)) {
         assert.ok(whitelist.FILES[name], `${name} is writable but has no file`);
-        assert.ok(whitelist.resolveToken(request), `${request} is not a legal token name`);
+        assert.ok(whitelist.resolveToken(request, 'abc123'), `${request} is not a legal token name`);
     }
 });
 
@@ -91,13 +91,28 @@ test('the backup sits beside the file it backs up', () => {
 });
 
 test('token and ack names are matched against a pattern, not cleaned up', () => {
-    assert.ok(whitelist.resolveToken('nav-reload'));
-    assert.ok(whitelist.resolveAck('nav-reload'));
+    assert.ok(whitelist.resolveToken('nav-reload', 'ab12'));
+    assert.ok(whitelist.resolveClaimed('nav-reload', 'ab12'));
+    assert.ok(whitelist.resolveAck('nav-reload', 'ab12'));
+    assert.ok(whitelist.resolveToken('nav-reload', 'ab12').endsWith('nav-reload.ab12.token'),
+        'the id is part of the file name - that is what gives a request its identity');
 
     for (const name of ['../escape', 'Nav-Reload', '9lives', 'has space', 'a'.repeat(65), '']) {
-        assert.strictEqual(whitelist.resolveToken(name), null, JSON.stringify(name));
-        assert.strictEqual(whitelist.resolveAck(name), null, JSON.stringify(name));
+        assert.strictEqual(whitelist.resolveToken(name, 'ab12'), null, JSON.stringify(name));
+        assert.strictEqual(whitelist.resolveAck(name, 'ab12'), null, JSON.stringify(name));
     }
+
+    // The id follows the same rule as the poller's TokenName regex: lowercase alphanumerics only,
+    // so a hand-typed `save.manual.token` is legal and `save.../x.token` is not a thing.
+    for (const id of ['', 'AB12', 'a b', '../x', 'a'.repeat(33), undefined]) {
+        assert.strictEqual(whitelist.resolveToken('nav-reload', id), null, JSON.stringify(id));
+        assert.strictEqual(whitelist.resolveAck('nav-reload', id), null, JSON.stringify(id));
+    }
+
+    // The staged file sits beside the file it will replace, never in the request directory.
+    assert.strictEqual(whitelist.resolveStaged('navigation', 'ab12'), whitelist.FILES.navigation + '.ab12.staged');
+    assert.strictEqual(whitelist.resolveStaged('entities', 'ab12'), null);
+    assert.strictEqual(whitelist.resolveStaged('navigation', 'AB'), null);
 });
 
 test('static serving stays inside the editor directory', () => {

@@ -143,10 +143,11 @@ function tileKey(record) {
 /**
  * Drop a request token through the bridge and wait for the shard's ack.
  *
- * The bridge deletes the previous ack before publishing the token (bridge.js:1052-1056), so an ack
- * that appears after this returns is this request's - `nav-hop-probe` is not in the NONCED set and
- * does not need to be for that reason. A 409 means a token of that name is still on disk, which is
- * the poller's per-operation busy answer rather than a failure to retry blindly.
+ * The 202 carries the request's `id` (REVIEW.md F3: every request has one, and the ack file is
+ * named by it), and /api/ack/<name>/<id> answers only with the ack that carries that id from the
+ * shard's current boot - so an ack that comes back is this request's, not an earlier run's. A 409
+ * on the drop means an unclaimed token for that operation is still on disk, which is the bridge's
+ * per-operation busy answer rather than a failure to retry blindly.
  */
 async function ask(port, name, body, timeoutMs = 60000) {
     const dropped = await request({
@@ -156,31 +157,36 @@ async function ask(port, name, body, timeoutMs = 60000) {
             authHeaders())
     }, body);
 
-    // 202, not 200: the bridge accepts a token and the shard answers later (bridge.js:1131). A
-    // 409 is its per-operation busy reply - a token of that name is still on disk unread.
+    // 202, not 200: the bridge accepts a token and the shard answers later. A 409 is its
+    // per-operation busy reply - a token of that name is still on disk unclaimed.
     if (dropped.status !== 202 && dropped.status !== 200) {
         fail(`the bridge answered ${dropped.status} dropping '${name}': ${dropped.text}`);
     }
 
+    const id = JSON.parse(dropped.text).id;
     const deadline = Date.now() + timeoutMs;
+
+    let state = 'unknown';
 
     while (Date.now() < deadline) {
         const seen = await request({
-            host: '127.0.0.1', port, path: `/api/ack/${name}`, method: 'GET'
+            host: '127.0.0.1', port, path: `/api/ack/${name}/${id}`, method: 'GET'
         });
 
         if (seen.status === 200) {
             const ack = JSON.parse(seen.text);
 
-            if (!ack.pending && ack.utc) {
+            if (!ack.pending && ack.utc && ack.id === id) {
                 return ack;
             }
+
+            state = ack.state || state;
         }
 
         await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    fail(`the shard did not answer '${name}' within ${timeoutMs}ms. Is it running?`);
+    fail(`the shard did not answer '${name}' (request ${id}, ${state}) within ${timeoutMs}ms. Its outcome is unknown. Is it running?`);
 }
 
 /**
@@ -482,11 +488,14 @@ async function main() {
     const result = JSON.parse(saved.text);
 
     if (saved.status !== 200 || !result.written) {
+        // 409 is the shard refusing the version in its own words; 503 a shard that never picked
+        // the commit up (nothing written); 504 an outcome unknown. All carry `error`.
         fail(`the save failed (${saved.status}): ${result.error || saved.text}`);
     }
 
     console.log('');
-    console.log(`repoint-arrivals: written. reloaded ${result.reloaded} - ${result.message}`);
+    console.log(`repoint-arrivals: written (request ${result.id}, generation ${result.generation}).`
+        + ` reloaded ${result.reloaded} - ${result.message}`);
 
     for (const warning of result.warnings || []) {
         console.log(`  SHARD WARNING: ${warning}`);

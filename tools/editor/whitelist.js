@@ -41,6 +41,11 @@ const READ_EXTENSIONS = new Set(
 // before it is safe is a name we should be rejecting.
 const TOKEN_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
+// A request id: the twelve hex characters the bridge generates, or whatever a hand driver typed
+// into a file name. The same rule as RequestPoller.TokenName on the shard, which is what makes a
+// token the bridge writes and a token typed at a prompt the same thing to the poller.
+const REQUEST_ID = /^[a-z0-9]{1,32}$/;
+
 const FILES = {
     navigation: path.join(REPO_ROOT, 'Data', 'Custom', 'navigation.json'),
     dailyLife: path.join(REPO_ROOT, 'Data', 'Custom', 'britain-daily-life.json'),
@@ -127,25 +132,82 @@ function resolveStatic(urlPath) {
     return target;
 }
 
-/** Resolves a request-token name to the file the shard's poller will pick up. */
-function resolveToken(name) {
-    if (!TOKEN_NAME.test(name)) {
+function isRequestName(name) {
+    return typeof name === 'string' && TOKEN_NAME.test(name);
+}
+
+function isRequestId(id) {
+    return typeof id === 'string' && REQUEST_ID.test(id);
+}
+
+/**
+ * `<name>.<id><suffix>` in the request directory, or null when either part fails its pattern.
+ *
+ * Every request file - the token, the claimed token the poller renames it to, and the ack - is
+ * named this way (REVIEW.md F3: a request has an identity, and the identity is in the file name
+ * so that two requests for one operation are two files).
+ */
+function resolveRequestFile(name, id, suffix) {
+    if (!isRequestName(name) || !isRequestId(id)) {
         return null;
     }
 
-    const target = path.join(REQUEST_DIR, name + '.token');
+    const target = path.join(REQUEST_DIR, `${name}.${id}${suffix}`);
 
     return isAllowed(target) ? target : null;
 }
 
-function resolveAck(name) {
-    if (!TOKEN_NAME.test(name)) {
-        return null;
+/** The token the shard's poller will claim. */
+function resolveToken(name, id) {
+    return resolveRequestFile(name, id, '.token');
+}
+
+/** What the poller renames the token to while the request runs. */
+function resolveClaimed(name, id) {
+    return resolveRequestFile(name, id, '.claimed');
+}
+
+function resolveAck(name, id) {
+    return resolveRequestFile(name, id, '.ack.json');
+}
+
+/**
+ * The unclaimed tokens for one operation, by file name. The bridge's one-pending-per-operation
+ * guard reads this: an unclaimed token is a request the shard has not looked at yet, and a second
+ * one behind it would only queue.
+ */
+function listTokens(name) {
+    if (!isRequestName(name)) {
+        return [];
     }
 
-    const target = path.join(REQUEST_DIR, name + '.ack.json');
+    let entries;
 
-    return isAllowed(target) ? target : null;
+    try {
+        entries = fs.readdirSync(REQUEST_DIR);
+    } catch {
+        return [];
+    }
+
+    const prefix = name + '.';
+    const suffix = '.token';
+
+    return entries.filter((entry) =>
+        entry.startsWith(prefix)
+        && entry.endsWith(suffix)
+        && isRequestId(entry.slice(prefix.length, entry.length - suffix.length)));
+}
+
+/**
+ * Where a commit's bytes are staged: BESIDE the file they will replace, named by the request id,
+ * so the shard's File.Replace is a rename within one directory (a rename across volumes is a copy
+ * and is not atomic - the rule AtomicFile and writeToken already follow). The shard derives the
+ * same name from the key and the id; nothing in the token is a path.
+ */
+function resolveStaged(name, id) {
+    const target = resolveSave(name);
+
+    return target && isRequestId(id) ? `${target}.${id}.staged` : null;
 }
 
 /**
@@ -255,6 +317,7 @@ function reloadFor(name) {
 
 module.exports = {
     REPO_ROOT, REQUEST_DIR, FILES, WRITABLE, SPAWN_ROOT,
-    isAllowed, resolveStatic, resolveToken, resolveAck,
+    isAllowed, resolveStatic, isRequestName, isRequestId,
+    resolveToken, resolveClaimed, resolveAck, listTokens, resolveStaged,
     resolveSave, resolveBackup, resolveSpawnFile, spawnRelative, listSpawnFiles, reloadFor
 };

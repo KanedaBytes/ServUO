@@ -72,8 +72,13 @@ const state = {
     live: null,
     facet: null,
 
-    // The hash each file was loaded at, handed back on save so the bridge can refuse a stale write.
+    // The hash each file was loaded at, handed back on save so the shard can refuse a stale write.
     hashes: {},
+
+    // The hash of each file's .bak as the last save in this session left it (`backupHash` in the
+    // save's answer), handed back on discard so the shard restores only the backup this tab
+    // means - not whatever .bak another tab's save has since put there.
+    backups: {},
 
     // Which stock box is on screen, and how much of the facet it is. The count says "N in view /
     // 2,572 total" because a bare N would read as the whole world.
@@ -1120,7 +1125,7 @@ async function sweepZone(probeType, [x, y, w, h]) {
 async function sendReach(body) {
     try {
         const dropped = await api.request('site-reach', body);
-        const ack = await api.awaitAck('site-reach', { nonce: dropped.nonce, timeoutMs: 30000 });
+        const ack = await api.awaitAck('site-reach', { id: dropped.id, timeoutMs: 30000 });
 
         worksites.setReach(await api.reach());
         updateCounts();
@@ -1610,7 +1615,7 @@ async function loadBotInfo(serial, body) {
     try {
         const dropped = await api.request('botinfo', String(serial));
 
-        await api.awaitAck('botinfo', { nonce: dropped.nonce, timeoutMs: 10000 });
+        await api.awaitAck('botinfo', { id: dropped.id, timeoutMs: 10000 });
 
         const answer = await api.botinfo();
 
@@ -1915,7 +1920,7 @@ async function verifyLastHops(record, waypoints, nav) {
     try {
         const dropped = await api.request('nav-hop', `verify ${pairs.join(' ')}`);
 
-        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+        await api.awaitAck('nav-hop', { id: dropped.id, timeoutMs: 30000 });
 
         const answer = await api.hops();
         const bad = (answer.hops || []).filter((hop) => !hop.ok).length;
@@ -1948,7 +1953,7 @@ async function verifyHops(edges) {
     try {
         const dropped = await api.request('nav-hop', `verify ${pairs.join(' ')}`);
 
-        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+        await api.awaitAck('nav-hop', { id: dropped.id, timeoutMs: 30000 });
 
         const answer = await api.hops();
         const flags = new Map(state.hopFlags || []);
@@ -1987,7 +1992,7 @@ async function snapToRoad(shape) {
     try {
         const dropped = await api.request('nav-hop', `snap ${x},${y}`);
 
-        await api.awaitAck('nav-hop', { nonce: dropped.nonce, timeoutMs: 30000 });
+        await api.awaitAck('nav-hop', { id: dropped.id, timeoutMs: 30000 });
 
         const answer = await api.hops();
 
@@ -2797,7 +2802,7 @@ async function proposeCorridor(points, corridor = {}) {
             const body = `${a[0]},${a[1]} ${b[0]},${b[1]} ${state.facet.name}`;
             const dropped = await api.request('nav-route', body);
 
-            await api.awaitAck('nav-route', { nonce: dropped.nonce, timeoutMs: 120000 });
+            await api.awaitAck('nav-route', { id: dropped.id, timeoutMs: 120000 });
             answer = await api.route();
         } catch (error) {
             setStatus(`The shard could not walk leg ${i}: ${error.message}`, 'error');
@@ -3111,7 +3116,7 @@ async function startAdopt(rect) {
 
     try {
         const dropped = await api.request('nav-adopt', `${x},${y},${width},${height}`);
-        const ack = await api.awaitAck('nav-adopt', { nonce: dropped.nonce, timeoutMs: 20000 });
+        const ack = await api.awaitAck('nav-adopt', { id: dropped.id, timeoutMs: 20000 });
 
         if (!ack.ok) {
             setStatus(ack.message, 'error');
@@ -3599,7 +3604,7 @@ async function inspectTile(x, y, z) {
         const body = z === null || z === undefined ? `${x},${y}` : `${x},${y},${z}`;
         const dropped = await api.request('tile-probe', body);
 
-        await api.awaitAck('tile-probe', { nonce: dropped.nonce, timeoutMs: 15000 });
+        await api.awaitAck('tile-probe', { id: dropped.id, timeoutMs: 15000 });
 
         const answer = await api.tileProbe();
         const lines = (answer.lines || []).filter((line) => !line.startsWith('== '));
@@ -4366,7 +4371,7 @@ function wireAdmin() {
 /** Drops a token, waits for its ack, and throws the shard's own words on a refusal. */
 async function run(request, body, timeoutMs) {
     const dropped = await api.request(request, body);
-    const ack = await api.awaitAck(request, { nonce: dropped.nonce, timeoutMs: timeoutMs || 15000 });
+    const ack = await api.awaitAck(request, { id: dropped.id, timeoutMs: timeoutMs || 15000 });
 
     if (!ack.ok) {
         throw new Error(ack.message);
@@ -4427,10 +4432,9 @@ function wireBroadcast() {
         button.disabled = true;
 
         try {
-            // No nonce on this one: the token body IS the message, and appending "#a1b2c3d4" to
-            // what every player is about to read is not a thing to do. The bridge leaves
-            // `broadcast` out of NONCED for that reason, so the ack is matched by its absence of
-            // one - the bridge still deletes the ack before dropping the token.
+            // The token body IS the message, in full. (Its identity is in the file name, like
+            // every request's - which is why nothing is ever appended to what every player is
+            // about to read.)
             const ack = await run('broadcast', text, 10000);
 
             box.value = '';
@@ -4943,7 +4947,9 @@ function editsFor(file) {
     const mine = (shape) => fileOf(shape) === file;
 
     return {
-        baseHash: state.hashes[file],
+        // Required by the bridge. Null, not absent, for a file the editor has no hash for: a
+        // spawn file being created, which the shard spells "none" - the version of no file.
+        baseHash: state.hashes[file] === undefined ? null : state.hashes[file],
         updates: [...state.dirty.values()].filter(mine),
         creates: [...state.created.values()].filter(mine),
         deletes: [...state.deleted.values()].filter(mine).map((shape) => shape.id)
@@ -5036,6 +5042,8 @@ async function save() {
 
     setStatus('Saving...');
 
+    const stamps = [];
+
     for (const file of files) {
         let result;
 
@@ -5043,17 +5051,29 @@ async function save() {
             result = await api.save(file, editsFor(file));
         } catch (error) {
             if (error.status === 409) {
-                offerReapply(file);
+                offerReapply(file, error.payload || {});
                 return;
             }
 
-            // Nothing was written. Keep the edits so they can be corrected and saved again.
-            showBanner(`Save failed, nothing was written: ${error.message}`);
+            // The edits are kept in every case, so they can be corrected and saved again. What
+            // the status may claim depends on which answer this is: 503 is a shard that never
+            // picked the save up (nothing written, certainly); 504 is an outcome the bridge
+            // cannot vouch for either way; anything else refused before anything was staged.
+            if (error.status === 503) {
+                showBanner(`Save not run - nothing was written: ${error.message}`);
+            } else if (error.status === 504) {
+                showBanner(`Save outcome unknown: ${error.message}`, 'warn');
+            } else {
+                showBanner(`Save failed, nothing was written: ${error.message}`);
+            }
+
             return;
         }
 
         state.written.add(file);
         state.hashes[file] = result.hash;
+        state.backups[file] = result.backupHash;
+        stamps.push(`request ${result.id}, generation ${result.generation}`);
 
         if (!result.reloaded) {
             updateToolbar();
@@ -5079,7 +5099,7 @@ async function save() {
 
     hideBannerIfClean();
     await refreshShapes({ force: true });
-    setStatus('Saved and reloaded.', 'ok');
+    setStatus(`Saved and reloaded (${stamps.join('; ')}).`, 'ok');
 
     // AND RE-ASK THE SHARD what it now thinks, when the nav data was part of what moved.
     //
@@ -5099,11 +5119,17 @@ async function save() {
  * Nothing was written, so the choice is real: take what is on disk and put these edits back on top
  * of it, or throw them away. Reapply is offered rather than merging silently, because the two sets
  * of edits can genuinely conflict and only the person looking at them can say which wins.
+ *
+ * `refusal` is the bridge's 409 payload: the shard's own message (which names who last wrote the
+ * file and when - "the shard (NavigationSystem.Save)" is [NavRecord, "editor commit ..." is
+ * another tab), with the two hashes beside it.
  */
-function offerReapply(file) {
+function offerReapply(file, refusal) {
+    const who = refusal.changedBy ? `\nLast written by ${refusal.changedBy}` + (refusal.changedAt ? ` at ${refusal.changedAt}.` : '.') : '';
+
     showBanner(
-        `${file} changed on disk since you loaded it - something else wrote to it, most likely `
-        + '[NavMark, [NavRecord, or another editor tab.\n\n'
+        `${file} changed on disk since you loaded it, and the shard refused to write over it:\n\n`
+        + `${refusal.error || 'the version did not match'}${who}\n\n`
         + 'Nothing has been written. Reload and reapply takes what is on disk now and puts your '
         + 'edits back on top of it, reporting anything that no longer exists; discard throws your '
         + 'edits away and shows what the shard has.',
@@ -5199,22 +5225,43 @@ async function discard() {
 
     for (const file of state.written) {
         try {
-            await api.restore(file);
+            // Both versions: the file as this tab last wrote it, and the .bak that save made. The
+            // shard refuses either mismatch, and then putting anything back would be the
+            // lost-update this check exists to stop.
+            await api.restore(file, { baseHash: state.hashes[file], backupHash: state.backups[file] });
         } catch (error) {
+            if (error.status === 409) {
+                // Somebody else wrote since - another tab, [NavRecord, or the shard's own save
+                // after a refused reload. Reload and say so; nothing is put back.
+                dropEdits();
+                await refreshShapes({ force: true });
+                showBanner(
+                    `Not restored: ${file} is not what this tab left, so the shard refused to put the backup back.\n\n`
+                    + `${error.message}\n\nShowing what is on disk now; your edits were discarded.`,
+                    'warn');
+                setStatus('Discard refused by the shard: the file changed. Reloaded instead.', 'error');
+                return;
+            }
+
             showBanner(`Could not restore ${file} to the shard's version: ${error.message}`);
             return;
         }
     }
 
+    dropEdits();
+
+    await refreshShapes({ force: true });
+    setStatus('Edits discarded and the file restored.', 'ok');
+}
+
+/** Forgets this session's edits and the files they were written to. */
+function dropEdits() {
     state.written.clear();
     state.dirty.clear();
     state.created.clear();
     state.deleted.clear();
     state.undo.length = 0;
     state.redo.length = 0;
-
-    await refreshShapes({ force: true });
-    setStatus('Edits discarded and the file restored.', 'ok');
 }
 
 // --- the banner --------------------------------------------------------------------------------
@@ -5306,7 +5353,7 @@ async function runWalkAudit() {
 
     try {
         const dropped = await api.request('walk-audit', '');
-        const ack = await api.awaitAck('walk-audit', { nonce: dropped.nonce, timeoutMs: 30000 });
+        const ack = await api.awaitAck('walk-audit', { id: dropped.id, timeoutMs: 30000 });
 
         if (!ack.ok) {
             setStatus(`Walk audit not started: ${ack.message}`, 'error');
@@ -5391,7 +5438,7 @@ async function runAudit({ quiet } = { quiet: false }) {
     {
         try {
             const dropped = await api.request('nav-audit', '');
-            const ack = await api.awaitAck('nav-audit', { nonce: dropped.nonce, timeoutMs: 60000 });
+            const ack = await api.awaitAck('nav-audit', { id: dropped.id, timeoutMs: 60000 });
 
             state.audit = await api.audit();
             setAuditFlags(state.audit.problems);
@@ -5472,7 +5519,7 @@ function wireResync() {
 
         try {
             const dropped = await api.request('gg-reimport', '');
-            const ack = await api.awaitAck('gg-reimport', { nonce: dropped.nonce, timeoutMs: 30000 });
+            const ack = await api.awaitAck('gg-reimport', { id: dropped.id, timeoutMs: 30000 });
 
             setStatus(ack.ok ? ack.message : `Resync failed: ${ack.message}`, ack.ok ? 'ok' : 'error');
 
@@ -5514,9 +5561,9 @@ function wireRequest(buttonId, requestName, body, successText, options) {
         try {
             const dropped = await api.request(requestName, body);
 
-            // The nonce is what tells this run's ack from the last one's; the shard overwrites the
-            // ack file in place rather than deleting it.
-            const ack = await api.awaitAck(requestName, { nonce: dropped.nonce, timeoutMs });
+            // The id is what tells this run's ack from any other's: the ack file is named by it,
+            // and the bridge answers only with the ack that carries it.
+            const ack = await api.awaitAck(requestName, { id: dropped.id, timeoutMs });
 
             // Every ack names the completed persistence generation. Shown so "World saved" reads
             // as "World saved: ..., generation 43", the number the next boot has to come back at.

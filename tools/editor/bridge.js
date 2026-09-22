@@ -71,26 +71,10 @@ const MAX_BODY = 1024 * 1024;
 // body stays at a megabyte.
 const MAX_SAVE_BODY = 32 * 1024 * 1024;
 
-// How long to wait for the shard to answer a reload. The poller ticks once a second, so this is
-// four ticks of grace before the editor is told the shard did not answer. The override exists so
-// the timeout path can be tested in a fraction of a second rather than five of them.
+// How long to wait for the shard to answer a commit or a reload. The poller ticks once a second,
+// so this is four ticks of grace before the editor is told the shard did not answer. The override
+// exists so the timeout path can be tested in a fraction of a second rather than five of them.
 const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
-
-// Requests whose token body a nonce can ride along in. Most ignore their body entirely; spawn-reload
-// reads a file name off the front of it and stops at the first space, which leaves the tail free.
-// livemap-on is NOT here: it parses its whole body, and a nonce would be an argument it did not
-// ask for.
-// `broadcast` is deliberately NOT here for a different reason from livemap-on's: its body is the
-// message every player is about to read, and appending "#a1b2c3d4" to that is not a thing to do.
-// `save` joined this set on 21 September 2026. Its handler ignores its body, so the nonce costs
-// nothing, and without one the save ack was matched by nothing but its own existence: a stale
-// save.ack.json from a bridge restart, or a second tab, read as this run's "saved".
-const NONCED = new Set([
-    'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
-    'botpop-audit', 'botpop-gen', 'botinfo',
-    'core-smoke', 'bot-smoke', 'bots-reload', 'save', 'shutdown', 'tile-probe', 'bot-pace',
-    'world-census'
-]);
 
 // The isometric art tiles are rendered on demand rather than exported in a batch, because a
 // facet-wide iso render is 61 gigapixels per floor. This owns the child process that draws them;
@@ -151,10 +135,20 @@ function readText(file) {
  *
  * Over the raw text rather than the parsed document, because [NavMark and [NavRecord write this
  * same file from inside the shard - a stale editor must not be able to flatten a walk that was
- * just recorded, and a reformat is a change too.
+ * just recorded, and a reformat is a change too. The shard computes the same thing from the
+ * file's bytes (DataFileCommit.Hash16): identical for the BOM-less UTF-8 both writers produce.
  */
 function hashOf(text) {
     return crypto.createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+}
+
+/**
+ * The version a file is at: its hash, or null when it does not exist. Null rather than the hash
+ * of '' because the shard's version of an absent file is "none", and a save that creates a file
+ * has to be based on that - not on the hash of nothing.
+ */
+function versionOf(file) {
+    return fs.existsSync(file) ? hashOf(readText(file)) : null;
 }
 
 /** The hop cap the shard is actually configured with, so no message here quotes a literal. */
@@ -511,7 +505,7 @@ const ROUTES = {
         const files = {};
 
         for (const name of Object.keys(whitelist.WRITABLE)) {
-            files[name] = { hash: hashOf(readText(whitelist.FILES[name])) };
+            files[name] = { hash: versionOf(whitelist.FILES[name]) };
         }
 
         sendJson(response, 200, { shapes, files });
@@ -852,15 +846,27 @@ function handleRequest(request, response) {
         return;
     }
 
+    // /api/ack/<name>/<id>: the ack for one request, matched the way the bridge's own waits match
+    // it, or where the request stands when there is no ack yet.
     if (pathname.startsWith('/api/ack/')) {
-        const file = whitelist.resolveAck(pathname.slice('/api/ack/'.length));
+        const [name, id] = pathname.slice('/api/ack/'.length).split('/');
+        const file = whitelist.resolveAck(name, id || '');
 
         if (!file) {
-            sendError(response, 400, 'Bad request name.');
+            sendError(response, 400, 'Bad request name or id: /api/ack/<name>/<id>.');
             return;
         }
 
-        sendJson(response, 200, readJson(file) || { pending: true });
+        const ack = readAck(file);
+
+        if (ack) {
+            const verdict = matchAck(ack, id, currentBootId());
+
+            sendJson(response, 200, verdict.matched ? ack : { pending: true, state: 'ignored', ignored: [verdict.reason] });
+            return;
+        }
+
+        sendJson(response, 200, { pending: true, state: requestState(name, id) });
         return;
     }
 
@@ -1006,78 +1012,91 @@ function readBody(request, limit) {
     });
 }
 
-/**
- * Writes a request token, and returns the nonce that identifies this run of it.
- *
- * PUBLISHED BY RENAME, AND ONLY ONTO AN EMPTY SLOT. Both are interim protections against the same
- * defect (REVIEW.md F3): the shard reads a token, dispatches it, and only then deletes the file, so
- * a second request written into that window is deleted unread by the first one's cleanup - and two
- * requests dropped between two polls collapse into one whatever the shard does. A nonce cannot help
- * with either; it stops a caller believing somebody else's acknowledgement, which is a different
- * hole.
- *
- *   rename    - fs.writeFileSync truncates and then writes, so a poll landing between the two
- *               reads an empty or half-written token. A rename within one directory is atomic on
- *               NTFS and POSIX alike, so the shard sees the whole file or no file. AtomicFile.Write
- *               does exactly this from the other side, for the same reason.
- *   busy      - a token file still on disk means the shard has not picked that operation up yet.
- *               Overwriting it silently discards a request somebody asked for; a 409 says so. Per
- *               OPERATION rather than global: a nav-reload has no reason to refuse because a
- *               botinfo is pending.
- *
- * NEITHER IS THE FIX. A request still has no identity of its own, so a crash between dispatch and
- * acknowledgement is still "outcome unknown", and a second request arriving a millisecond after the
- * shard's read still lands on an empty slot and is still at the mercy of the delete that follows.
- * The request-ID protocol is scheduled before 7f; these two close the windows that cost nothing.
- *
- * TWO THINGS STOP A STALE ACK BEING READ AS THIS RUN'S ANSWER, and they close different holes.
- *
- * The ack file is never deleted by the shard - it is overwritten in place - and /api/ack reports
- * "pending" only when the file is ABSENT. So from the second request of a session onwards, a
- * waiter would read the previous run's ack instantly and believe it. Deleting the ack before
- * dropping the token fixes that in one line and needs no change on the shard.
- *
- * That still races two editor tabs, and loses the answer if the bridge dies mid-sequence. So the
- * token body also carries a nonce, which WriteAck echoes back in its `token` field. The nonce is
- * generated here rather than in the browser: the browser must not be able to choose it, and only
- * the bridge knows which requests can carry one.
- */
-function writeToken(name, body) {
-    const file = whitelist.resolveToken(name);
+// ---- the request channel (REVIEW.md F3) -----------------------------------------------------------
+//
+// EVERY REQUEST HAS AN ID, and the id is in the file name: Data/Live/requests/<name>.<id>.token,
+// answered by <name>.<id>.ack.json with the id echoed inside. Until 22 September 2026 the token was
+// <name>.token - one fixed file per operation - so a second request published while the shard was
+// running the first was deleted, unread, by the first one's cleanup, and two requests dropped
+// between two polls collapsed into one. Session 1's nonce (a `#abcd1234` on the body) let a waiter
+// refuse somebody else's ack; it could not keep the request alive. The nonce is gone with the fixed
+// name: the id does both jobs, and the body is arguments only.
+//
+// WHAT THE DISK SAYS ABOUT A REQUEST, which is what makes the outcome vocabulary honest here:
+//
+//   <name>.<id>.token     queued - the shard has not looked at it. The bridge may WITHDRAW it (a
+//                         delete, which races the shard's claim atomically: one of the two wins),
+//                         and then the outcome is NotRun - nothing happened, safe to ask again.
+//   <name>.<id>.claimed   running - the shard renamed the token before dispatching. A waiter that
+//                         gives up now reports Unknown.
+//   <name>.<id>.ack.json  done - completed or faulted, in the ack's own words.
+//   none of the three     Unknown: a boot swept it, or the ack was pruned, or it never existed.
+//
+// AN ACK MATCHES A REQUEST ONLY ON ITS ID AND THE SHARD'S CURRENT BOOT. The current boot is what
+// Data/Live/health.json says - the shard's own statement, rewritten by every boot within seconds
+// and deleted by the poller's boot sweep so it is absent rather than stale in between. An ack with
+// no id, another id, or another boot's id is IGNORED and reported (it is somebody else's answer, or
+// a previous process's), never taken as this request's. See matchAck.
+//
+// NotRun is the one outcome the bridge retries on its own, once, because it is the one outcome
+// that says nothing happened. Unknown is never retried: re-query the state instead (LoopQueue.cs,
+// the outcome contract).
 
-    if (!file) {
+/** Twelve hex characters: enough that two requests in a session never share one. */
+function newRequestId() {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+}
+
+/**
+ * Writes a request token, and returns its id.
+ *
+ * PUBLISHED BY RENAME, onto a name nobody else can be using. fs.writeFileSync truncates and then
+ * writes, so a poll landing between the two reads an empty or half-written token; a rename within
+ * one directory is atomic on NTFS and POSIX alike, so the shard sees the whole file or no file.
+ * AtomicFile.Write does exactly this from the other side, for the same reason.
+ *
+ * ONE UNCLAIMED TOKEN PER OPERATION (session 1's interim guard, kept as policy): an unclaimed token
+ * for this operation is a request the shard has not looked at yet, and a second one behind it
+ * would only queue. A 409 says so. Per OPERATION rather than global: a nav-reload has no reason to
+ * refuse because a botinfo is pending. A CLAIMED token does not count - that request is running,
+ * and the next one queues behind it in its own file, which is the whole point of the id.
+ */
+function writeToken(name, body, id) {
+    if (!whitelist.isRequestName(name)) {
         throw Object.assign(new Error('Bad request name.'), { status: 400 });
     }
 
     fs.mkdirSync(whitelist.REQUEST_DIR, { recursive: true });
 
-    if (fs.existsSync(file)) {
+    const pending = whitelist.listTokens(name);
+
+    if (pending.length > 0) {
         throw Object.assign(
-            new Error(`The shard has not picked up the last '${name}' request yet.`),
+            new Error(`The shard has not picked up the last '${name}' request yet (${pending[0]}).`),
             { status: 409 });
     }
 
-    const nonce = NONCED.has(name) ? crypto.randomUUID().slice(0, 8) : null;
-    const text = [(body || '').trim(), nonce ? `#${nonce}` : ''].filter(Boolean).join(' ');
-    const ack = whitelist.resolveAck(name);
+    const requestId = id || newRequestId();
+    const file = whitelist.resolveToken(name, requestId);
 
-    if (ack) {
-        fs.rmSync(ack, { force: true });
+    if (!file) {
+        throw Object.assign(new Error('Bad request id.'), { status: 400 });
     }
 
     // A unique staging name, so two writers cannot collide on the temp file either, and in the
-    // same directory, because a rename across volumes is a copy and is not atomic.
+    // same directory, because a rename across volumes is a copy and is not atomic. It does not
+    // end in .token, so the poller's name filter never sees it.
     const staged = `${file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
 
     try {
-        fs.writeFileSync(staged, text + '\n', 'utf8');
+        fs.writeFileSync(staged, (body || '').trim() + '\n', 'utf8');
         fs.renameSync(staged, file);
     } catch (error) {
         fs.rmSync(staged, { force: true });
         throw error;
     }
 
-    return nonce;
+    return requestId;
 }
 
 /** An ack that may be half-written or absent is simply not an ack yet. */
@@ -1089,32 +1108,166 @@ function readAck(file) {
     }
 }
 
-/** Waits for THIS run's ack, or gives up. Returns null on the timeout rather than throwing. */
-function waitForAck(name, nonce, timeoutMs) {
-    const file = whitelist.resolveAck(name);
+/**
+ * The shard's current boot, as it states it in Data/Live/health.json, or null when there is no
+ * such file - a shard that has not written one yet (the poller's boot sweep deletes the previous
+ * boot's, and the first write is five seconds in), or one that never booted against this tree.
+ * Read fresh each time; a cached value would be exactly the stale bootId this exists to refuse.
+ */
+function currentBootId() {
+    const health = readAck(whitelist.FILES.health);
+
+    return health && typeof health.bootId === 'string' && health.bootId.length > 0 ? health.bootId : null;
+}
+
+/**
+ * Whether an ack answers THIS request. Pure, exported for the tests.
+ *
+ * Returns {matched: true}, or {matched: false, reason} where reason is null for "not an ack yet"
+ * and a sentence for an ack that exists and is somebody else's: no id, another id, or a boot that
+ * is not the one health.json names. Those are reported to the caller, never acted on.
+ */
+function matchAck(ack, id, bootId) {
+    if (!ack || !ack.utc) {
+        return { matched: false, reason: null };
+    }
+
+    if (typeof ack.id !== 'string' || ack.id.length === 0) {
+        return {
+            matched: false,
+            reason: `an ack with no request id (for '${ack.request || '?'}'); a shard from before the request-id protocol?`
+        };
+    }
+
+    if (ack.id !== id) {
+        return { matched: false, reason: `an ack for request ${ack.id}, not ${id}` };
+    }
+
+    if (bootId && ack.bootId !== bootId) {
+        return {
+            matched: false,
+            reason: ack.bootId
+                ? `an ack from boot ${ack.bootId}, but the shard is at boot ${bootId} (health.json)`
+                : `an ack with no bootId while the shard is at boot ${bootId} (health.json)`
+        };
+    }
+
+    return { matched: true };
+}
+
+/** Where a request with no ack stands, read off the disk. */
+function requestState(name, id) {
+    if (fs.existsSync(whitelist.resolveToken(name, id))) {
+        return 'queued';
+    }
+
+    if (fs.existsSync(whitelist.resolveClaimed(name, id))) {
+        return 'running';
+    }
+
+    return 'gone';
+}
+
+/**
+ * Waits for the ack to request `id`, or gives up and says which of NotRun and Unknown it is.
+ *
+ * Resolves {outcome, ack, id, ignored, message}. `outcome` is completed or faulted when an ack
+ * matched (faulted is the ack's ok:false), notrun when the token was still unclaimed at the
+ * timeout and was withdrawn, unknown otherwise. `ignored` lists every ack that was seen and
+ * refused, with the reason. A matched ack is deleted: it has been read by the one process it was
+ * for. A withdraw that finds the token already claimed - the shard got there between the check
+ * and the delete - polls two more seconds for the ack before giving up as unknown.
+ */
+function waitForAck(name, id, timeoutMs) {
+    const ackFile = whitelist.resolveAck(name, id);
+    const tokenFile = whitelist.resolveToken(name, id);
     const deadline = Date.now() + timeoutMs;
+    const ignored = [];
+    const seconds = Math.round(timeoutMs / 1000);
+
+    let grace = null;
 
     return new Promise((resolve) => {
         const poll = () => {
-            const ack = readAck(file);
-            const mine = ack && ack.utc
-                && (!nonce || String(ack.token || '').endsWith(`#${nonce}`));
+            const ack = readAck(ackFile);
 
-            if (mine) {
-                resolve(ack);
+            if (ack) {
+                const verdict = matchAck(ack, id, currentBootId());
+
+                if (verdict.matched) {
+                    fs.rmSync(ackFile, { force: true });
+
+                    resolve({
+                        outcome: ack.outcome === 'notrun' ? 'notrun' : (ack.ok === true ? 'completed' : 'faulted'),
+                        ack, id, ignored, message: ack.message || ''
+                    });
+                    return;
+                }
+
+                if (verdict.reason && !ignored.includes(verdict.reason)) {
+                    ignored.push(verdict.reason);
+                    console.log(`request: ${name} ${id} ignored ${verdict.reason}`);
+                }
+            }
+
+            const now = Date.now();
+
+            if (now < deadline || (grace !== null && now < grace)) {
+                setTimeout(poll, 200);
                 return;
             }
 
-            if (Date.now() >= deadline) {
-                resolve(null);
-                return;
+            if (grace === null && fs.existsSync(tokenFile)) {
+                try {
+                    // The withdraw. Without `force`, so a token the shard claimed a moment ago
+                    // throws rather than "succeeds" - and then the request is running, not unrun.
+                    fs.rmSync(tokenFile);
+
+                    resolve({
+                        outcome: 'notrun', ack: null, id, ignored,
+                        message: `The shard did not pick up the ${name} request within ${seconds}s; it was withdrawn and nothing ran.`
+                    });
+                    return;
+                } catch {
+                    grace = Date.now() + 2000;
+                    setTimeout(poll, 200);
+                    return;
+                }
             }
 
-            setTimeout(poll, 200);
+            resolve({
+                outcome: 'unknown', ack: null, id, ignored,
+                message: `The shard did not answer the ${name} request within ${seconds}s. Its outcome is unknown - `
+                    + 'it may have run, or still be running.'
+                    + (ignored.length > 0 ? ` Ignored: ${ignored.join('; ')}.` : '')
+            });
         };
 
         poll();
     });
+}
+
+/**
+ * Drops a token and waits for its ack: the one helper every caller in this file uses.
+ *
+ * `retryNotRun` asks once more, with a fresh id, when the shard never picked the token up - the
+ * one outcome that says nothing happened. The second attempt's result carries `retried` naming
+ * the first id. Nothing else is ever retried here.
+ */
+async function requestAndWait(name, body, timeoutMs, options) {
+    const first = await waitForAck(name, writeToken(name, body), timeoutMs);
+
+    if (first.outcome !== 'notrun' || !(options && options.retryNotRun)) {
+        return first;
+    }
+
+    console.log(`request: ${name} ${first.id} was never picked up; asking once more`);
+
+    const second = await waitForAck(name, writeToken(name, body), timeoutMs);
+
+    second.retried = first.id;
+
+    return second;
 }
 
 /**
@@ -1135,10 +1288,10 @@ async function dropToken(name, request, response) {
     }
 
     try {
-        const nonce = writeToken(name, body);
+        const id = writeToken(name, body);
 
-        // The nonce goes back so the caller's own ack poll can tell this run from the last one.
-        sendJson(response, 202, { ok: true, request: name, nonce });
+        // The id goes back so the caller's own ack poll asks for this request and no other.
+        sendJson(response, 202, { ok: true, request: name, id });
     } catch (error) {
         sendError(response, error.status || 500, error.message);
     }
@@ -1385,23 +1538,36 @@ function readBootRefusal(since) {
     return refusal;
 }
 
+/**
+ * The words for a request that never got an answer, before the leg's own judge speaks: a token
+ * the shard never picked up (twice) is NotRun and says so; anything else is the judge's "unknown".
+ */
+function unanswered(result, what) {
+    if (result.outcome === 'notrun') {
+        return `The shard did not pick up the ${what} request (${result.retried} and then ${result.id}); `
+            + 'nothing ran. Is it running?';
+    }
+
+    return null;
+}
+
 async function runRestart() {
-    const saveNonce = writeToken('save', '');
-    const saved = judgeSaveAck(await waitForAck('save', saveNonce, 60000));
+    const saveResult = await requestAndWait('save', '', 60000, { retryNotRun: true });
+    const saved = judgeSaveAck(saveResult.ack);
 
     if (!saved.ok) {
-        throw new Error(saved.reason);
+        throw new Error(unanswered(saveResult, 'save') || saved.reason + ignoredSuffix(saveResult));
     }
 
     restartStep('stopping',
-        `Saved generation ${saved.generation} (${saved.message}). Stopping the shard...`,
+        `Saved generation ${saved.generation} (${saved.message}, request ${saveResult.id}). Stopping the shard...`,
         { generation: saved.generation, bootId: saved.bootId });
 
-    const killNonce = writeToken('shutdown', '');
-    const stopped = judgeShutdownAck(await waitForAck('shutdown', killNonce, 30000), saved);
+    const stopResult = await requestAndWait('shutdown', '', 30000, { retryNotRun: true });
+    const stopped = judgeShutdownAck(stopResult.ack, saved);
 
     if (!stopped.ok) {
-        throw new Error(stopped.reason);
+        throw new Error(unanswered(stopResult, 'shutdown') || stopped.reason + ignoredSuffix(stopResult));
     }
 
     for (let attempt = 0; attempt < 60 && shardIsUp(); attempt++) {
@@ -1446,10 +1612,13 @@ async function runRestart() {
             continue;
         }
 
-        let nonce;
+        let probe;
 
         try {
-            nonce = writeToken('health', '');
+            // Two seconds, then withdrawn (NotRun) or given up on (Unknown - a token the boot
+            // sweep took, or a poller not yet started). Both are "ask again next second"; only
+            // an ack is an answer.
+            probe = await requestAndWait('health', '', 2000);
         } catch (error) {
             // The previous poll's token is still on disk, which is the normal state of a shard
             // that is not up yet. Wait for the next second rather than treating it as an answer.
@@ -1460,13 +1629,11 @@ async function runRestart() {
             throw error;
         }
 
-        const ack = await waitForAck('health', nonce, 2000);
-
-        if (!ack) {
+        if (!probe.ack) {
             continue;
         }
 
-        const back = judgeBootAck(ack, stopped);
+        const back = judgeBootAck(probe.ack, stopped);
 
         if (!back.ok) {
             throw new Error(back.reason);
@@ -1483,67 +1650,187 @@ async function runRestart() {
     throw new Error('The shard did not answer after 120 attempts (at least two minutes, up to about six). Check its window.');
 }
 
-/** Runs the reload for a file and shapes the half of the answer that comes from the shard. */
-async function reloadFor(name) {
-    const request = whitelist.reloadFor(name);
+// ---- writing a data file: the shard commits, the bridge stages ----------------------------------
+//
+// THE SHARD IS THE WRITER of the editor's data files (from 22 September 2026; REVIEW.md, "Restore
+// has a lost-update hole"). Until then this file wrote navigation.json itself after checking an
+// OPTIONAL base hash, and restore checked nothing; and the check and the rename were two steps in
+// one process while [NavRecord, in the other process, could write the same file between them. Now
+// the bridge computes the new text, writes it BESIDE the target as <file>.<id>.staged, and drops a
+// `commit` token carrying the version the save was based on; the shard - on the game thread, where
+// every other writer of these files runs - compares, replaces, keeps the old file as .bak, reloads,
+// and answers in its own words, naming who last wrote the file and when if it refuses.
+//
+// The version is REQUIRED. A save that cannot say what it was based on cannot be told whether that
+// is still what is there, and "changed on disk since you loaded it" was only ever asked of savers
+// who volunteered a hash. `null` means "this file does not exist yet" (the Spawner tool creating a
+// file), which the shard spells `none`.
+//
+// WHAT THE ANSWERS MEAN (the outcome contract, LoopQueue.cs):
+//   200 written:true reloaded:true      committed and reloaded. Carries id, generation, hash, backupHash.
+//   200 written:true reloaded:false     committed; the shard refused to load it and says why. The
+//                                       persistent banner's case: the file on disk is not what the
+//                                       shard is running, and both halves have to reach the editor.
+//   409                                 refused, nothing written: `error` is the shard's own message,
+//                                       with expected/actual/changedAt/changedBy beside it.
+//   503 outcome:notrun                  the shard never picked the commit up, twice; nothing written,
+//                                       the staged file removed. A save with the shard down lands here.
+//   504 outcome:unknown                 the shard claimed the commit and never answered, and the
+//                                       file on disk is not the version this save wrote. Not written
+//                                       as far as anyone can tell; never retried by the bridge.
+//   200 outcome:unknown written:true    the same, but the file on disk IS the version this save
+//                                       wrote: committed, reload unknown.
 
-    if (!request) {
-        return { reloaded: false, message: 'Nothing reloads that file.', errors: [], warnings: [] };
+/** The base version a save or restore sent, as the shard spells it, or null when it sent nothing usable. */
+function baseVersionOf(value) {
+    if (value === null) {
+        return 'none';
     }
 
-    // spawn-reload is the only request that takes an argument: the file to reload, relative to
-    // Spawns/Custom and never a path. The shard resolves it against that root and refuses anything
-    // landing outside - the same shape as the whitelist here, enforced on both sides rather than
-    // trusted from one.
-    const relative = whitelist.spawnRelative(name);
+    return typeof value === 'string' && /^[0-9a-f]{16}$/.test(value) ? value : null;
+}
 
-    let nonce;
+/** "; ignored: ..." for a response, when acks were seen and refused along the way. */
+function ignoredSuffix(result) {
+    return result.ignored && result.ignored.length > 0 ? ` Ignored: ${result.ignored.join('; ')}.` : '';
+}
 
-    try {
-        nonce = writeToken(request, relative || '');
-    } catch (error) {
-        // A reload that is already pending is not a failed SAVE: the file is written, and the
-        // shard is about to read a request for it anyway. Reported the same way a refused reload
-        // is - written, not reloaded, with the reason - rather than as a 500 over the whole save.
-        if (error.status !== 409) {
-            throw error;
-        }
-
-        return { reloaded: false, message: error.message, errors: [], warnings: [] };
-    }
-
-    const ack = await waitForAck(request, nonce, ACK_TIMEOUT_MS);
-
-    if (!ack) {
-        return {
-            reloaded: false,
-            message: `The shard did not answer within ${ACK_TIMEOUT_MS / 1000}s. The reload's outcome is `
-                + 'unknown - it may have run, or run later when the shard picks the token up. The '
-                + 'file is written either way.',
-            errors: [],
-            warnings: []
-        };
-    }
-
+/** The common tail of every commit and restore answer. */
+function stamp(result) {
     return {
-        reloaded: ack.ok === true,
-        message: ack.message || '',
-        errors: ack.errors || [],
-        warnings: ack.warnings || []
+        id: result.id,
+        outcome: result.outcome,
+        generation: result.ack && Number.isInteger(result.ack.generation) ? result.ack.generation : null,
+        ignored: result.ignored || []
     };
 }
 
 /**
- * Saves one data file, then asks the shard to reload it.
+ * Stages `next` beside the file and asks the shard to commit it. Returns {status, body}.
  *
- * WRITTEN AND NOT RELOADED IS A 200. The write happened; the shard is running the previous config
- * and has said why. Reporting that as an HTTP error would send the caller down the "nothing was
- * written" path, and the file on disk would disagree with what the editor believed - which is the
- * exact failure the persistent banner exists for.
+ * Retries once on NotRun with a fresh id and a fresh staged copy (the staged name carries the
+ * id). The staged file is removed on NotRun and on any refusal - the shard removes it on its own
+ * refusals too, and the boot sweep removes what neither of us could.
+ */
+async function commitFile(name, file, base, next, reload) {
+    const wrote = hashOf(next);
+    const display = path.basename(file);
+    const seconds = Math.round(ACK_TIMEOUT_MS / 1000);
+
+    let result = null;
+    let retried = null;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const id = newRequestId();
+        const staged = whitelist.resolveStaged(name, id);
+
+        fs.writeFileSync(staged, next, 'utf8');
+
+        try {
+            result = await waitForAck(
+                'commit',
+                writeToken('commit', `file=${name} base=${base} wrote=${wrote} reload=${reload ? 'yes' : 'no'}`, id),
+                ACK_TIMEOUT_MS);
+        } catch (error) {
+            fs.rmSync(staged, { force: true });
+            throw error;
+        }
+
+        if (result.outcome !== 'notrun') {
+            break;
+        }
+
+        fs.rmSync(staged, { force: true });
+        retried = id;
+        console.log(`commit: ${name} ${id} was never picked up; asking once more`);
+    }
+
+    result.retried = retried;
+
+    if (result.outcome === 'notrun') {
+        return {
+            status: 503,
+            body: {
+                error: `The shard did not pick up the save (requests ${retried} and ${result.id}); nothing was written. Is it running?`,
+                written: false,
+                ...stamp(result)
+            }
+        };
+    }
+
+    if (result.outcome === 'unknown') {
+        const now = versionOf(file);
+        const written = now === wrote;
+
+        return {
+            status: written ? 200 : 504,
+            body: written
+                ? {
+                    written: true,
+                    reloaded: false,
+                    hash: wrote,
+                    backupHash: versionOf(file + '.bak'),
+                    backup: display + '.bak',
+                    message: `${result.message} The file on disk is the version this save wrote; whether the shard `
+                        + 'reloaded it is unknown - it may have, or may still be doing so.',
+                    errors: [],
+                    warnings: [],
+                    ...stamp(result)
+                }
+                : {
+                    error: `${result.message} The file on disk is not the version this save wrote (it is at ${now}); `
+                        + 'the commit may still run. Reload before saving again.',
+                    written: false,
+                    ...stamp(result)
+                }
+        };
+    }
+
+    const ack = result.ack;
+    const commit = ack.commit || {};
+
+    if (commit.refused) {
+        return {
+            status: 409,
+            body: {
+                error: ack.message,
+                expected: commit.expected,
+                actual: commit.actual,
+                changedAt: commit.changedAt,
+                changedBy: commit.changedBy,
+                written: false,
+                ...stamp(result)
+            }
+        };
+    }
+
+    if (!commit.written) {
+        return { status: 500, body: { error: ack.message, written: false, ...stamp(result) } };
+    }
+
+    return {
+        status: 200,
+        body: {
+            written: true,
+            reloaded: commit.reloaded === true,
+            hash: commit.hash,
+            backupHash: commit.backupHash,
+            backup: display + '.bak',
+            message: ack.message || '',
+            errors: ack.errors || [],
+            warnings: ack.warnings || [],
+            ...stamp(result)
+        }
+    };
+}
+
+/**
+ * Saves one data file: computes the new text, stages it, and asks the shard to commit it.
  *
  * The dry run validates. A real save does NOT: validate.js is a replica of the shard's rules, and
  * a false positive in a replica must never be able to stop someone writing a file the shard would
- * have accepted. The shard is the authority, and it gets to say no itself.
+ * have accepted. The shard is the authority, and it gets to say no itself - about the content on
+ * the reload, and, since 22 September 2026, about the version too.
  */
 async function handleSave(name, request, response) {
     const file = whitelist.resolveSave(name);
@@ -1562,19 +1849,18 @@ async function handleSave(name, request, response) {
         return;
     }
 
-    const current = readText(file);
-    const hash = hashOf(current);
+    // After the name, so "Unknown file" still wins for a name that is not one; before anything
+    // else, because a save that cannot say what it was based on is not a save this bridge makes.
+    const base = baseVersionOf(payload.baseHash);
 
-    if (payload.baseHash !== undefined && payload.baseHash !== hash) {
-        sendJson(response, 409, {
-            error: `${path.basename(file)} changed on disk since you loaded it.`,
-            expected: payload.baseHash,
-            actual: hash
-        });
-
+    if (base === null) {
+        sendError(response, 400,
+            `A save has to say which version of ${path.basename(file)} it is based on: baseHash from /api/shapes `
+            + 'or /api/spawners, or null for a file that does not exist yet.');
         return;
     }
 
+    const current = readText(file);
     const relative = whitelist.spawnRelative(name);
 
     let next;
@@ -1599,34 +1885,22 @@ async function handleSave(name, request, response) {
         return;
     }
 
-    if (fs.existsSync(file)) {
-        fs.copyFileSync(file, file + '.bak');
-    }
+    const answer = await commitFile(name, file, base, next, payload.reload !== false);
 
-    // Temp file then rename, mirroring AtomicFile.Write on the shard side: the shard polls these
-    // files on its own schedule, and a truncate-then-write leaves a window where it reads nothing.
-    fs.writeFileSync(file + '.tmp', next, 'utf8');
-    fs.renameSync(file + '.tmp', file);
-
-    const outcome = payload.reload === false
-        ? { reloaded: false, message: 'Written; not reloaded.', errors: [], warnings: [] }
-        : await reloadFor(name);
-
-    sendJson(response, 200, {
-        written: true,
-        hash: hashOf(next),
-        backup: path.basename(file) + '.bak',
-        ...outcome
-    });
+    sendJson(response, answer.status, answer.body);
 }
 
 /**
- * Puts a file back to the .bak, which is what makes "discard" mean discard.
+ * Puts a file back to the .bak, which is what makes "discard" mean discard - and only the .bak the
+ * caller means, over only the file the caller saw.
  *
  * A save whose reload was rejected has already written to disk. Dropping the editor's local edits
  * alone would leave that file in place to fail at the next restart, so the file has to go back
  * too - and the .bak is the pre-save bytes exactly, which no reconstruction from shapes can
- * promise.
+ * promise. The body is {baseHash, backupHash}: the version the live file must still be at, and the
+ * version the .bak must be at (the `backupHash` the save that made it answered with). The shard
+ * checks both and refuses in its own words; a stale tab cannot put back a backup that is not the
+ * one it remembers, over a file somebody else has since written.
  */
 async function handleRestore(name, request, response) {
     const file = whitelist.resolveSave(name);
@@ -1642,16 +1916,80 @@ async function handleRestore(name, request, response) {
         return;
     }
 
-    fs.copyFileSync(backup, file + '.tmp');
-    fs.renameSync(file + '.tmp', file);
+    let payload;
 
-    const outcome = await reloadFor(name);
+    try {
+        const text = await readBody(request, MAX_BODY);
+
+        payload = text.trim().length === 0 ? {} : JSON.parse(text);
+    } catch (error) {
+        sendError(response, error.status || 400, error.status ? error.message : 'Malformed request body.');
+        return;
+    }
+
+    const base = baseVersionOf(payload.baseHash);
+    const backupHash = baseVersionOf(payload.backupHash);
+
+    if (base === null || base === 'none' || backupHash === null || backupHash === 'none') {
+        sendError(response, 400,
+            `A restore has to say which version of ${path.basename(file)} it is putting the backup over (baseHash) `
+            + 'and which backup it means (backupHash, from the save that made it).');
+        return;
+    }
+
+    const result = await requestAndWait(
+        'restore', `file=${name} base=${base} backup=${backupHash}`, ACK_TIMEOUT_MS, { retryNotRun: true });
+
+    if (result.outcome === 'notrun') {
+        sendJson(response, 503, {
+            error: `The shard did not pick up the restore (requests ${result.retried} and ${result.id}); nothing was written. Is it running?`,
+            written: false,
+            ...stamp(result)
+        });
+        return;
+    }
+
+    if (result.outcome === 'unknown') {
+        sendJson(response, 504, {
+            error: `${result.message} ${path.basename(file)} is at ${versionOf(file)} now. Reload before deciding anything.`,
+            written: false,
+            ...stamp(result)
+        });
+        return;
+    }
+
+    const ack = result.ack;
+    const commit = ack.commit || {};
+
+    if (commit.refused) {
+        sendJson(response, 409, {
+            error: ack.message,
+            expected: commit.expected,
+            actual: commit.actual,
+            changedAt: commit.changedAt,
+            changedBy: commit.changedBy,
+            written: false,
+            ...stamp(result)
+        });
+        return;
+    }
+
+    if (!commit.written) {
+        sendJson(response, 500, { error: ack.message, written: false, ...stamp(result) });
+        return;
+    }
 
     sendJson(response, 200, {
         written: true,
         restored: true,
-        hash: hashOf(readText(file)),
-        ...outcome
+        reloaded: commit.reloaded === true,
+        hash: commit.hash,
+        backupHash: commit.backupHash,
+        backup: path.basename(file) + '.bak',
+        message: ack.message || '',
+        errors: ack.errors || [],
+        warnings: ack.warnings || [],
+        ...stamp(result)
     });
 }
 
@@ -1728,6 +2066,7 @@ if (require.main === module) {
 
 module.exports = {
     MAX_SAVE_BODY,
-    handleRequest, hostIsLocal, refusalFor, hashOf, ACK_TIMEOUT_MS, SESSION_SECRET, art,
-    judgeSaveAck, judgeShutdownAck, judgeBootAck
+    handleRequest, hostIsLocal, refusalFor, hashOf, versionOf, ACK_TIMEOUT_MS, SESSION_SECRET, art,
+    judgeSaveAck, judgeShutdownAck, judgeBootAck,
+    matchAck, requestAndWait, currentBootId, newRequestId
 };
