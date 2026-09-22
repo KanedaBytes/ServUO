@@ -208,6 +208,12 @@ namespace Server.Custom
             passed &= RunGateIslandCheck(report);
             passed &= RunPersistenceCheck(report, from);
 
+            // The disk side of save integrity: a half-written store, a generation mismatch, an
+            // incomplete last save and an interrupted LoopQueue job, each proving a refusal or an
+            // unknown rather than a silent load, plus the generation agreement between the boot
+            // check and every store (Scripts/Custom/Core/SaveIntegrity.cs, fixtures).
+            passed &= SaveIntegrity.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 
