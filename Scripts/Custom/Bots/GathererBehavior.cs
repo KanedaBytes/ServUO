@@ -392,6 +392,19 @@ namespace Server.Custom
         /// </summary>
         private void NoticeYield(PlayerBot bot)
         {
+            NoticeYieldNow(bot);
+        }
+
+        /// <summary>
+        /// NoticeYield, for BotGoodsLedger.Reconcile: the census asks a working gatherer to take
+        /// its own look at the pack BEFORE it compares custody, so a unit HarvestSystem.Give
+        /// dropped in since the last behaviour tick is counted once, here, where the shift total
+        /// and the botlog line are - rather than once by the census as "appeared" and again by
+        /// this poll on the next tick, which left TrackedCustody one above the pack and made the
+        /// census after that call the difference unexplained. See Reconcile.
+        /// </summary>
+        internal void NoticeYieldNow(PlayerBot bot)
+        {
             int carried = Carried(bot);
 
             if (carried > _carriedSeen)

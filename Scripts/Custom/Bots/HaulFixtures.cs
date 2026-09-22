@@ -51,6 +51,7 @@ namespace Server.Custom
                 passed &= FixtureInterruptedHandover(report);
                 passed &= FixtureLogoutSkipsACarryingBot(report);
                 passed &= FixtureRestartLossIsRecorded(report);
+                passed &= FixtureCensusBeforeTheGathererLooks(report);
             }
             catch (Exception ex)
             {
@@ -522,6 +523,77 @@ namespace Server.Custom
             stack.Amount = amount;
 
             bot.Backpack.DropItem(stack);
+        }
+
+        // ---- 6. a census that lands between a harvest and the gatherer's own look ----
+
+        /// <summary>
+        /// Ore lands in a working gatherer's pack the way HarvestSystem.Give puts it there - told
+        /// to nobody - and the census runs before the gatherer's behaviour has ticked. It must be
+        /// counted as mined exactly once, and the census after that must find nothing missing.
+        ///
+        /// Before the fix this counted five mined twice and then reported five unexplained: the
+        /// equation still balanced, which is why nothing caught it until a live window with
+        /// real miners tripped the alarm three times in ten minutes.
+        /// </summary>
+        private static bool FixtureCensusBeforeTheGathererLooks(List<string> report)
+        {
+            PlayerBot miner = null;
+
+            try
+            {
+                miner = Make(BotClass.Miner);
+
+                // Pointed at a real mine, because a gatherer with no work zone walks itself back
+                // to Traveler from inside OnAttached - and a fixture whose gatherer had quietly
+                // detached would be testing a bot with no gatherer at all, which is exactly the
+                // path that passes either way. ResolveSite takes the zone from the destination, so
+                // the bot stays on Map.Internal; standing outside the zone, it only arms a walk-in
+                // deadline, and no behaviour tick runs inside a fixture.
+                List<NavDestination> mines = Nav.Destinations(Map.Trammel, "mine", null);
+
+                if (mines.Count == 0)
+                {
+                    return Expect(report, false, "", "no mine on the graph to point a fixture gatherer at");
+                }
+
+                var gatherer = new GathererBehavior();
+                gatherer.DestinationId = mines[0].Id;
+                miner.SetBehavior(gatherer, "fixture");
+
+                if (!ReferenceEquals(miner.Behavior, gatherer))
+                {
+                    return Expect(report, false, "", "the fixture gatherer did not stay attached, so the case was never tested");
+                }
+
+                // Settle whatever the bot already holds, so the assertions are about the five.
+                BotGoodsLedger.Reconcile();
+
+                int minedBefore = BotWorkSites.Mined;
+                int unexplainedBefore = BotGoodsLedger.Unexplained;
+
+                Put(miner, typeof(IronOre), 5);
+
+                BotGoodsLedger.Reconcile();
+
+                // The gatherer's own poll, as its next tick would run it.
+                gatherer.NoticeYieldNow(miner);
+
+                BotGoodsLedger.Reconcile();
+
+                int mined = BotWorkSites.Mined - minedBefore;
+                int unexplained = BotGoodsLedger.Unexplained - unexplainedBefore;
+
+                return Expect(
+                    report,
+                    mined == 5 && unexplained == 0,
+                    "ore the census sees before the gatherer does is mined once and nothing goes missing",
+                    String.Format("mined {0} (expected 5), unexplained {1} (expected 0)", mined, unexplained));
+            }
+            finally
+            {
+                Unmake(miner);
+            }
         }
 
         private static bool Expect(List<string> report, bool condition, string ok, string fail)

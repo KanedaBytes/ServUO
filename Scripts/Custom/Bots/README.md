@@ -2635,6 +2635,21 @@ packs instead of draining to a bank box, until `GathererBehavior.Capacity` (60, 
 stops that bot mining. That is the rule Sean chose over banking the overflow, and the health line
 reports `held` and the count of part-refused hand-overs so it is visible rather than inferred.
 
+**The census asks a working gatherer to look first** (22 September 2026). Once gatherers were
+single-minded and actually mining, the first live window tripped the F5 alarm three times in ten
+minutes. Each time it named a live miner at its face as having lost one unit. Nothing was lost; the
+unit was counted twice. `HarvestSystem.Give` drops ore in from its own timer, and
+`GathererBehavior.NoticeYield` counts it on the next behaviour tick, up to two seconds later. A
+census landing in that gap booked the ore as "appeared" (mining nothing else saw), then
+`NoticeYield` booked it again. `TrackedCustody` ended one above the pack, and the next census called
+the difference unexplained. The equation still balanced (+1 mined, +1 unexplained), which is why it
+went unseen while organic mining was rare. `Reconcile` now calls `NoticeYieldNow` on a bot whose
+brain is a gatherer before it compares custody. `HaulFixtures` rule 6 reproduces it: ore put in a
+working gatherer's pack behind everyone's back, a census, then the gatherer's own poll. Without the
+fix that reads mined 10 and unexplained 5; with it, 5 and 0. The fixture's gatherer is pointed at a
+real mine, because one with no work zone walks itself back to Traveler inside `OnAttached`, and a
+fixture on that path would pass either way.
+
 **Upstream has no answer here and that is the seam.** `BotEconomy.DeliverMaterials`
 (uo-offline `BotEconomy.cs:273-345`) deletes the haul exactly as ours did, and its overflow past the
 stock cap "goes to the shop" — a sentence, not a code path; it is harmless there because gold

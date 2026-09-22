@@ -557,6 +557,22 @@ namespace Server.Custom
 
                 bots++;
 
+                // A WORKING GATHERER LOOKS FIRST. HarvestSystem.Give drops ore into the pack from
+                // its own timer, and GathererBehavior.NoticeYield counts it on the next behaviour
+                // tick, up to two seconds later. A census landing in that gap used to count the
+                // unit here as "appeared" and then NoticeYield counted it again, leaving
+                // TrackedCustody one above the pack - so the census after that reported a live,
+                // perfectly honest miner as having lost a unit (F5's alarm, three times in the
+                // first ten-minute window after gatherers started working in earnest, 22 September
+                // 2026). Letting the gatherer notice now means the appeared branch below is left
+                // for what it says it is for: mining nothing else saw.
+                var gatherer = bot.Behavior as GathererBehavior;
+
+                if (gatherer != null)
+                {
+                    gatherer.NoticeYieldNow(bot);
+                }
+
                 int actual = BotHaul.Custody(bot);
                 int tracked = bot.TrackedCustody;
 
