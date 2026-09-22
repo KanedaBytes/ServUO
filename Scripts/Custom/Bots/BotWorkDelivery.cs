@@ -376,8 +376,25 @@ namespace Server.Custom
                 // Exactly what was taken, and not a unit more. CrafterStock.Add turns raw into
                 // refined stock in the buyer's pack, so these units really are spent; the rest
                 // of the load never moved.
-                BotHaul.Consume(bot, raw, accepted);
-                BotGoodsLedger.NoteAccepted(bot, accepted);
+                //
+                // The books are told what was actually REMOVED, not what the receiver claimed.
+                // The two cannot differ today - `accepted` is clamped to what Offered counted a
+                // moment earlier, and nothing runs in between - but a receiver that reached into
+                // the seller's pack would break that, and the ledger would then be wrong rather
+                // than loud. It is loud instead.
+                int consumed = BotHaul.Consume(bot, raw, accepted);
+
+                if (consumed != accepted)
+                {
+                    Log.Warn(
+                        "{0} was told {1} {2} had been accepted but only {3} could be taken out of the pack.",
+                        bot.Name,
+                        accepted,
+                        raw.Name,
+                        consumed);
+                }
+
+                BotGoodsLedger.NoteAccepted(bot, consumed);
             }
 
             BotGoodsLedger.NoteHandover(bot, destinationId, offered, accepted);

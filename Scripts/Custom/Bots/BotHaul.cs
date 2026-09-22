@@ -279,6 +279,12 @@ namespace Server.Custom
 
                 if (item.Amount <= want)
                 {
+                    // READ THE SIZE FIRST. Container.TryDropItem merges into a matching stack
+                    // when it finds one (Server/Items/Container.cs), and StackWith DELETES the
+                    // item it merged; its Amount happens to survive the delete today, so counting
+                    // afterwards works by accident rather than by contract.
+                    int size = item.Amount;
+
                     // The whole stack, moved intact. A refused drop leaves it where it is and
                     // ends the attempt - a box that would not take this stack will not take the
                     // next one either.
@@ -287,7 +293,7 @@ namespace Server.Custom
                         return moved;
                     }
 
-                    moved += item.Amount;
+                    moved += size;
                     continue;
                 }
 

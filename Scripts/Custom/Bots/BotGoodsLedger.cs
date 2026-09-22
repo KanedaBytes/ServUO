@@ -180,6 +180,9 @@ namespace Server.Custom
         public static int LostStashAtCensus { get; private set; }
         public static int LostHaulAtCensus { get; private set; }
         public static int UnexplainedAtCensus { get; private set; }
+        public static int HandoversAtCensus { get; private set; }
+        public static int PartRefusedAtCensus { get; private set; }
+        public static int RefusedAtCensus { get; private set; }
 
         /// <summary>Live bots the last census walked.</summary>
         public static int Censused { get; private set; }
@@ -588,6 +591,9 @@ namespace Server.Custom
             LostStashAtCensus = LostStash;
             LostHaulAtCensus = LostHaul;
             UnexplainedAtCensus = Unexplained;
+            HandoversAtCensus = Handovers;
+            PartRefusedAtCensus = PartRefused;
+            RefusedAtCensus = Refused;
 
             LastReconcileUtc = DateTime.UtcNow;
             HasReconciled = true;
@@ -683,9 +689,9 @@ namespace Server.Custom
 
             text.AppendFormat(
                 " {0} hand-over(s) settled, {1} part-refused, {2} refused outright.",
-                Handovers,
-                PartRefused,
-                Refused);
+                HandoversAtCensus,
+                PartRefusedAtCensus,
+                RefusedAtCensus);
 
             if (_byReason.Count > 0)
             {

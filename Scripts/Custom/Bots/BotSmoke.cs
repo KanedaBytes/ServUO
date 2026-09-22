@@ -325,6 +325,11 @@ namespace Server.Custom
 
                 for (int i = keep; i < spawned.Count; i++)
                 {
+                    // Named, so the class audit's own teardown reads as a probe in the goods
+                    // journal rather than as an anonymous deletion. An audited gatherer is
+                    // spawned dressed, spawn stash and all (REVIEW.md F5, rule 4).
+                    spawned[i].DeletionReason = BotGoodsLedger.ReasonProbe;
+
                     spawned[i].Delete();
                 }
 
