@@ -379,6 +379,66 @@ looks like a mistake later, read the reason before "fixing" it back.
 > identical at both pins (`Data/Custom/reference/README.md` has the record-level comparison), so no
 > row that turns on waypoints or destinations is affected by the move.
 
+### Gatherers are single-minded again — a dropped override, restored 22 September 2026
+
+**This row records a divergence that was never chosen, and its repair.** Upstream makes a gatherer
+want its own site and almost nothing else. `uo-offline` `playerbots/source/CustomBots/Behaviors/DestinationType.cs:338-352`
+at `7f38c7c`, gated by `BotClassHelper.IsGatherer` (`BotClass.cs:154-155`), gives:
+
+| Destination | Upstream (gatherer) | Here, `destinations.singleMinded` |
+| --- | --- | --- |
+| own site (`MiningSpot` / `LumberSpot`) | 10.0 | `mine` / `lumber` 10.0 |
+| the other class's site | 0.0 | 0 (its `byType` default) |
+| `GatherSpot` | 8.0 | no such type here — untranslated |
+| `Bank` | 0.3 | 0.3 |
+| `Tavern`, `Inn` | 0.2 | 0.2 |
+| everything else | 0.02 | `otherwise` 0.02 |
+| a forge, guard post, home, crier | 0.02 | **0** — see below |
+
+The port kept upstream's mechanism — no work schedule, a shift starts only when the weighted
+destination roll lands on the bot's own site — and dropped the numbers that make the roll nearly
+certain. A Miner went through the ordinary `byType` × `byTag` table like a Swordsman with a hobby:
+`craft` 2.0 at every smithy, `gate` 1.5, 2.5× everything in its home town. Nothing recorded the change.
+`WORK-INVESTIGATION.md` found it: a Britain-born Miner picked a mine **about 6%** of the time and a
+Trinsic-born one **0.6%**, against upstream's **about 70%**.
+
+**Restored as data, not code.** `bots.json` `destinations.singleMinded` names a class and gives its
+whole answer: a type it names gets that weight, every other type gets `otherwise`, and **`byType` and
+`byTag` are not consulted** — upstream has no tag multiplier, and the `craft` 2.0 was half of what
+sent a Miner shopping. The dead `Miner` / `Lumberjack` keys went from `byType.gate`, `byType.mine`,
+`byType.lumber` and `byTag.craft` with it, and `Bots.Population` names any that come back as dead.
+It lives in `BotDestinationConfig.WeightFor`, the single entry point, so `Pick`, `StarvedClasses`,
+`EligibleCount` and `BotLifeProbe.DeriveWindow` cannot disagree about it.
+
+**Two things are ours, on purpose:**
+
+- **A type excluded by default stays excluded.** Where `byType`'s default is 0 — `home`, `guard`,
+  `work`, `forge`, and the other class's site — a single-minded class gets 0 unless its own table
+  names the type. Upstream gives a gatherer 0.02 at a forge; here a Miner at a forge is a Miner
+  loitering where a Smith works, and the haul roll already sends a laden one there on business.
+- **Everything after `WeightFor` still applies**: home bias (upstream's too), the crowd floor, the
+  just-left discount, and for a work site its vacancy and road distance (*Work sites are weighted by
+  how far they actually are*). The distance term is what keeps a Trinsic-born Miner's odds lower —
+  and what sends a Minoc Miner to the Minoc face once there is one.
+
+Predicted by an offline replica of `Pick` (a bot standing at its home bank, floors met, sites empty,
+tiles along the waypoint graph; the investigation's model, re-run):
+
+| | before | single-minded |
+| --- | --- | --- |
+| Britain-born Miner at `brit-bank` | 5.8% | **67.7%** |
+| Trinsic-born Miner at `trinsic-bank` | 0.6% | **18.2%** |
+| any Lumberjack | 0% | 0% — no lumber site existed until Yew Grove, below |
+
+**The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
+(`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
+(`DestinationType.cs:325-332`). Those are the target — but here a Fisherman arriving at a dock
+becomes nothing (`TravelerBehavior.BuildVisit` has no fishing behaviour to hand it), so a
+single-minded one would stand at a dock for 20-90 seconds and roll another, often through a
+moongate, all day. It waits for the dock session (seam 10), which gives it something to do there.
+The other artisans (Smith, Tailor, Carpenter) are single-minded upstream too and are not touched:
+their pull already lives in their station weights (*An artisan wants its own station*).
+
 ### Locomotion is an interface, not a per-behaviour step timer
 
 *Added 11 September 2026, with the `INavActor` extraction.*
@@ -1444,7 +1504,7 @@ reader of an older diff will find their markers and should not go looking for wh
 | 7 | `BankSitterBehavior`'s **three macro roles** | `ResistMacro`, `HidingMacro` and `StealthMacro` roll as `Regular`. Their **weights are kept** in `RollRole` behind markers, so restoring them is deleting three redirects rather than re-deriving upstream's distribution | Combat session, which brings spellcasting and `Hidden` toggling |
 | 8 | Gossip, and `PlayerBotBehavior`'s `GossipShare` branch | A marker comment. `Gossip/` is copied but never scanned, and its `{actor}`/`{other}`/`{when}` tokens are registered unwired — so the lines are doubly unreachable | Event-journal session, with `BotEventJournal` |
 | 9 | `friend_greet` and `BotSocialGraph` | Not wired. `{name}` **resolves**, but nothing decides that two bots are friends, so no path picks the category | Social session |
-| 10 | **Fisherman** — `CrafterProfiles` has no entry, `StationFor` answers `dock`, and no `dock` destination exists | Reported, not hidden: `Bots.Work` **fails** with "Fisherman works 'dock' and the graph has none". Its production is not a craft at all — upstream drove `Fishing.System`, walking to the water's edge and casting only when open water was directly adjacent, which needs their `IsWet` / `HasStandableStatic` scan to tell a pier from the sea | Dock session. Britain's waterfront is **The Oaken Oar** (1424,1747, the dockside tavern) and **Customs** (1480,1746, on the docks) |
+| 10 | **Fisherman** — `CrafterProfiles` has no entry and `StationFor` answers `dock`. **Corrected 22 September 2026:** the docks exist — the Trammel adopt brought nine, so the class is not stationless and `Bots.Work` does not report it — but a Fisherman arriving at one becomes nothing, because `BuildVisit` has no fishing behaviour to hand it | Its weights are left as they are until then; upstream's single-minded `dock` 8.0 / `Bank` 0.4 / else 0.02 is the target (Deviations, *Gatherers are single-minded again*). Its production is not a craft at all — upstream drove `Fishing.System`, walking to the water's edge and casting only when open water was directly adjacent, which needs their `IsWet` / `HasStandableStatic` scan to tell a pier from the sea | Dock session. Britain's waterfront is **The Oaken Oar** (1424,1747, the dockside tavern) and **Customs** (1480,1746, on the docks) |
 | 11 | The gatherer's **stable round trip** | The beast is deleted on delivery — upstream's own no-stables-in-range path. `AnimalTrainer.EndStable` hard-codes a 30gp fee from pack or bank, `DoClaim` is private, and there is no `stables` destination to walk to | Economy session (7f): add their Britain Stables (1393,1645, just outside our west edge), the fee, and the detour |
 | 12 | The **gold half of the hand-over** | The load moves, the coin does not. Upstream paid 2–4gp a unit from the crafter's purse and refused the sale when it was broke; the crafter's three-minute counter restock went with it | Economy session (7f) |
 | 13 | A gatherer **under attack** | Downs tools and travels. Upstream swapped to a defender `AdventurerBehavior` — "the tool is a real axe" — and there is no Adventurer here yet | Combat session |
@@ -2435,6 +2495,10 @@ Before this session `byTag.craft` gave Smith, Tailor and Carpenter **4.0** at al
 which was standing in for a station they did not have. They now have one, so that is down to 1.0 and
 the pull lives in `byType.forge` / `byTag.tailoring` / `byTag.woodworking`. `mine` and `lumber` are
 0.0 for everyone except the class that works them — nobody else wanders onto a rock face.
+
+A gatherer's own pull is not a `byType` entry any more: Miner and Lumberjack are
+`destinations.singleMinded` (Deviations, *Gatherers are single-minded again*), which is upstream's
+override restored.
 
 While `HaulPending`, a gatherer's weights are **replaced** rather than blended: 9.0 at a station
 whose trade buys what it is carrying, 2.0 at a bank, 0.02 everywhere else. Blending would let a

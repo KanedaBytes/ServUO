@@ -32,6 +32,8 @@ namespace Server.Custom
     ///
     /// Upstream keyed a single table on a 31-member DestinationType enum, which is the same idea
     /// with the discrimination baked into the enum instead. Ours is data.
+    ///
+    /// A class named in `singleMinded` bypasses both tables: see SingleMinded.
     /// </summary>
     public class BotDestinationConfig : IValidatableConfig
     {
@@ -40,6 +42,31 @@ namespace Server.Custom
 
         [JsonProperty("byTag")]
         public Dictionary<string, Dictionary<string, double>> ByTag { get; set; }
+
+        /// <summary>
+        /// Classes that want their own work and almost nothing else - upstream's gatherer
+        /// override, restored as data (uo-offline DestinationType.cs:338-352 at 7f38c7c: own site
+        /// 10.0, bank 0.3, tavern and inn 0.2, everything else 0.02).
+        ///
+        /// For a class named here the answer is this table and nothing else: a type it names gets
+        /// its weight, and every other type gets `otherwise`. The byType and byTag tables are not
+        /// consulted - upstream has no tag multiplier, and a Miner's `craft` 2.0 at every smithy
+        /// was a large part of why it went shopping instead of mining - with ONE exception: a type
+        /// whose byType default is 0 stays 0 unless this table names it. That is the house rule
+        /// that home, guard and work are nobody's business, and that forge, mine and lumber belong
+        /// to the class that works them, and it holds for a single-minded class too. It is a
+        /// deliberate divergence - upstream gives a gatherer 0.02 at a forge - recorded in the
+        /// Bots README Deviations table.
+        ///
+        /// Everything after WeightFor still applies: home bias, the crowd floor, the just-left
+        /// discount, and for a work site its vacancy and road distance. Those are ours and
+        /// documented, and the distance term is what sends a Minoc Miner to the Minoc face.
+        /// </summary>
+        [JsonProperty("singleMinded")]
+        public Dictionary<string, Dictionary<string, double>> SingleMinded { get; set; }
+
+        /// <summary>The key in a single-minded class's table standing for "every type not named".</summary>
+        public const string OtherwiseKey = "otherwise";
 
         /// <summary>
         /// The route distance, in tiles, at which a work site is half as attractive.
@@ -88,6 +115,7 @@ namespace Server.Custom
         {
             ByType = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
             ByTag = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
+            SingleMinded = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
         }
 
         public void Validate(ConfigErrors errors)
@@ -139,6 +167,72 @@ namespace Server.Custom
 
             Validate(errors, ByType, "destinations.byType");
             Validate(errors, ByTag, "destinations.byTag");
+
+            ValidateSingleMinded(errors);
+        }
+
+        /// <summary>
+        /// Keyed the other way round from byType - class first, then type - because the table is
+        /// one class's whole answer. The class key must be a rollable class (there is no
+        /// single-minded "default"), every weight non-negative, and `otherwise` present: a
+        /// single-minded class with no answer for the rest of the world would fall back to 1.0
+        /// everywhere, which is the opposite of what the table exists to say.
+        ///
+        /// Rebuilt case-insensitive, because Newtonsoft fills the inner dictionaries with the
+        /// default comparer and every lookup here is by a type token the graph may spell in any case.
+        /// </summary>
+        private void ValidateSingleMinded(ConfigErrors errors)
+        {
+            var rebuilt = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
+
+            if (SingleMinded != null)
+            {
+                foreach (var entry in SingleMinded)
+                {
+                    if (String.IsNullOrWhiteSpace(entry.Key) || !IsRollableClass(entry.Key))
+                    {
+                        errors.Add(
+                            "destinations.singleMinded names '{0}', which is not a bot class. Use one of the 17 rollable classes.",
+                            entry.Key);
+                        continue;
+                    }
+
+                    if (entry.Value == null || !entry.Value.ContainsKey(OtherwiseKey))
+                    {
+                        errors.Add(
+                            "destinations.singleMinded.{0} has no '{1}' weight, so it would say nothing about every type it does not name.",
+                            entry.Key,
+                            OtherwiseKey);
+                        continue;
+                    }
+
+                    var weights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var weight in entry.Value)
+                    {
+                        if (String.IsNullOrWhiteSpace(weight.Key))
+                        {
+                            errors.Add("destinations.singleMinded.{0} has a blank type key.", entry.Key);
+                            continue;
+                        }
+
+                        if (weight.Value < 0.0)
+                        {
+                            errors.Add(
+                                "destinations.singleMinded.{0}.{1} is negative ({2}). Use 0 to exclude.",
+                                entry.Key,
+                                weight.Key,
+                                weight.Value);
+                        }
+
+                        weights[weight.Key] = weight.Value;
+                    }
+
+                    rebuilt[entry.Key] = weights;
+                }
+            }
+
+            SingleMinded = rebuilt;
         }
 
         /// <summary>
@@ -261,6 +355,23 @@ namespace Server.Custom
                 }
             }
 
+            // A single-minded class bypasses byType and byTag, so any entry it still has there is
+            // a dead key - a number somebody may re-tune for ever to no effect. And a type its own
+            // table names that the graph has none of is the same silent no-op as above.
+            foreach (var entry in SingleMinded)
+            {
+                foreach (string key in entry.Value.Keys)
+                {
+                    if (!Insensitive.Equals(key, OtherwiseKey) && !types.Contains(key))
+                    {
+                        unknown.Add("singleMinded." + entry.Key + "." + key);
+                    }
+                }
+
+                AddDeadKeys(unknown, ByType, "byType", entry.Key);
+                AddDeadKeys(unknown, ByTag, "byTag", entry.Key);
+            }
+
             // A town nothing is tagged with is a home nobody can be biased toward - the same
             // silent no-op as a weight key that matches nothing.
             if (Towns != null)
@@ -279,6 +390,29 @@ namespace Server.Custom
             return unknown;
         }
 
+        private static void AddDeadKeys(
+            List<string> unknown,
+            Dictionary<string, Dictionary<string, double>> table,
+            string where,
+            string className)
+        {
+            foreach (var entry in table)
+            {
+                if (entry.Value == null)
+                {
+                    continue;
+                }
+
+                foreach (string cls in entry.Value.Keys)
+                {
+                    if (Insensitive.Equals(cls, className))
+                    {
+                        unknown.Add(where + "." + entry.Key + "." + cls + " (dead: " + className + " is single-minded)");
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// The weight this class gives this destination. Zero means never.
         /// </summary>
@@ -290,6 +424,13 @@ namespace Server.Custom
             }
 
             string className = cls.ToString();
+
+            Dictionary<string, double> single;
+
+            if (SingleMinded != null && SingleMinded.TryGetValue(className, out single) && single != null)
+            {
+                return SingleMindedWeight(single, destination.Type);
+            }
 
             double weight = Lookup(ByType, destination.Type, className);
 
@@ -314,6 +455,27 @@ namespace Server.Custom
             }
 
             return weight;
+        }
+
+        /// <summary>
+        /// A single-minded class's weight for a type. See SingleMinded for why a type byType
+        /// excludes by default stays excluded unless this class's own table names it.
+        /// </summary>
+        private double SingleMindedWeight(Dictionary<string, double> single, string type)
+        {
+            double weight;
+
+            if (!String.IsNullOrEmpty(type) && single.TryGetValue(type, out weight))
+            {
+                return weight;
+            }
+
+            if (Lookup(ByType, type, DefaultKey) <= 0.0)
+            {
+                return 0.0;
+            }
+
+            return single.TryGetValue(OtherwiseKey, out weight) ? weight : 0.0;
         }
 
         /// <summary>

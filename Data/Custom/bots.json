@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "comment": "PlayerBots. Caps are DELIBERATELY EMPTY: with no values here a bot is built to exactly the limits Config/PlayerCaps.cfg gives players, which is this shard's authoritative source and already carries the EJ values (skill 100/700, stat 125/225). Set a value only to make bots deliberately different from players - the Bots.Population health check names every override so the divergence is never silent. Destination weights multiply: byType[type][class or default] times byTag[tag][class or default] for every tag the destination carries. Absent means 1.0 (no opinion); 0 excludes. home, guard and work are excluded outright - a bot has no business loitering on a guard post, at a crier's station, or inside somebody's house. forge, mine and lumber are excluded for everyone EXCEPT the class that works them, which is how an artisan or gatherer is drawn to its own station and nobody else wanders onto a rock face. An artisan's pull now lives in its station tag (tailoring, woodworking) rather than in the generic craft tag, which before 7e was standing in for a station it did not yet have. towns lists the tags that name a town; every bot rolls one as its home at creation, weighted by how many destinations carry the tag, and a destination in the bot's home town weighs homeBias times more in every roll - uo-offline's 2.5. That is the whole of what a home does: there is no distance term for a town destination and no rule that sends a bot home, so a resident of a town with no station of its kind rolls like anyone else. Class templates, tier curves and the equipment tables live in code; see Scripts/Custom/Bots/README.md.",
+  "comment": "PlayerBots. Caps are DELIBERATELY EMPTY: with no values here a bot is built to exactly the limits Config/PlayerCaps.cfg gives players, which is this shard's authoritative source and already carries the EJ values (skill 100/700, stat 125/225). Set a value only to make bots deliberately different from players - the Bots.Population health check names every override so the divergence is never silent. Destination weights multiply: byType[type][class or default] times byTag[tag][class or default] for every tag the destination carries. Absent means 1.0 (no opinion); 0 excludes. home, guard and work are excluded outright - a bot has no business loitering on a guard post, at a crier's station, or inside somebody's house. forge, mine and lumber are excluded for everyone EXCEPT the class that works them, which is how an artisan or gatherer is drawn to its own station and nobody else wanders onto a rock face. An artisan's pull now lives in its station tag (tailoring, woodworking) rather than in the generic craft tag, which before 7e was standing in for a station it did not yet have. towns lists the tags that name a town; every bot rolls one as its home at creation, weighted by how many destinations carry the tag, and a destination in the bot's home town weighs homeBias times more in every roll - uo-offline's 2.5. That is the whole of what a home does: there is no distance term for a town destination and no rule that sends a bot home, so a resident of a town with no station of its kind rolls like anyone else. singleMinded is upstream's gatherer override, dropped by the port and restored 22 September 2026 (uo-offline DestinationType.cs:338-352 at 7f38c7c): a class named there is weighed by its own table alone - a type it names gets that weight, every other type gets otherwise, and byType and byTag are not consulted - except that a type whose byType default is 0 stays 0 for it too, so a Miner still never loiters at a forge or a guard post. Home bias, the crowd floor and a work site's vacancy and road distance still apply on top. The Fisherman is deliberately not in it yet: upstream makes it single-minded about docks (dock 8.0, bank 0.4, else 0.02), and that waits for the dock session that gives it something to do at one. Class templates, tier curves and the equipment tables live in code; see Scripts/Custom/Bots/README.md.",
   "caps": {},
   "destinations": {
     "distanceHalfTiles": 150,
@@ -37,8 +37,6 @@
       "gate": {
         "default": 0.6,
         "Ranger": 1.5,
-        "Lumberjack": 1.5,
-        "Miner": 1.5,
         "TreasureHunter": 1.5
       },
       "home": {
@@ -55,12 +53,10 @@
         "Smith": 8.0
       },
       "mine": {
-        "default": 0.0,
-        "Miner": 10.0
+        "default": 0.0
       },
       "lumber": {
-        "default": 0.0,
-        "Lumberjack": 10.0
+        "default": 0.0
       }
     },
     "byTag": {
@@ -71,9 +67,7 @@
         "Carpenter": 1.0,
         "Archer": 1.5,
         "Warrior": 1.5,
-        "Fencer": 1.5,
-        "Miner": 2.0,
-        "Lumberjack": 2.0
+        "Fencer": 1.5
       },
       "food": {
         "default": 1.0,
@@ -127,6 +121,22 @@
       },
       "wilderness": {
         "default": 1.0
+      }
+    },
+    "singleMinded": {
+      "Miner": {
+        "mine": 10.0,
+        "bank": 0.3,
+        "tavern": 0.2,
+        "inn": 0.2,
+        "otherwise": 0.02
+      },
+      "Lumberjack": {
+        "lumber": 10.0,
+        "bank": 0.3,
+        "tavern": 0.2,
+        "inn": 0.2,
+        "otherwise": 0.02
       }
     }
   },
