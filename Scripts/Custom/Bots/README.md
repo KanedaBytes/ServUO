@@ -422,13 +422,20 @@ It lives in `BotDestinationConfig.WeightFor`, the single entry point, so `Pick`,
   and what sends a Minoc Miner to the Minoc face once there is one.
 
 Predicted by an offline replica of `Pick` (a bot standing at its home bank, floors met, sites empty,
-tiles along the waypoint graph; the investigation's model, re-run):
+tiles along the waypoint graph with the moongates both ways; the investigation's model, re-run):
 
-| | before | single-minded |
-| --- | --- | --- |
-| Britain-born Miner at `brit-bank` | 5.8% | **67.7%** |
-| Trinsic-born Miner at `trinsic-bank` | 0.6% | **18.2%** |
-| any Lumberjack | 0% | 0% — no lumber site existed until Yew Grove, below |
+| | before | single-minded | single-minded + Yew Grove and the Minoc mine |
+| --- | --- | --- | --- |
+| Britain-born Miner at `brit-bank` | 5.8% | **67.7%** | **69.5%** |
+| Trinsic-born Miner at `trinsic-bank` | 0.9% | **26.6%** | **35.6%** |
+| Britain-born Lumberjack at `brit-bank` | 0% | 0% | **17.1%** |
+| Trinsic-born Lumberjack at `trinsic-bank` | 0% | 0% | **18.0%** |
+
+The first cut of this table, and the commit that added the row, read 0.6% and 18.2% for Trinsic: the
+replica then took each moongate pair one way only, as the file stores it, and walked a Trinsic Miner
+to Britain the long way round. The Lumberjack's odds are what one far site buys: Yew Grove is 660-790
+road tiles from either bank, so the distance term leaves it a sixth of the roll. A second wood nearer
+home (`brit-lumber-south`, below) is the lever, not a bigger number.
 
 **The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
 (`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
@@ -2433,6 +2440,51 @@ makes safe to do.
 Anvil** — the full real-name pass over Britain's destinations is a later session, but this
 destination is new, so it was named right rather than added to the backlog.
 
+### Yew Grove and the Minoc mine — upstream's other two sites, 22 September 2026
+
+Upstream ships three authored work sites. `MiningSpot 448` is the Felucca one the paragraph above
+this section could not use; the other two are **Yew Grove** (`LumberSpot`, 570,921, a 562-578 ×
+913-929 polygon, `playerbots/data/Destinations/destinations.json:4926` at `7f38c7c`) and **MiningSpot
+418** at Minoc (2569,486,49, `:9469`, reached by a spur, `Waypoints/waypoints.json:39354`, WP 1371
+at 2570,480,52, that climbs the rock). Both are now on the graph. Both were authored headlessly: the
+ground measured with `site-reach`, every hop walked both ways as a bot with `nav-hop verify` before a
+record existed, then `POST /api/save/navigation` with `dryRun:true` through `validate.js` (0 fatal,
+0 warnings) and the real write, which the shard committed against its `baseHash` and reloaded.
+
+| Site | Type / tags | Face | Arrival reach (floor) | Arrivals | Corridor |
+| --- | --- | --- | --- | --- | --- |
+| `yew-grove` | `lumber` / `wilderness yew` | 10×13 at 578,932 | **5**, 4, 4, 4 (3) | 4 | **1** waypoint, `yew-grove-1` on an arrival tile, one 9-tile hop from `uo-wp-378-s2` |
+| `minoc-mine` | `mine` / `wilderness minoc` | 8×7 at 2563,502 | **12**, 10, 12, 8 (5) | 4 | **1** waypoint, `minoc-mine-1` on an arrival tile, one 4-tile hop from `uo-wp-1224-s1` |
+
+**Neither sits exactly where upstream's does, and the ground is why.**
+
+- **Yew Grove's own box is at the floor.** Its best standable tile reaches **3** choppable trees on
+  Trammel - exactly `Custom.BotWorkSiteMinReachLumber` - and six tiles in the whole box manage that.
+  The grove's south-east corner, 578-587 × 932-944, reaches **4-5**, which is better than the
+  Britain wood. So the arrivals stand there, touching upstream's polygon at 578,929.
+- **Minoc's face is a sealed plateau.** The rock above upstream's point is a z20 shelf. Standing on
+  it reaches 25, but no hop from the ground reaches it from any side (`nav-hop`, west, south and
+  east). Upstream's arrival at z70 is reached by a waypoint our graph never had, and the adopt
+  resampled its neighbour `uo-wp-1370` to z0. The **foot of the same rock**, on the road beside
+  `minoc-forge-3`, is solid `rock` at ground level reaching 8-12. The zone is drawn west of x 2571
+  and south of y 501, so it covers none of the shelf a walker cannot step onto and none of the
+  forge's own arrival tiles at x 2561-2562. The mine and the forge are therefore thirty seconds
+  apart, and a Minoc Miner delivers in Minoc.
+
+**One arrival moved after the walk audit.** The first full bot `[WalkAudit` failed exactly one of its
+9,519 walks: `yew-grove-1 -> (arrival)` at 582,941, `arrived-no-stand-tile`, ended by teleport.
+`nav-hop verify` had passed the same pair, which is its documented blind spot rather than a bug. The
+step from 583,942 to 582,941 is a diagonal between two trees, which a creature is refused, so a
+walker that reached 583,942 had no way on. The arrival moved to 584,938 (reach 4; `tile-probe` finds
+no refused step). The Site tool's rule of thumb is the same: a tile is only as good as the last step
+into it.
+
+**Where a Yew Lumberjack's logs go.** `yew-shop-carpenter` carries no `woodworking` tag, so it is
+not a station. The load goes where every Lumberjack's goes: the nearest **staffed** `woodworking`
+bench, which is Britain's Saw Horse, or a bank when no bench is staffed (*A haul goes to the nearest
+STAFFED bench*). Making Yew's carpenter a station would add a recipe slot, and that is a population
+decision, so it is not done here.
+
 ### The Smith's station is the only one that is load-bearing
 
 `DefBlacksmithy.CanCraft` wants a forge **and** an anvil within two tiles, with line of sight to
@@ -3685,8 +3737,11 @@ simply does not model a bot whose job is to stay put.
   `navigation.json` after Sean's editor pass and is now reconciled, reach re-measured at 15/14/14/14.
 - **`brit-lumber-south` (1422,1832, reach 4) is still unwritten.** The ground is verified; only the
   road is missing. Hand-author a corridor out through the **south bridge** in the editor — the
-  `Nav.Data` reach check and `[BotSiteAudit` are what make that safe to do by hand. **Until it
-  lands, Lumberjacks have no station** and `Bots.Work` says so, loudly, at every boot.
+  `Nav.Data` reach check and `[BotSiteAudit` are what make that safe to do by hand. Lumberjacks
+  have a station since 22 September 2026 (**Yew Grove**, above), but it is 660-790 road tiles from
+  either home bank, so a wood near Britain is what would move their odds past a sixth of the roll.
+  (For a week before that, `Bots.Work` did *not* say so at every boot, as this line once promised:
+  the excluded forges hid it. It says so beside them now.)
 - **Two more sites Sean has already scouted**: the **cave at 1263,1251** and the **north mountain at
   1438,1223**. Same procedure — `[BotSitePick` for the arrivals, then either the scout or a hand
   corridor.

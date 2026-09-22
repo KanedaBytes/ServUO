@@ -4163,7 +4163,9 @@
     {"id":"uo-wp-356-s2-s2","map":"Trammel","x":566,"y":966,"z":0,"arrivalRange":0,"tags":"road","source":"uo-offline"},
     {"id":"uo-wp-905-s2","map":"Trammel","x":646,"y":2232,"z":-2,"arrivalRange":0,"tags":"road","source":"uo-offline"},
     {"id":"uo-wp-907-s4","map":"Trammel","x":1501,"y":3681,"z":-2,"arrivalRange":0,"tags":"road","source":"uo-offline"},
-    {"id":"uo-wp-779-s1","map":"Trammel","x":3019,"y":825,"z":-2,"arrivalRange":0,"tags":"road","source":"uo-offline"}
+    {"id":"uo-wp-779-s1","map":"Trammel","x":3019,"y":825,"z":-2,"arrivalRange":0,"tags":"road","source":"uo-offline"},
+    {"id":"yew-grove-1","name":"Yew Grove","map":"Trammel","x":584,"y":940,"z":0,"arrivalRange":0,"tags":"wilderness","note":"Approach on the wood itself, sited on an arrival tile (the scout rule). One walk hop from uo-wp-378-s2, verified both ways as a bot with nav-hop."},
+    {"id":"minoc-mine-1","name":"Minoc Mine","map":"Trammel","x":2567,"y":503,"z":0,"arrivalRange":0,"tags":"wilderness","note":"Approach on the face, sited on an arrival tile. One walk hop from uo-wp-1224-s1, verified both ways as a bot with nav-hop."}
   ],
   "edges": [
     {"from":"brit-plaza-4","to":"brit-plaza-7","kind":"walk","tags":"road"},
@@ -8681,7 +8683,9 @@
     {"from":"uo-wp-779-s1","to":"uo-vesper-dock-s1","kind":"walk","tags":"road","source":"uo-offline"},
     {"from":"uo-sacrifice-trail-15-s1","to":"uo-sacrifice-trail-16","kind":"walk","tags":"road","source":"uo-offline"},
     {"from":"uo-ice-approach-2","to":"uo-wrong-approach-4","kind":"walk","tags":"","source":"uo-offline"},
-    {"from":"uo-wp-922-s4","to":"uo-wp-922-s1","kind":"walk","tags":"road","source":"uo-offline"}
+    {"from":"uo-wp-922-s4","to":"uo-wp-922-s1","kind":"walk","tags":"road","source":"uo-offline"},
+    {"from":"uo-wp-378-s2","to":"yew-grove-1","kind":"walk","tags":"wilderness"},
+    {"from":"uo-wp-1224-s1","to":"minoc-mine-1","kind":"walk","tags":"wilderness"}
   ],
   "destinations": [
     {"id":"brit-bank","name":"First Bank Of Britain","type":"bank","map":"Trammel","x":1433,"y":1690,"z":0,"tags":"service guarded britain","waypoints":"uo-britain-bank-se-intersection-s3 uo-britain-bank"},
@@ -8843,7 +8847,9 @@
     {"id":"moonglow-shop-tailor","name":"Moonglow Tailor 3","type":"shop","map":"Trammel","x":4458,"y":1060,"z":0,"tags":"craft tailor moonglow","waypoints":"uo-wp-1150","source":"uo-offline"},
     {"id":"moonglow-bank","name":"Moonglow Bank","type":"bank","map":"Trammel","x":4471,"y":1157,"z":0,"tags":"service moonglow","waypoints":"uo-wp-1080 uo-wp-1079","source":"uo-offline"},
     {"id":"moonglow-shop-provisioner-4","name":"Moonglow Provisioner 8","type":"shop","map":"Trammel","x":4480,"y":1085,"z":0,"tags":"craft provisioner moonglow","waypoints":"uo-wp-1145","source":"uo-offline"},
-    {"id":"moonglow-inn-2","name":"Moonglow Inn 4","type":"inn","map":"Trammel","x":4484,"y":1064,"z":0,"tags":"service moonglow","waypoints":"uo-wp-1148","source":"uo-offline"}
+    {"id":"moonglow-inn-2","name":"Moonglow Inn 4","type":"inn","map":"Trammel","x":4484,"y":1064,"z":0,"tags":"service moonglow","waypoints":"uo-wp-1148","source":"uo-offline"},
+    {"id":"yew-grove","name":"Yew Grove","type":"lumber","map":"Trammel","x":584,"y":940,"z":0,"tags":"wilderness yew","waypoints":"yew-grove-1","note":"uo-offline Yew Grove (LumberSpot, 570,921; destinations.json:4926 at 7f38c7c). Upstream box reaches 3 on Trammel; this corner of the grove reaches 4-5."},
+    {"id":"minoc-mine","name":"The Minoc Mine","type":"mine","map":"Trammel","x":2567,"y":503,"z":0,"tags":"wilderness minoc","waypoints":"minoc-mine-1","note":"uo-offline MiningSpot 418 (2569,486; destinations.json:9469 at 7f38c7c). Its face is a plateau no bot can walk onto here, so this is the foot of the same rock."}
   ],
   "arrivals": [
     {"destination":"brit-bank","x":1437,"y":1694,"z":0,"exclusive":false,"range":2,"waypoints":"uo-britain-bank"},
@@ -9143,7 +9149,15 @@
     {"destination":"moonglow-bank","x":4461,"y":1161,"z":0,"exclusive":false,"waypoints":"uo-wp-1066-s5 uo-wp-1079","source":"uo-offline"},
     {"destination":"moonglow-bank","x":4483,"y":1159,"z":0,"exclusive":false,"waypoints":"uo-wp-1080","source":"uo-offline"},
     {"destination":"moonglow-shop-provisioner-4","x":4481,"y":1088,"z":0,"exclusive":false,"waypoints":"uo-wp-1145","source":"uo-offline"},
-    {"destination":"moonglow-inn-2","x":4486,"y":1066,"z":0,"exclusive":false,"waypoints":"uo-wp-1148","source":"uo-offline"}
+    {"destination":"moonglow-inn-2","x":4486,"y":1066,"z":0,"exclusive":false,"waypoints":"uo-wp-1148","source":"uo-offline"},
+    {"destination":"yew-grove","x":584,"y":940,"z":0,"exclusive":false,"waypoints":"yew-grove-1"},
+    {"destination":"yew-grove","x":586,"y":938,"z":0,"exclusive":false,"waypoints":"yew-grove-1"},
+    {"destination":"yew-grove","x":584,"y":938,"z":0,"exclusive":false,"waypoints":"yew-grove-1"},
+    {"destination":"yew-grove","x":580,"y":943,"z":0,"exclusive":false,"waypoints":"yew-grove-1"},
+    {"destination":"minoc-mine","x":2567,"y":503,"z":0,"exclusive":false,"waypoints":"minoc-mine-1"},
+    {"destination":"minoc-mine","x":2564,"y":502,"z":0,"exclusive":false,"waypoints":"minoc-mine-1"},
+    {"destination":"minoc-mine","x":2569,"y":505,"z":4,"exclusive":false,"waypoints":"minoc-mine-1"},
+    {"destination":"minoc-mine","x":2569,"y":506,"z":1,"exclusive":false,"waypoints":"minoc-mine-1"}
   ],
   "zones": [
     {"id":"brit-town","map":"Trammel","x":1416,"y":1498,"width":324,"height":279,"tags":"town britain guarded"},
@@ -9153,7 +9167,9 @@
     {"id":"brit-market-quarter","map":"Trammel","x":1440,"y":1655,"width":40,"height":32,"tags":"market britain"},
     {"id":"brit-plaza-quarter","map":"Trammel","x":1455,"y":1600,"width":40,"height":50,"tags":"plaza britain"},
     {"id":"brit-mine-north-face","map":"Trammel","x":1443,"y":1508,"width":14,"height":26,"tags":"mine wilderness work"},
-    {"id":"brit-mine-west-face","map":"Trammel","x":1191,"y":1743,"width":9,"height":41,"tags":"mine wilderness work"}
+    {"id":"brit-mine-west-face","map":"Trammel","x":1191,"y":1743,"width":9,"height":41,"tags":"mine wilderness work"},
+    {"id":"yew-grove-face","map":"Trammel","x":578,"y":932,"width":10,"height":13,"tags":"lumber wilderness work","note":"Clamped inside the hop cap of yew-grove-1: the far corner is 8 tiles from it."},
+    {"id":"minoc-mine-face","map":"Trammel","x":2563,"y":502,"width":8,"height":7,"tags":"mine wilderness work","note":"West of 2571 and south of 501 only: everything past that is the z20 plateau a walker cannot step onto, and x 2561-2562 are minoc-forge-3 arrival tiles."}
   ],
   "routes": [
     {"id":"brit-watch-north","map":"Trammel","mode":"cycle","waypoints":"uo-brit-cntrlrd-2-s3 uo-virtue-path-1-s3 uo-britgate2 uo-central-britain-road-s2 uo-britgate2 uo-virtue-path-1-s3"},
