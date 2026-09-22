@@ -25,11 +25,32 @@
 //
 // SEAM, restored by the economy session (7f): CrafterStock.SpendGold on the
 // buyer, Gold into the seller's pack, and the refusal when the buyer cannot pay.
+//
+// -----------------------------------------------------------------------------
+// CONSERVATION, 22 September 2026 (REVIEW.md F5).
+//
+// This hook used to report a delivery it had already destroyed. In order: it
+// cleared HaulPending, DELETED every matching item in the pack and the panniers
+// to count them, deleted the pack beast with whatever was still aboard, and only
+// then went looking for somebody to give the load to. A smith at
+// CrafterStock.StockCap, or a bank box that refused the drop, meant the load had
+// gone - and NoteDelivery(hauled) recorded the whole of it as delivered anyway.
+//
+// The four rules it now keeps, Sean's, for deliveries only:
+//
+//   1. Settle only what the receiver accepts. The remainder stays in the pack.
+//      Nothing is deleted to make the numbers match.
+//   2. Release the pack animal after the hand-over, never before. An interrupted
+//      hand-over leaves animal and load together.
+//   3. A bot carrying an undelivered load is never chosen for logout
+//      (BotSession.CanLogoutNow, and the re-check in BeginLogout).
+//   4. A load lost anyway is written down - BotGoodsLedger.
+//
+// The primitives are in BotHaul; the books are in BotGoodsLedger and are read by
+// the Bots.Conservation health check.
+// -----------------------------------------------------------------------------
 
 using System;
-using System.Collections.Generic;
-
-using Server.Items;
 
 namespace Server.Custom
 {
@@ -91,65 +112,67 @@ namespace Server.Custom
             // The flag clears whatever happens next. A bot that reached a delivery point with an
             // empty pack has finished its errand just as much as one that reached it full, and
             // leaving the flag set would keep it hauling nothing round the town for ever.
+            //
+            // AND THAT IS STILL TRUE WHEN A REMAINDER IS KEPT. The errand was "take this to a
+            // delivery point"; the point has been reached and the receiver has said how much it
+            // wants. What is left rides along and is offered again at the next hand-over, which
+            // is what the flag being clear lets the destination roll decide. The alternative -
+            // a sticky flag - would pin a bot to a bench that is full for as long as it is full.
             bot.HaulPending = false;
 
-            if (Insensitive.Equals(destination.Type, "bank"))
+            CrafterBehavior buyer = FindBuyer(bot, raw);
+            PlayerBot crafter = buyer == null ? null : OwnerOf(buyer);
+
+            Func<int, int> receiver = buyer == null
+                ? null
+                : new Func<int, int>(amount => buyer.Accept(crafter, amount));
+
+            int offered;
+            int accepted = Settle(bot, raw, receiver, destination.Id, out offered);
+
+            if (offered <= 0)
             {
-                // Counted, not refused. A bank is a real delivery point when nothing is staffed -
-                // that is what the 2.0 weight in BotDestinations.HaulWeightFor is for. It is only
-                // a fault when a bench WAS available, and the work probe is the thing that knows.
-                BotWorkSites.NoteBankDelivery();
-            }
-
-            int hauled = TakeYield(bot.Backpack, raw) + TakeYield(BotPackAnimals.PanniersOf(bot), raw);
-
-            // The beast's work is done either way. Upstream walked it to a stables from here when
-            // one was in range and deleted it when none was; there is no stables destination on
-            // this graph, so this is their no-stables path. See the seam note in BotPackAnimal.
-            BotPackAnimals.Release(bot);
-
-            if (hauled <= 0)
-            {
+                // Arrived empty. The errand is over and nothing settled.
                 return false;
             }
 
-            CrafterBehavior buyer = FindBuyer(bot, raw);
+            if (accepted <= 0)
+            {
+                Log.Debug(
+                    "{0} offered {1} {2} at '{3}' and none of it was taken; the load stays in the pack.",
+                    bot.Name,
+                    offered,
+                    raw.Name,
+                    destination.Id);
+
+                return false;
+            }
 
             if (buyer == null)
             {
-                // No trade buyer here. The load goes into the bank box rather than evaporating:
-                // it is the bot's property, and a bank is where a player would have put it.
-                Bank(bot, raw, hauled);
                 Say(bot, "gather_deliver");
-                BotWorkSites.NoteDelivery(hauled);
 
-                Log.Debug("{0} banked {1} {2} at '{3}'.", bot.Name, hauled, raw.Name, destination.Id);
+                Log.Debug(
+                    "{0} banked {1} of {2} {3} at '{4}'.",
+                    bot.Name,
+                    accepted,
+                    offered,
+                    raw.Name,
+                    destination.Id);
 
                 return true;
             }
 
-            PlayerBot crafter = OwnerOf(buyer);
-            int accepted = buyer.Accept(crafter, hauled);
-
-            if (accepted < hauled)
-            {
-                // The buyer's stock cap turned some of it away. Bank the remainder rather than
-                // destroying it - CrafterStock.Add returning short is a real answer, not an error.
-                Bank(bot, raw, hauled - accepted);
-            }
-
-            BotWorkSites.NoteDelivery(hauled);
-
             PlayScene(bot, crafter);
 
             Log.Debug(
-                "{0} delivered {1} {2} to {3} at '{4}' ({5} accepted).",
+                "{0} delivered {1} of {2} {3} to {4} at '{5}'.",
                 bot.Name,
-                hauled,
+                accepted,
+                offered,
                 raw.Name,
                 crafter == null ? "a crafter" : crafter.Name,
-                destination.Id,
-                accepted);
+                destination.Id);
 
             return true;
         }
@@ -288,66 +311,102 @@ namespace Server.Custom
             return null;
         }
 
-        /// <summary>Take every unit of a good out of a container and return how much there was.</summary>
-        private static int TakeYield(Container container, Type raw)
+        /// <summary>
+        /// The hand-over itself: what is on offer, what the receiver takes, and what stays.
+        /// Returns the accepted amount and reports what was offered.
+        ///
+        /// SEPARATE FROM TryDeliver ON PURPOSE. Everything above this in TryDeliver is about
+        /// WHERE the bot is standing - the destination's type, its arrivals, the twelve-tile
+        /// buyer sweep - and none of it is what REVIEW.md F5 was about. This is, so this is the
+        /// piece HaulFixtures drives: a bot, a load, a receiver, and the arithmetic that decides
+        /// how much moves. Internal for that reason and no other.
+        ///
+        /// The receiver is a function of "how much is on offer" to "how much I will take", which
+        /// is the shape CrafterBehavior.Accept and CrafterStock.Add already have. A NULL receiver
+        /// means the bot's own bank box, which is what a delivery point with nobody working it
+        /// comes to.
+        /// </summary>
+        internal static int Settle(
+            PlayerBot bot, Type raw, Func<int, int> receiver, string destinationId, out int offered)
         {
-            if (container == null)
+            // COUNTED, NOT TAKEN. This is the whole of REVIEW.md F5 in one line: the load is
+            // still in the pack and the panniers while the receiver decides, so a refusal costs
+            // nothing and a partial acceptance leaves the rest exactly where it was.
+            offered = BotHaul.Offered(bot, raw);
+
+            if (offered <= 0)
             {
+                // Nothing to hand over. The errand is done and the beast's work with it.
+                BotHaul.ReleaseIfEmpty(bot);
                 return 0;
             }
 
-            var taken = new List<Item>();
-            int amount = 0;
+            int accepted;
 
-            foreach (Item item in container.Items)
+            if (receiver == null)
             {
-                if (item != null && !item.Deleted && item.GetType() == raw)
+                // No trade buyer here, so the bank box is the receiver: it is the bot's own
+                // property, and a bank is where a player would have put it. The actual stacks
+                // move - hue, name and weight with them - and whatever the box will not hold
+                // stays in the pack rather than being deleted to make the count come out.
+                //
+                // Banking is NOT an exit from custody, which is why there is no NoteAccepted
+                // here: the units are still the bot's, standing in a different container.
+                accepted = BotHaul.MoveToBank(bot, raw, offered);
+
+                if (accepted > 0)
                 {
-                    amount += item.Amount;
-                    taken.Add(item);
+                    // Counted, not refused. A bank is a real delivery point when nothing is
+                    // staffed - that is what the 2.0 weight in BotDestinations.HaulWeightFor is
+                    // for. It is only a fault when a bench WAS available, and the work probe is
+                    // the thing that knows.
+                    //
+                    // On the SETTLEMENT now, not on the destination's type: a no-buyer bank-box
+                    // fallback at a forge is a bank delivery, and arriving at a bank with an
+                    // empty pack is not one.
+                    BotWorkSites.NoteBankDelivery();
                 }
             }
-
-            foreach (Item item in taken)
+            else
             {
-                item.Delete();
+                // Clamped, because everything downstream trusts this number: a receiver that
+                // over-reported would have Consume take more than was offered.
+                accepted = Math.Max(0, Math.Min(offered, receiver(offered)));
+
+                // Exactly what was taken, and not a unit more. CrafterStock.Add turns raw into
+                // refined stock in the buyer's pack, so these units really are spent; the rest
+                // of the load never moved.
+                BotHaul.Consume(bot, raw, accepted);
+                BotGoodsLedger.NoteAccepted(bot, accepted);
             }
 
-            return amount;
+            BotGoodsLedger.NoteHandover(bot, destinationId, offered, accepted);
+            BotWorkSites.NoteDelivery(accepted);
+
+            // RULE 2, AND IT IS THE REASON THIS LINE IS DOWN HERE. Release used to run before the
+            // buyer had even been looked for, and BotPackAnimals.Release deletes the beast with
+            // whatever is still in the panniers - so a hand-over that was then refused lost the
+            // pannier half of the load as well. An interrupted hand-over now leaves animal and
+            // load together and the pair walks on.
+            //
+            // Upstream disposes of the beast in its CALLER, after DeliverMaterials returns
+            // (uo-offline TravelerBehavior.cs:2484-2508): to a stables when one is in reach, and
+            // loose when none is. There is no stables destination on this graph, so this is their
+            // no-stables path with their ordering. See the seam note in BotPackAnimal.
+            BotHaul.ReleaseIfEmpty(bot);
+
+            return accepted;
         }
 
-        /// <summary>
-        /// Put an unsold load in the bank box.
-        ///
-        /// Mobile.BankBox exists on every Mobile, so a bot has one without anything being wired
-        /// up for it. This is the only place in the session that touches banking at all, and it
-        /// is storage rather than money: no balance is read and none is written.
-        /// </summary>
-        private static void Bank(PlayerBot bot, Type raw, int amount)
-        {
-            if (amount <= 0)
-            {
-                return;
-            }
-
-            BankBox box = bot.BankBox;
-            Item stock = Activator.CreateInstance(raw) as Item;
-
-            if (stock == null)
-            {
-                return;
-            }
-
-            if (stock.Stackable)
-            {
-                stock.Amount = amount;
-            }
-
-            if (box == null || !box.TryDropItem(bot, stock, false))
-            {
-                stock.Delete();
-            }
-        }
+        // TakeYield and Bank are GONE, and their removal is the repair (REVIEW.md F5).
+        //
+        // TakeYield counted a load by deleting it, so the units had already stopped existing by
+        // the time anything was asked whether it wanted them. Bank then built a REPLACEMENT stack
+        // with Activator.CreateInstance - losing hue, name, weight and loot type off the originals
+        // - and deleted that too when the box would not take it.
+        //
+        // BotHaul.Offered, BotHaul.Consume and BotHaul.MoveToBank are what those two became:
+        // count without taking, remove exactly what was accepted, and move the real items.
 
         /// <summary>
         /// The hand-over, said out loud.

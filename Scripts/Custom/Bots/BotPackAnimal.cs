@@ -205,15 +205,23 @@ namespace Server.Custom
 
             BaseCreature beast = bot.PackAnimal;
 
-            bot.PackAnimal = null;
-
             if (beast == null || beast.Deleted)
             {
+                bot.PackAnimal = null;
                 return;
             }
 
-            // Anything still in the panniers goes with it. The delivery hook empties them first,
-            // so this is a guard rather than a discard.
+            // ANYTHING STILL IN THE PANNIERS GOES WITH IT, AND THAT IS A LOSS - not, as this
+            // comment used to say, "a guard rather than a discard" because "the delivery hook
+            // empties them first". Delivery is now allowed to leave a remainder (REVIEW.md F5,
+            // rule 1), so that sentence stopped being true; BotHaul.ReleaseIfEmpty is what keeps
+            // the delivery path off this line while a load is still aboard. Every OTHER caller -
+            // a deleted owner, an empty-handed end of shift, a probe tearing down - genuinely
+            // does discard, so it is written down before the beast goes.
+            BotGoodsLedger.NoteContainerLoss(bot, beast.Backpack, BotGoodsLedger.ReasonPackAnimal);
+
+            bot.PackAnimal = null;
+
             Released++;
             beast.Delete();
         }
@@ -244,6 +252,12 @@ namespace Server.Custom
             {
                 return;
             }
+
+            // The panniers go with it here too, and the owner may still be alive - a master on
+            // Map.Internal is the case this reaps. Recorded against it while it can still be
+            // named, or the census would see the units disappear and report them as unexplained,
+            // which is the alarm reserved for a loss nothing wrote down (REVIEW.md F5).
+            BotGoodsLedger.NoteContainerLoss(master as PlayerBot, beast.Backpack, BotGoodsLedger.ReasonPackAnimal);
 
             Reaped++;
             beast.Delete();

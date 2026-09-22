@@ -352,6 +352,12 @@ namespace Server.Custom
                 }
             }
 
+            // The probe clears the spawn stash to get a clean baseline, and that is still units
+            // being destroyed. Written down like any other loss, or the census would find them
+            // missing and report them as unexplained - which is the alarm reserved for a loss
+            // nothing accounted for (REVIEW.md F5).
+            BotGoodsLedger.NoteContainerLoss(bot, bot.Backpack, BotGoodsLedger.ReasonProbeStrip);
+
             foreach (Item item in doomed)
             {
                 item.Delete();
@@ -974,6 +980,10 @@ namespace Server.Custom
             {
                 if (bots[i] != null && !bots[i].Deleted)
                 {
+                    // Named, so the probe's own teardown is distinguishable in the goods journal
+                    // from a bot that lost a load in play (REVIEW.md F5, rule 4).
+                    bots[i].DeletionReason = BotGoodsLedger.ReasonProbe;
+
                     // Release the beast explicitly rather than relying on the reaper: the probe
                     // should leave the world exactly as it found it, not ten seconds later.
                     BotPackAnimals.Release(bots[i]);

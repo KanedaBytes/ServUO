@@ -360,6 +360,53 @@ namespace Server.Custom
         /// </summary>
         public bool HaulPending { get; set; }
 
+        // ---- the goods ledger (REVIEW.md F5). All transient, all BotGoodsLedger's. ----
+
+        /// <summary>
+        /// How many units of raw goods this bot is believed to hold, everywhere. Transient.
+        ///
+        /// Written by every deliberate change of custody - the spawn stash, a settled hand-over,
+        /// a recorded loss - and re-read from the world by BotGoodsLedger.Reconcile. The
+        /// difference between the two is the whole conservation check: units that appeared were
+        /// mined, and units that vanished are F5.
+        /// </summary>
+        public int TrackedCustody { get; set; }
+
+        /// <summary>
+        /// How much of what this bot holds came from EquipmentTable's spawn stash rather than
+        /// from the ground. Transient.
+        ///
+        /// Settlement spends it first, so what is still counted as stash at a loss is as small as
+        /// the arithmetic allows. That is deliberate: Sean's rule is that a real lost delivery
+        /// must never be hidden under a restart's worth of starting kit.
+        /// </summary>
+        public int StashRemaining { get; set; }
+
+        /// <summary>
+        /// Why this bot is being deleted, for the loss record. Transient, null until somebody
+        /// says - and the paths that do are the ones that know: the boot purge, the session
+        /// logout, a death, a class re-derive.
+        /// </summary>
+        public string DeletionReason { get; set; }
+
+        /// <summary>When this bot last handed a load over, or MinValue. Transient.</summary>
+        public DateTime LastHandoverUtc { get; set; }
+
+        /// <summary>Where the last hand-over happened. Transient.</summary>
+        public string LastHandoverId { get; set; }
+
+        /// <summary>What the last hand-over offered. Transient.</summary>
+        public int LastHandoverOffered { get; set; }
+
+        /// <summary>
+        /// What the last hand-over's receiver actually took. Transient.
+        ///
+        /// Offered and Accepted travel together into a loss record so it can say "this load
+        /// reached a bench, the bench was full, and then the bot logged out" rather than only
+        /// "a bot holding ore vanished".
+        /// </summary>
+        public int LastHandoverAccepted { get; set; }
+
         /// <summary>
         /// The pack beast trailing this gatherer, or null. Transient.
         ///
@@ -861,6 +908,19 @@ namespace Server.Custom
         {
             base.OnDeath(c);
 
+            // THE LOAD IS ON THE CORPSE NOW, AND THAT IS AN EXIT FROM THIS BOT'S CUSTODY.
+            //
+            // Mobile.Kill moves every pack item whose GetInventoryMoveResultFor says MoveToCorpse
+            // into the corpse's own Items (Server/Mobile.cs:4092-4104) - the backpack stays on the
+            // mobile and is empty. So these units are neither destroyed nor the bot's any more:
+            // they are lootable until the corpse decays. Written down with reason "death" rather
+            // than left for BotGoodsLedger's census, which would find a shift's ore missing and
+            // report it as unexplained - the alarm reserved for a loss nothing accounted for.
+            //
+            // The bank box is untouched by death and goes at OnDelete, a second later, with the
+            // rest of the bot.
+            BotGoodsLedger.NoteContainerLoss(this, c, BotGoodsLedger.ReasonDeath);
+
             // The mount does not survive its rider. Upstream dismounts in OnBeforeDeath
             // (PlayerBot.cs:779) and so could we: ServUO HAS that hook, public virtual on Mobile
             // at Mobile.cs:4186, called from Kill at Mobile.cs:3995. The comment here said it did
@@ -890,6 +950,8 @@ namespace Server.Custom
             // behaviour needs it when it lands.
             //
             // Replaced by the death behaviour session.
+            DeletionReason = BotGoodsLedger.ReasonDeath;
+
             Timer.DelayCall(TimeSpan.FromSeconds(1.0), Delete);
         }
 
@@ -1117,6 +1179,11 @@ namespace Server.Custom
 
             if (Backpack != null)
             {
+                // A re-derive destroys the pack, and a gatherer's pack holds raw goods. Written
+                // down like any other loss rather than quietly vanishing between two classes
+                // (REVIEW.md F5, rule 4).
+                BotGoodsLedger.NoteContainerLoss(this, Backpack, BotGoodsLedger.ReasonReclass);
+
                 foreach (Item item in new List<Item>(Backpack.Items))
                 {
                     item.Delete();
@@ -1193,6 +1260,14 @@ namespace Server.Custom
 
             BotParty.OnBotDeleted(this);
 
+            // WRITE DOWN WHAT IS ABOUT TO STOP EXISTING, before anything cascades (REVIEW.md F5,
+            // rule 4: losses are recorded, never silent). base.OnDelete walks the backpack and the
+            // bank box through OnParentDeleted, so this is the last moment either can be read.
+            //
+            // The pack and the bank box only. The panniers are the beast's, and Release records
+            // them on its way past - counting them here as well would double the number.
+            BotGoodsLedger.NoteBotLoss(this, DeletionReason ?? BotGoodsLedger.ReasonDeleted);
+
             // The beast goes with its owner. Its own OnThink reaper would get there within ten
             // seconds anyway, but leaving a llama standing in a field for ten seconds after the
             // miner vanished is exactly the kind of loose end that becomes a stray.
@@ -1230,7 +1305,7 @@ namespace Server.Custom
         {
             base.Serialize(writer);
 
-            writer.Write(1); // version
+            writer.Write(2); // version
 
             writer.Write((byte)Class);
             writer.Write((byte)SkillTier);
@@ -1242,6 +1317,15 @@ namespace Server.Custom
             Personality.Write(writer);
 
             writer.Write(_behavior != null ? _behavior.SerializableName : "Idle");
+
+            // v2. THE ONE TRANSIENT THAT IS WRITTEN, AND ONLY BECAUSE OF WHAT READS IT BACK.
+            //
+            // Nothing restores a bot - BotStartupPurge deletes every one of them at Initialize.
+            // But the purge also WRITES DOWN what each bot was holding (REVIEW.md F5, rule 4),
+            // and Sean's rule is that a lost delivery must never be filed under the spawn stash.
+            // Without this, a restart erases which half was which and every inherited unit would
+            // be reported as a lost haul. One int is a cheap price for a true number.
+            writer.Write(StashRemaining);
         }
 
         public override void Deserialize(GenericReader reader)
@@ -1262,6 +1346,14 @@ namespace Server.Custom
             Personality = BotPersonality.Read(reader);
 
             reader.ReadString(); // behaviour name; nothing to restore it onto yet
+
+            if (version >= 2)
+            {
+                // Read straight back onto the transient. The bot will be purged within the same
+                // boot phase; this exists so the loss record it produces can split the stash from
+                // the haul (see Serialize).
+                StashRemaining = reader.ReadInt();
+            }
 
             _behavior = new IdleBehavior();
 

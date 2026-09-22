@@ -100,6 +100,19 @@ namespace Server.Custom
                 stale.Add(bot);
             }
 
+            // COUNT WHAT THIS BOOT INHERITED, BEFORE DESTROYING IT (REVIEW.md F5, rule 4).
+            //
+            // The goods on these bots are real units that existed when the save was taken, and
+            // the purge is about to end them. Counted in as an opening balance here and written
+            // down again as boot-purge losses by each bot's OnDelete, so the restart reads as
+            // "inherited N, destroyed N" in the Bots.Conservation line rather than as a hole in
+            // the books. The pass is separate from the delete loop because a bot's cascade would
+            // otherwise be counted after part of it had already gone.
+            for (int i = 0; i < stale.Count; i++)
+            {
+                Prepare(stale[i]);
+            }
+
             for (int i = 0; i < stale.Count; i++)
             {
                 try
@@ -118,6 +131,11 @@ namespace Server.Custom
             LastPurged = stale.Count;
             HasRun = true;
 
+            // One write for the whole sweep. A laden fleet hands the ledger a record per bot and
+            // appending them one at a time would be a few hundred opens at the worst moment of
+            // the boot.
+            BotGoodsLedger.Flush();
+
             if (stale.Count > 0)
             {
                 Log.Info(
@@ -130,6 +148,26 @@ namespace Server.Custom
             }
 
             return stale.Count;
+        }
+
+        /// <summary>
+        /// What the purge does to one bot before deleting it: count what it was holding in as
+        /// this boot's opening balance, and name the reason its loss record will carry.
+        ///
+        /// Internal so HaulFixtures can prove this wiring on a bot of its own. The alternative -
+        /// calling Purge from a fixture - would delete every bot in the world, which is not a
+        /// thing [CoreSmoke may do on a live shard.
+        /// </summary>
+        internal static void Prepare(PlayerBot bot)
+        {
+            if (bot == null)
+            {
+                return;
+            }
+
+            BotGoodsLedger.NoteOpening(bot);
+
+            bot.DeletionReason = BotGoodsLedger.ReasonBootPurge;
         }
     }
 }

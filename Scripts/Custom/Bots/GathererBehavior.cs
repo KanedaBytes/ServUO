@@ -399,7 +399,11 @@ namespace Server.Custom
                 int gained = carried - _carriedSeen;
 
                 _mined += gained;
-                BotWorkSites.NoteMined(gained);
+
+                // Through the ledger, not straight to BotWorkSites: it counts the units in AND
+                // marks them as accounted on the bot, so BotGoodsLedger's census does not find
+                // the same ore thirty seconds later and count it as mined a second time.
+                BotGoodsLedger.NoteMined(bot, gained);
 
                 // On the YIELD, not on the swing. A swing every four seconds would fill a
                 // fifty-deep ring in three minutes and bury everything else in it; what somebody
@@ -618,6 +622,13 @@ namespace Server.Custom
         private void EndShift(PlayerBot bot)
         {
             Release(bot);
+
+            // ONE LAST LOOK AT THE PACK BEFORE THE BRAIN GOES. NoticeYield is a poll on this
+            // instance, and this instance is about to be thrown away - so ore the harvest timer
+            // delivered since the previous tick would never be counted as mined by anything.
+            // BotGoodsLedger's census would find it later and reconcile it, which is correct but
+            // attributes a shift's last swing to whoever was standing there thirty seconds on.
+            NoticeYield(bot);
 
             int carried = Carried(bot);
 

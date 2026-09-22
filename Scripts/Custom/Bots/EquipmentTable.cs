@@ -203,9 +203,25 @@ namespace Server.Custom
                 case BotClass.Miner:
                     // A working stash from the last shift, bandages for the
                     // wolf bites, and camp kit for nights in the wild.
+                    //
+                    // THE STASH IS A SOURCE OF RAW GOODS and the ledger has to
+                    // be told, or a bot's first delivery would look like units
+                    // appearing out of nowhere (REVIEW.md F5). Measured from
+                    // the pack rather than from the roll, so a backpack that
+                    // refused the drop is not counted in; and counted APART
+                    // from mined units, so a restart destroying a fleet's
+                    // starting kit can never be read as a fleet's worth of
+                    // lost deliveries.
+                    Type stashType = BotHarvest.YieldFor(cls);
+                    int stashBefore = BotHaul.InContainer(bot.Backpack, stashType);
+
                     AddToPack(bot, cls == BotClass.Miner
                         ? "Server.Items.IronOre" : "Server.Items.Log",
                         Utility.RandomMinMax(3, 15));
+
+                    BotGoodsLedger.NoteSeeded(
+                        bot, BotHaul.InContainer(bot.Backpack, stashType) - stashBefore);
+
                     AddToPack(bot, "Server.Items.Bandage",
                               Utility.RandomMinMax(3, 10));
                     MaybeAddToPack(bot, "Server.Items.Kindling", 0.5,

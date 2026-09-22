@@ -221,6 +221,15 @@ namespace Server.Custom
             // (Scripts/Custom/Core/BridgeFixtures.cs).
             passed &= BridgeFixtures.RunFixtures(report);
 
+            // Delivery conservation: a receiver takes what it can and the remainder stays in the
+            // hauler's pack, a refused bank box destroys nothing, an interrupted hand-over leaves
+            // animal and load together, a logout waits for a carrying bot, and a load lost to a
+            // restart is written down (REVIEW.md F5, Scripts/Custom/Bots/HaulFixtures.cs).
+            //
+            // Bots rather than a scratch tree, because the thing under test is items moving
+            // between containers. They live on Map.Internal and are deleted in a finally.
+            passed &= HaulFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 

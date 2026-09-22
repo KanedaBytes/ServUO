@@ -665,11 +665,15 @@ namespace Server.Custom
                 hauling);
 
             text.AppendFormat(
-                " {0} unit(s) mined, {1} load(s) delivered carrying {2} unit(s). "
-                + "{3} pack animal(s) live, {4} reaped, {5} released.",
+                " {0} unit(s) mined, {1} load(s) delivered carrying {2} unit(s) a receiver ACCEPTED "
+                + "({3} hand-over(s) settled, {4} part-refused, {5} refused). "
+                + "{6} pack animal(s) live, {7} reaped, {8} released.",
                 BotWorkSites.Mined,
                 BotWorkSites.Deliveries,
                 BotWorkSites.Delivered,
+                BotGoodsLedger.Handovers,
+                BotGoodsLedger.PartRefused,
+                BotGoodsLedger.Refused,
                 BotPackAnimals.LiveCount(),
                 BotPackAnimals.Reaped,
                 BotPackAnimals.Released);

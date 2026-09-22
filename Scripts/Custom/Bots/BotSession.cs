@@ -60,6 +60,7 @@ namespace Server.Custom
         private static bool _initialStampDone;
         private static int _logoutsTotal;
         private static int _loginsTotal;
+        private static int _logoutsDeferred;
 
         static BotSession()
         {
@@ -108,6 +109,15 @@ namespace Server.Custom
         public static int LoginsSinceBoot
         {
             get { return _loginsTotal; }
+        }
+
+        /// <summary>
+        /// Logouts that said goodbye and then stood down because the bot had picked up a load in
+        /// the beat between the two (REVIEW.md F5 rule 3). Reported by [BotSessions.
+        /// </summary>
+        public static int LogoutsDeferred
+        {
+            get { return _logoutsDeferred; }
         }
 
         /// <summary>
@@ -294,8 +304,13 @@ namespace Server.Custom
         /// clocked in at its bench. Both are halves of the work loop, and a bot that says "gtg"
         /// mid-delivery leaves an ore load nobody ever collects and a smith standing dry - which
         /// looks exactly like the work layer being broken.
+        ///
+        /// REVIEW.md F5 rule 3 made this list load-bearing rather than merely tidy, and the gate
+        /// it names - HaulPending - was already here and already right. What was NOT right is
+        /// what happens after the decision; see BeginLogout. Internal rather than private so
+        /// HaulFixtures can assert on the predicate itself instead of on a logout's side effects.
         /// </summary>
-        private static bool CanLogoutNow(PlayerBot bot)
+        internal static bool CanLogoutNow(PlayerBot bot)
         {
             if (!bot.Alive || bot.LoggingOut || bot.Combatant != null)
             {
@@ -324,6 +339,18 @@ namespace Server.Custom
 
         /// <summary>
         /// Say goodbye, then go - with a beat in between, "like a real logout timer".
+        ///
+        /// AND THE BEAT IS A HOLE, WHICH REVIEW.md F5 RULE 3 CLOSES. LoggingOut is the point of
+        /// no return: the delayed call used to re-check nothing but Deleted. A gatherer still on
+        /// its shift has HaulPending false and so passes CanLogoutNow - and if its shift ends
+        /// inside those three to six seconds, EndShift shoulders a load and the delete fires on
+        /// top of it. That is a whole shift's ore destroyed by a logout that was legal when it
+        /// was decided and is not legal any more.
+        ///
+        /// So the bot stands down instead, and the next pass catches it once the hand-over is
+        /// done. Upstream's own words for the same idea, at BotSessionManager.cs:224: "a bot
+        /// mid-fight or mid-hunt finishes first; the next tick will catch it once things calm
+        /// down."
         /// </summary>
         private static void BeginLogout(PlayerBot bot)
         {
@@ -334,13 +361,37 @@ namespace Server.Custom
 
             BotLog.Note(bot, BotLogKind.Session, "logged out");
 
-            Timer.DelayCall(TimeSpan.FromSeconds(Utility.RandomMinMax(3, 6)), () =>
+            Timer.DelayCall(TimeSpan.FromSeconds(Utility.RandomMinMax(3, 6)), () => FinishLogout(bot));
+        }
+
+        /// <summary>
+        /// The other end of the beat. Deletes the bot, unless it picked up a load in the meantime.
+        ///
+        /// Internal so HaulFixtures can drive it without waiting out a timer.
+        /// </summary>
+        internal static void FinishLogout(PlayerBot bot)
+        {
+            if (bot == null || bot.Deleted)
             {
-                if (!bot.Deleted)
-                {
-                    bot.Delete();
-                }
-            });
+                return;
+            }
+
+            if (bot.HaulPending)
+            {
+                // Stand down. Clearing LoggingOut is what puts it back in front of the lifecycle
+                // roller and the next session pass; leaving it set would freeze the bot in a
+                // state nothing may draft from, for good.
+                bot.LoggingOut = false;
+                _logoutsTotal--;
+                _logoutsDeferred++;
+
+                BotLog.Note(bot, BotLogKind.Session, "logout deferred - carrying a load");
+
+                return;
+            }
+
+            bot.DeletionReason = BotGoodsLedger.ReasonLogout;
+            bot.Delete();
         }
 
         /// <summary>
@@ -430,14 +481,15 @@ namespace Server.Custom
 
             return String.Format(
                 "sessions {0}. curve {1:P0} at {2:00}:00 of target {3} gives {4} lifecycle bot(s); "
-                + "{5} login(s) and {6} logout(s) since boot",
+                + "{5} login(s) and {6} logout(s) since boot, {7} deferred for a load",
                 Enabled ? "ON" : "OFF (population pinned)",
                 CurveNow,
                 hour,
                 Config_.Target,
                 TargetNow,
                 _loginsTotal,
-                _logoutsTotal);
+                _logoutsTotal,
+                _logoutsDeferred);
         }
     }
 }

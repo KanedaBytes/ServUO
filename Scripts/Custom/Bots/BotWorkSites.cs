@@ -113,6 +113,16 @@ namespace Server.Custom
         /// <summary>Loads delivered since boot, and how much material moved. Reported by Bots.Work.</summary>
         public static int Deliveries { get; private set; }
 
+        /// <summary>
+        /// Units a receiver ACTUALLY TOOK since boot - a crafter over the counter, or the bot's
+        /// own bank box.
+        ///
+        /// It used to be units *offered*, which is the counter half of REVIEW.md F5: delivery
+        /// deleted the load, handed itself a number, and recorded the whole of that number as
+        /// delivered whether or not anything took it. A bench at CrafterStock.StockCap read as a
+        /// full delivery. This now measures accepted inventory, which is what the finding asked
+        /// for in those words.
+        /// </summary>
         public static int Delivered { get; private set; }
 
         /// <summary>
@@ -133,11 +143,25 @@ namespace Server.Custom
         /// the haul roll or the delivery gate sent it to the wrong place, and it is exactly the
         /// failure the work probe cannot see from its own two smiths. Counted separately so it can
         /// be asserted on rather than inferred from a total.
+        ///
+        /// It fires on the SETTLEMENT, not on the destination's type (changed with REVIEW.md F5).
+        /// A no-buyer bank-box fallback at a forge is a bank delivery and used not to be counted
+        /// as one; arriving at a bank with an empty pack is not a delivery and used to be.
         /// </summary>
         public static int BankDeliveries { get; private set; }
 
+        /// <summary>
+        /// A hand-over settled. The amount is what the receiver took, which may be none of it -
+        /// and a hand-over that moved nothing is not a delivery, so it does not count as one.
+        /// BotGoodsLedger.Handovers is where every settlement is counted, refused or not.
+        /// </summary>
         public static void NoteDelivery(int amount)
         {
+            if (amount <= 0)
+            {
+                return;
+            }
+
             Deliveries++;
             Delivered += amount;
         }
