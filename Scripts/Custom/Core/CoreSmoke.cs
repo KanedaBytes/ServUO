@@ -230,6 +230,11 @@ namespace Server.Custom
             // between containers. They live on Map.Internal and are deleted in a finally.
             passed &= HaulFixtures.RunFixtures(report);
 
+            // Work reporting: a class with nowhere to work is reported whether or not a site is also
+            // excluded, and the single-minded gatherer weights are what bots.json says they are
+            // (Scripts/Custom/Bots/WorkFixtures.cs). Pure functions; no mobiles.
+            passed &= WorkFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 

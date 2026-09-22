@@ -491,15 +491,32 @@ namespace Server.Custom
         ///   1. A SITE WITH NO ROUTE warns and is excluded. Without this a Miner picks it every
         ///      tick, fails to route, and stands still — which from the outside is
         ///      indistinguishable from a broken walker.
-        ///   2. A CLASS WITH NO STATION warns. The Fisherman produces this for free: its station
-        ///      is `dock` and there is no dock destination in the graph, because the fishing half
-        ///      is a later session. That is exactly the shape of the failure, so it is left to
-        ///      speak for itself rather than being special-cased into silence.
+        ///   2. A CLASS WITH NO STATION warns. The Fisherman was the first to produce it, until
+        ///      the Trammel adopt brought nine docks; the Lumberjack produced it until Yew Grove
+        ///      was authored. Whichever class it is, it is left to speak for itself rather than
+        ///      being special-cased into silence, and Bots.Work repeats it beside the excluded
+        ///      sites rather than behind them.
         ///
         /// A third check comes free with using the real harvest system: a site whose tiles the
         /// definition does not accept is excluded too. Upstream could not have had this one —
         /// nothing about their yield depended on the ground.
         /// </summary>
+        /// <summary>
+        /// Validates the sites at boot. Its own Initialize, and after ConsoleTap's at 900, for the
+        /// reason RequestPoller's is at 910 (commit 8bb53c6e): Scripts/Misc/Timestamp.cs replaces
+        /// Console.Out from an untagged Initialize, and until the tap re-wraps it at 900 anything
+        /// printed goes to the window alone. From BotSystem's untagged Initialize, "Lumberjack has
+        /// no station" was printed on every boot for a week and never once reached
+        /// Data/Live/console.json. Nothing reads Excluded or Stationless during the Initialize
+        /// pass - their readers are the behaviour tick, the probes at ServerStarted and health -
+        /// and the world and the graph are both loaded long before any Initialize runs.
+        /// </summary>
+        [CallPriority(920)]
+        public static void Initialize()
+        {
+            Validate(Map.Trammel);
+        }
+
         public static void Validate(Map map)
         {
             _excluded.Clear();

@@ -187,14 +187,17 @@ namespace Server.Custom
 
             // FISHERMAN — SEAM: not a Crafter this session, deliberately.
             //
-            // Everything about it differs from the other three. It has no station in the graph
-            // (there is no `dock` destination), it consumes no stock, and its production is not a
+            // Everything about it differs from the other three. Its station exists - the Trammel
+            // adopt brought nine `dock` destinations - but it consumes no stock, and its production is not a
             // craft at all: upstream drove the real Fishing.System, walking to the water's edge
             // first and casting only when open water was directly adjacent, which needs their
             // IsWet / HasStandableStatic dockside-plank scan to tell a pier from the sea.
             //
-            // BotClassHelper.StationFor still answers `dock` for it, so the missing station is
-            // REPORTED by BotWorkSites rather than being silently absent.
+            // BotClassHelper.StationFor answers `dock` for it. While there were no docks that was
+            // REPORTED by BotWorkSites as a stationless class; now that there are, a Fisherman at a
+            // dock simply has nothing to become (TravelerBehavior.BuildVisit returns null), and its
+            // destination weights are deliberately left alone until this seam closes - see the
+            // Bots README Deviations row on single-minded gatherers.
             //
             // Restored by: the dock session. Britain's waterfront landmarks are The Oaken Oar
             // (1424,1747, the dockside tavern) and Customs (1480,1746, on the docks themselves).

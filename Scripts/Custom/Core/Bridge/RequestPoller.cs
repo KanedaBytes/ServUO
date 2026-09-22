@@ -1737,6 +1737,14 @@ namespace Server.Custom
                             "work site '{0}' excluded: {1}", entry.Key, entry.Value));
                     }
 
+                    // The stationless classes ride the same ack as the excluded sites, as they
+                    // share the Bots.Work line: an ack that named only the sites told a nav editor
+                    // nothing about the class its edit had just given - or taken - a place to work.
+                    foreach (string stationless in BotWorkSites.Stationless)
+                    {
+                        excluded.Add(stationless);
+                    }
+
                     warnings = excluded;
                     message = "bot config reloaded. " + BotSystem.Caps.Describe();
                     return true;

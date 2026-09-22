@@ -86,11 +86,10 @@ namespace Server.Custom
             // copy that nothing else in the shard shares.
             CrafterProfiles.Bind();
 
-            // Validate the work sites against the loaded graph and the real map. Initialize
-            // rather than Configure, because this asks questions about world items - the forge
-            // and anvil are addons the decoration system places - and there is no world during
-            // Configure.
-            BotWorkSites.Validate(Map.Trammel);
+            // The work sites are validated by BotWorkSites.Initialize at CallPriority 920, not
+            // here: Initialize rather than Configure because it asks about world items - the forge
+            // and anvil are addons the decoration system places - and after ConsoleTap's 900 so
+            // its warnings reach Data/Live/console.json. See the comment there.
 
             // The reach check lives in Nav.Data, not in Bots.Work: a thin site is a fact about the
             // navigation data, and the person who needs to hear it is whoever just authored a site
@@ -578,14 +577,13 @@ namespace Server.Custom
         /// question with a different failure mode. Population asks "are there bots and are they
         /// built correctly"; this asks "is there anywhere for them to work, and are they working".
         ///
-        /// The verdict ladder, strictest first:
+        /// The findings, every one of them reported (see WorkVerdict):
         ///
-        ///   FAIL   a class has a station and the graph has none of it. That class can never
-        ///          work at all, and nothing else in the system would say so.
-        ///   WARN   a site was excluded at load (no route, or nothing harvestable there), or a
-        ///          crafter is blocked at its bench, or a capacity entry names a site that does
-        ///          not exist.
-        ///   OK     everything else, including a shard with no gatherers alive right now.
+        ///   WARN   a class has a station and the graph has none of it - that class can never
+        ///          work at all, and nothing else in the system would say so; a site was
+        ///          excluded at load (no route, or nothing harvestable there); a crafter is
+        ///          blocked at its bench; a capacity entry names a site that does not exist.
+        ///   OK     none of those, including a shard with no gatherers alive right now.
         /// </summary>
         public static HealthResult BuildWorkHealthResult()
         {
@@ -685,53 +683,79 @@ namespace Server.Custom
                 excluded.Add(entry.Key + " (" + entry.Value + ")");
             }
 
+            excluded.Sort(StringComparer.Ordinal);
+
+            return WorkVerdict(
+                excluded,
+                BotWorkSites.Stationless,
+                _store.Life.UnknownCapacityKeys(),
+                blocked,
+                text.ToString());
+        }
+
+        /// <summary>
+        /// The Bots.Work verdict, as a pure function of what the census found, so a fixture can
+        /// hand it a shard that does not exist.
+        ///
+        /// Every finding is REPORTED, none returns early. It used to be a ladder of early returns,
+        /// and from the Trammel adopt on the first rung - three forges that are always excluded -
+        /// hid the second: the line saying the Lumberjack had nowhere to work did not reach health
+        /// for a week. That is the failure BuildHealthResult's census comment already warns about,
+        /// found a second time. The excluded sites and the stationless classes share one line on
+        /// purpose, because they are the same question - where can nobody work - asked of sites
+        /// and of classes.
+        ///
+        /// Every finding is a WARN today, including a class with no station: a class kept back
+        /// on purpose is a planned gap rather than a fault, and failing a health check for one
+        /// trains people to ignore it. The worst status wins if that ever changes.
+        /// </summary>
+        internal static HealthResult WorkVerdict(
+            IList<string> excluded,
+            IList<string> stationless,
+            IList<string> unknownCapacity,
+            IList<string> blocked,
+            string text)
+        {
+            var findings = new List<string>();
+
             if (excluded.Count > 0)
             {
-                excluded.Sort(StringComparer.Ordinal);
-
-                return HealthResult.Warn(String.Format(
-                    "{0} work site(s) excluded at load: {1}. {2}",
+                findings.Add(String.Format(
+                    "{0} work site(s) excluded at load: {1}",
                     excluded.Count,
-                    String.Join("; ", ToArray(excluded)),
-                    text));
+                    String.Join("; ", ToArray(excluded))));
             }
-
-            // A class with no station is a WARN, not a Fail. The Fisherman is the only one, it is
-            // a deliberately severed seam rather than a fault - there is no `dock` destination
-            // because the fishing half is a later session - and failing a health check for a
-            // planned gap trains people to ignore it.
-            IList<string> stationless = BotWorkSites.Stationless;
 
             if (stationless.Count > 0)
             {
-                return HealthResult.Warn(String.Format(
-                    "{0} class(es) have nowhere to work: {1}. {2}",
+                findings.Add(String.Format(
+                    "{0} class(es) have nowhere to work: {1}",
                     stationless.Count,
-                    String.Join("; ", ToArray(stationless)),
-                    text));
+                    String.Join("; ", ToArray(stationless))));
             }
-
-            List<string> unknownCapacity = _store.Life.UnknownCapacityKeys();
 
             if (unknownCapacity.Count > 0)
             {
-                return HealthResult.Warn(String.Format(
-                    "capacity names {0} destination(s) that are not on the graph: {1}. {2}",
+                findings.Add(String.Format(
+                    "capacity names {0} destination(s) that are not on the graph: {1}",
                     unknownCapacity.Count,
-                    String.Join(", ", ToArray(unknownCapacity)),
-                    text));
+                    String.Join(", ", ToArray(unknownCapacity))));
             }
 
             if (blocked.Count > 0)
             {
-                return HealthResult.Warn(String.Format(
-                    "{0} crafter(s) cannot work: {1}. {2}",
+                findings.Add(String.Format(
+                    "{0} crafter(s) cannot work: {1}",
                     blocked.Count,
-                    String.Join("; ", ToArray(blocked)),
-                    text));
+                    String.Join("; ", ToArray(blocked))));
             }
 
-            return HealthResult.Ok(text.ToString());
+            if (findings.Count == 0)
+            {
+                return HealthResult.Ok(text);
+            }
+
+            return HealthResult.Warn(String.Join("; ", findings.ToArray()) + ". " + text);
         }
 
         private static string Describe<T>(Dictionary<T, int> counts, Func<T, string> name)

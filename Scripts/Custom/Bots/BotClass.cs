@@ -136,10 +136,11 @@ namespace Server.Custom
         /// type alone cannot tell a loom from a bakery. That is the same discrimination the
         /// destination weighting already makes, in the same place: tags.
         ///
-        /// FISHERMAN ANSWERS `dock` AND THERE IS NO DOCK. That is deliberate and is the second of
-        /// this session's two failure surfaces: BotWorkSites.Validate reports the class as
-        /// stationless at load rather than the fishing half being quietly missing. See the seam
-        /// note at the foot of CrafterProfiles.
+        /// FISHERMAN ANSWERS `dock`, AND THE DOCKS EXIST BUT THE WORK DOES NOT. When this was
+        /// written there was no dock and BotWorkSites.Validate reported the class as stationless;
+        /// the Trammel adopt brought nine, so the class is no longer stationless, but a Fisherman
+        /// arriving at one still becomes nothing - BuildVisit has no fishing behaviour to hand it.
+        /// See the seam note at the foot of CrafterProfiles.
         /// </summary>
         /// <summary>
         /// The station this BOT works, resolving the legacy Crafter class through its sub-type.
