@@ -1171,3 +1171,114 @@ test('the host check reads the port off the socket, not off a constant', () => {
 
     assert.ok(/String\(request\.socket\.localPort\)/.test(source));
 });
+
+// ---- the save acknowledgement is a completed generation (REVIEW.md, save acknowledgement) -------
+
+test('a save token carries a nonce, and its ack is matched by it and carries the generation', async () => {
+    // Until 21 September 2026 `save` was not in NONCED: the token was an empty file and the ack was
+    // matched by nothing but existing. A stale save.ack.json was "saved".
+    fakeShard.writeAck(REQUESTS, 'save', '', { ok: true, message: 'an old save', generation: 3 });
+
+    runShard((name) => ({ ok: true, message: 'world saved in 0.10s, generation 7 complete', generation: 7 }));
+
+    const { status, body } = await call('POST', '/api/request/save');
+
+    assert.strictEqual(status, 202);
+    assert.match(body.nonce || '', /^[0-9a-f]{8}$/, 'the save request has no nonce');
+
+    let ack = null;
+
+    for (let i = 0; i < 50 && !ack; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+
+        const answer = await call('GET', '/api/ack/save');
+
+        if (answer.body && answer.body.utc && String(answer.body.token).endsWith('#' + body.nonce)) {
+            ack = answer.body;
+        }
+    }
+
+    assert.ok(ack, 'this run\'s ack never arrived');
+    assert.strictEqual(ack.generation, 7, 'the ack does not carry the generation the fake reported');
+    assert.ok(ack.bootId, 'the ack does not name the answering process');
+    assert.deepStrictEqual(shard.seen.map((t) => t.name), ['save']);
+    assert.match(shard.seen[0].body, /^#[0-9a-f]{8}$/, 'the token body should be the nonce alone');
+});
+
+test('the save judgement: no ack is unknown, ok without a generation is not saved', () => {
+    const noAnswer = bridge.judgeSaveAck(null);
+
+    assert.strictEqual(noAnswer.ok, false);
+    assert.match(noAnswer.reason, /outcome is unknown/);
+    assert.match(noAnswer.reason, /Nothing was stopped/);
+
+    const refused = bridge.judgeSaveAck({ ok: false, message: 'save did not run - the generation is still 4' });
+
+    assert.strictEqual(refused.ok, false);
+    assert.match(refused.reason, /refused to save: save did not run/);
+
+    const unstamped = bridge.judgeSaveAck({ ok: true, message: 'world saved in 0.30s' });
+
+    assert.strictEqual(unstamped.ok, false, 'an ack from the pre-generation shard must not count as saved');
+    assert.match(unstamped.reason, /no generation/);
+
+    const saved = bridge.judgeSaveAck({ ok: true, message: 'world saved', generation: 43, bootId: 'abc' });
+
+    assert.deepStrictEqual(
+        { ok: saved.ok, generation: saved.generation, bootId: saved.bootId },
+        { ok: true, generation: 43, bootId: 'abc' });
+});
+
+test('the shutdown judgement: same process, at the saved generation or later', () => {
+    const saved = { ok: true, generation: 43, bootId: 'abc' };
+
+    assert.match(bridge.judgeShutdownAck(null, saved).reason, /outcome is unknown/);
+    assert.match(bridge.judgeShutdownAck({ ok: false, message: 'no' }, saved).reason, /refused to stop/);
+    assert.match(
+        bridge.judgeShutdownAck({ ok: true, generation: 43, bootId: 'zzz' }, saved).reason,
+        /different shard/);
+    assert.match(
+        bridge.judgeShutdownAck({ ok: true, generation: 42, bootId: 'abc' }, saved).reason,
+        /generation 42, but the save completed 43/);
+
+    const stopped = bridge.judgeShutdownAck({ ok: true, generation: 43, bootId: 'abc' }, saved);
+
+    assert.deepStrictEqual({ ok: stopped.ok, generation: stopped.generation }, { ok: true, generation: 43 });
+
+    // An autosave in the two seconds before the kill is a later, complete generation: allowed.
+    assert.strictEqual(bridge.judgeShutdownAck({ ok: true, generation: 44, bootId: 'abc' }, saved).generation, 44);
+});
+
+test('the boot judgement: a different process at the same generation, or later with a warning', () => {
+    const stopped = { ok: true, generation: 43, bootId: 'abc' };
+
+    assert.strictEqual(bridge.judgeBootAck(null, stopped).ok, false);
+    assert.match(
+        bridge.judgeBootAck({ ok: true, generation: 43, bootId: 'abc' }, stopped).reason,
+        /did not stop/, 'the old process answering is not a restart');
+    assert.match(
+        bridge.judgeBootAck({ ok: true, generation: 41, bootId: 'new' }, stopped).reason,
+        /booted at generation 41 but the save completed 43/);
+    assert.match(
+        bridge.judgeBootAck({ ok: true, message: 'health snapshot written', bootId: 'new' }, stopped).reason,
+        /no generation/);
+
+    const back = bridge.judgeBootAck({ ok: true, generation: 43, bootId: 'new' }, stopped);
+
+    assert.deepStrictEqual({ ok: back.ok, generation: back.generation, warning: back.warning },
+        { ok: true, generation: 43, warning: undefined });
+
+    const later = bridge.judgeBootAck({ ok: true, generation: 44, bootId: 'new' }, stopped);
+
+    assert.strictEqual(later.ok, true);
+    assert.match(later.warning, /saved again before it stopped/);
+});
+
+test('a reload the shard never answers is reported as unknown, not failed', async () => {
+    runShard(() => null);
+
+    const { body } = await call('POST', '/api/save/navigation', moveWaypoint(await currentHash()));
+
+    assert.strictEqual(body.reloaded, false);
+    assert.match(body.message, /outcome is unknown/);
+});

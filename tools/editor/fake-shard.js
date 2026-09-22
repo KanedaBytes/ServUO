@@ -107,7 +107,16 @@ function start(options) {
     };
 }
 
-/** Byte-for-byte the shape RequestPoller.WriteAck produces, including the echoed token body. */
+/**
+ * Byte-for-byte the shape RequestPoller.WriteAck produces, including the echoed token body.
+ *
+ * `generation` and `bootId` are what every real ack carries since 21 September 2026 - the
+ * completed persistence generation and the answering process. The fake takes them from the
+ * answer so a test can script a shard at generation 7, and defaults them the way a shard that
+ * has never saved would: generation 0, and one boot for the life of this fake.
+ */
+const FAKE_BOOT_ID = 'fake' + Math.random().toString(16).slice(2, 14);
+
 function writeAck(dir, name, token, answer) {
     const payload = {
         request: name,
@@ -116,6 +125,8 @@ function writeAck(dir, name, token, answer) {
         message: answer.message || '',
         errors: answer.errors || [],
         warnings: answer.warnings || [],
+        generation: Number.isInteger(answer.generation) ? answer.generation : 0,
+        bootId: answer.bootId || FAKE_BOOT_ID,
         utc: new Date().toISOString()
     };
 

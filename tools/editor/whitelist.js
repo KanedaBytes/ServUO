@@ -76,6 +76,11 @@ const FILES = {
     // is in the LINES and a pace reported as one number is no answer.
     botPace: path.join(REPO_ROOT, 'Data', 'Live', 'bot-pace.json'),
 
+    // Written by PersistenceGeneration when the shard refuses to load Saves/ and exits before it
+    // has a console tap or a health file. The restart handshake reads it so a refused boot fails
+    // in a second with the shard's own words. Deleted by the next boot that verifies cleanly.
+    bootRefusal: path.join(REPO_ROOT, 'Data', 'Live', 'boot-refusal.json'),
+
     // Authoring input, not live data: uo-offline's navigation converted into our schema.
     // Read-only by construction - resolveSave has no entry for it, so the save endpoint
     // cannot name it however the request is spelled.

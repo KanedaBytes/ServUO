@@ -4296,7 +4296,9 @@ function wireInput() {
 function wireAdmin() {
     // Plain fire-and-ack. The status line carries the shard's own words, unedited, so the banner
     // and the console say the same sentence.
-    wireRequest('admin-save', 'save', '', 'World saved');
+    // Sixty seconds, not the eight every other button gets: a save is a synchronous freeze of the
+    // whole shard, and the ack is written only once its generation is complete.
+    wireRequest('admin-save', 'save', '', 'World saved', { timeoutMs: 60000 });
     wireRequest('admin-core-smoke', 'core-smoke', '', 'Core smoke started');
     wireRequest('admin-bot-smoke', 'bot-smoke', '', 'Bot smoke started');
     wireRequest('admin-bots-reload', 'bots-reload', '', 'Bots reloaded');
@@ -5481,12 +5483,14 @@ ${ack.message}`, 'warn');
  * moment the file is written - "reloaded" appearing before anything reloaded would be a lie, and
  * a failing reload would be invisible.
  */
-function wireRequest(buttonId, requestName, body, successText) {
+function wireRequest(buttonId, requestName, body, successText, options) {
     const button = $(buttonId);
 
     if (!button) {
         return;
     }
+
+    const timeoutMs = (options && options.timeoutMs) || undefined;
 
     button.addEventListener('click', async () => {
         button.disabled = true;
@@ -5497,13 +5501,17 @@ function wireRequest(buttonId, requestName, body, successText) {
 
             // The nonce is what tells this run's ack from the last one's; the shard overwrites the
             // ack file in place rather than deleting it.
-            const ack = await api.awaitAck(requestName, { nonce: dropped.nonce });
+            const ack = await api.awaitAck(requestName, { nonce: dropped.nonce, timeoutMs });
+
+            // Every ack names the completed persistence generation. Shown so "World saved" reads
+            // as "World saved: ..., generation 43", the number the next boot has to come back at.
+            const generation = Number.isInteger(ack.generation) ? ` (generation ${ack.generation})` : '';
 
             if (ack.ok) {
-                setStatus(`${successText}: ${ack.message}`, 'ok');
+                setStatus(`${successText}: ${ack.message}${generation}`, 'ok');
                 await refreshShapes();
             } else {
-                setStatus(`${requestName} failed: ${ack.message}`, 'error');
+                setStatus(`${requestName} failed: ${ack.message}${generation}`, 'error');
             }
         } catch (error) {
             setStatus(`${requestName} failed: ${error.message}`, 'error');

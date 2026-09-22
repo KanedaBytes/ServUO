@@ -82,10 +82,13 @@ const ACK_TIMEOUT_MS = Number(process.env.GG_ACK_TIMEOUT_MS) || 5000;
 // ask for.
 // `broadcast` is deliberately NOT here for a different reason from livemap-on's: its body is the
 // message every player is about to read, and appending "#a1b2c3d4" to that is not a thing to do.
+// `save` joined this set on 21 September 2026. Its handler ignores its body, so the nonce costs
+// nothing, and without one the save ack was matched by nothing but its own existence: a stale
+// save.ack.json from a bridge restart, or a second tab, read as this run's "saved".
 const NONCED = new Set([
     'nav-reload', 'dailylife-reload', 'zones-reload', 'health', 'gg-reimport', 'spawn-reload',
     'botpop-audit', 'botpop-gen', 'botinfo',
-    'core-smoke', 'bot-smoke', 'bots-reload', 'shutdown', 'tile-probe', 'bot-pace',
+    'core-smoke', 'bot-smoke', 'bots-reload', 'save', 'shutdown', 'tile-probe', 'bot-pace',
     'world-census'
 ]);
 
@@ -1246,23 +1249,159 @@ async function handleRestart(rest, request, response) {
     });
 }
 
-async function runRestart() {
-    const saveNonce = writeToken('save', '');
-    const saved = await waitForAck('save', saveNonce, 60000);
+// ---- what an ack has to say before the restart believes it -------------------------------------
+//
+// Three pure judgements, exported so the tests can drive them with hand-written acks. The rule
+// they share (Scripts/Custom/Core/LoopQueue.cs, "the outcome contract"): an ack with ok:true means
+// the operation completed; ok:false means it failed and the message says where; NO ack means the
+// outcome is UNKNOWN - never done, never failed - and nothing that depends on it may proceed.
+//
+// The numbers: every ack carries `generation`, the completed persistence generation, and `bootId`,
+// the process that answered. "Saved" is a generation that advanced; "stopped" is the same process
+// stopping at that generation or later; "back" is a DIFFERENT process at the same generation.
 
-    if (!saved || !saved.ok) {
-        throw new Error(saved
-            ? `The shard refused to save: ${saved.message}`
-            : 'The shard did not answer the save. Nothing was stopped.');
+/** The save leg. `ack` is the parsed save.ack.json, or null when none arrived in time. */
+function judgeSaveAck(ack) {
+    if (!ack) {
+        return {
+            ok: false,
+            reason: 'The shard did not answer the save within 60s. Its outcome is unknown - it may '
+                + 'have saved, or still be saving. Nothing was stopped.'
+        };
     }
 
-    restartStep('stopping', `Saved (${saved.message}). Stopping the shard...`);
+    if (!ack.ok) {
+        return { ok: false, reason: `The shard refused to save: ${ack.message}` };
+    }
+
+    if (!Number.isInteger(ack.generation)) {
+        return {
+            ok: false,
+            reason: `The save ack carries no generation (${ack.message}); an ack that cannot say `
+                + 'which save completed is not treated as saved.'
+        };
+    }
+
+    return { ok: true, generation: ack.generation, bootId: ack.bootId || null, message: ack.message };
+}
+
+/** The shutdown leg. `saved` is judgeSaveAck's answer for the save this shutdown follows. */
+function judgeShutdownAck(ack, saved) {
+    if (!ack) {
+        return {
+            ok: false,
+            reason: 'The shard did not acknowledge the shutdown within 30s. Its outcome is unknown - '
+                + 'it may still be running, or be stopping now. Nothing was started.'
+        };
+    }
+
+    if (!ack.ok) {
+        return { ok: false, reason: `The shard refused to stop: ${ack.message}` };
+    }
+
+    if (saved.bootId && ack.bootId && ack.bootId !== saved.bootId) {
+        return {
+            ok: false,
+            reason: `A different shard (boot ${ack.bootId}) answered the shutdown than the one that `
+                + `saved (boot ${saved.bootId}). Nothing was started.`
+        };
+    }
+
+    if (Number.isInteger(ack.generation) && ack.generation < saved.generation) {
+        return {
+            ok: false,
+            reason: `The shutdown ack says generation ${ack.generation}, but the save completed `
+                + `${saved.generation}. Nothing was started.`
+        };
+    }
+
+    return {
+        ok: true,
+        generation: Number.isInteger(ack.generation) ? ack.generation : saved.generation,
+        bootId: ack.bootId || null
+    };
+}
+
+/**
+ * The boot leg: the first health ack after the new process is up. `stopped` is
+ * judgeShutdownAck's answer. Returns `warning` rather than failing when the shard saved again
+ * before it stopped (an autosave in the gap), because that generation is later and complete.
+ */
+function judgeBootAck(ack, stopped) {
+    if (!ack || !ack.ok) {
+        return { ok: false, reason: 'The shard answered the health request with a failure.' };
+    }
+
+    if (stopped.bootId && ack.bootId && ack.bootId === stopped.bootId) {
+        return {
+            ok: false,
+            reason: `The process that answered (boot ${ack.bootId}) is the one that was asked to `
+                + 'stop. It did not stop.'
+        };
+    }
+
+    if (!Number.isInteger(ack.generation)) {
+        return { ok: false, reason: `The shard is up but its ack carries no generation (${ack.message}).` };
+    }
+
+    if (ack.generation < stopped.generation) {
+        return {
+            ok: false,
+            reason: `The shard booted at generation ${ack.generation} but the save completed `
+                + `${stopped.generation}. A backup was restored, or Saves/Custom/ACCEPT was used; `
+                + 'the world on disk is not the one that was saved.'
+        };
+    }
+
+    if (ack.generation > stopped.generation) {
+        return {
+            ok: true,
+            generation: ack.generation,
+            warning: `The shard is up at generation ${ack.generation}, later than the ${stopped.generation} `
+                + 'this restart saved: it saved again before it stopped.'
+        };
+    }
+
+    return { ok: true, generation: ack.generation };
+}
+
+/**
+ * The refusal PersistenceGeneration writes when it will not load Saves/, if it was written after
+ * `since`. The shard exits before it has a console tap or a health file, so this is the only trace
+ * the bridge can read - and reading it is what lets a restart fail in one second with the shard's
+ * own words instead of asking a dead process for two to six minutes.
+ */
+function readBootRefusal(since) {
+    const refusal = readJson(whitelist.FILES.bootRefusal);
+
+    if (!refusal || !refusal.utc || !refusal.message) {
+        return null;
+    }
+
+    if (since && Date.parse(refusal.utc) < Date.parse(since)) {
+        return null;
+    }
+
+    return refusal;
+}
+
+async function runRestart() {
+    const saveNonce = writeToken('save', '');
+    const saved = judgeSaveAck(await waitForAck('save', saveNonce, 60000));
+
+    if (!saved.ok) {
+        throw new Error(saved.reason);
+    }
+
+    restartStep('stopping',
+        `Saved generation ${saved.generation} (${saved.message}). Stopping the shard...`,
+        { generation: saved.generation, bootId: saved.bootId });
 
     const killNonce = writeToken('shutdown', '');
-    const killed = await waitForAck('shutdown', killNonce, 30000);
+    const stopped = judgeShutdownAck(await waitForAck('shutdown', killNonce, 30000), saved);
 
-    if (!killed || !killed.ok) {
-        throw new Error('The shard did not acknowledge the shutdown. It is still running.');
+    if (!stopped.ok) {
+        throw new Error(stopped.reason);
     }
 
     for (let attempt = 0; attempt < 60 && shardIsUp(); attempt++) {
@@ -1273,11 +1412,15 @@ async function runRestart() {
         throw new Error('ServUO.exe is still running after 60s. Nothing was started.');
     }
 
-    restartStep('building', 'Stopped. Building and starting (build.ps1 refuses a failed build)...');
+    restartStep('building',
+        `Stopped at generation ${stopped.generation}. Building and starting (build.ps1 refuses a failed build)...`,
+        { generation: stopped.generation });
+
+    const launchedAt = new Date().toISOString();
 
     await startShard();
 
-    restartStep('waiting', 'Waiting for the shard to answer...');
+    restartStep('waiting', `Waiting for the shard to answer at generation ${stopped.generation}...`);
 
     // The health snapshot is the shard saying it is up, and asking for a fresh one is the same
     // request the Health panel already makes.
@@ -1292,6 +1435,14 @@ async function runRestart() {
         await wait(1000);
 
         if (!shardIsUp()) {
+            // A process that came and went may have REFUSED the tree. PersistenceGeneration writes
+            // its refusal to Data/Live before it exits, and that is the answer, not a timeout.
+            const refusal = readBootRefusal(launchedAt);
+
+            if (refusal) {
+                throw new Error(`The shard refused to boot (exit ${refusal.exitCode}):\n${refusal.message}`);
+            }
+
             continue;
         }
 
@@ -1311,10 +1462,22 @@ async function runRestart() {
 
         const ack = await waitForAck('health', nonce, 2000);
 
-        if (ack && ack.ok) {
-            restartStep('done', 'The shard is up.', { running: false, ok: true });
-            return;
+        if (!ack) {
+            continue;
         }
+
+        const back = judgeBootAck(ack, stopped);
+
+        if (!back.ok) {
+            throw new Error(back.reason);
+        }
+
+        restartStep('done',
+            back.warning
+                ? `The shard is up. ${back.warning}`
+                : `The shard is up at generation ${back.generation}, the generation it saved.`,
+            { running: false, ok: true, generation: back.generation });
+        return;
     }
 
     throw new Error('The shard did not answer after 120 attempts (at least two minutes, up to about six). Check its window.');
@@ -1354,7 +1517,9 @@ async function reloadFor(name) {
     if (!ack) {
         return {
             reloaded: false,
-            message: `The shard did not answer within ${ACK_TIMEOUT_MS / 1000}s. Is it running?`,
+            message: `The shard did not answer within ${ACK_TIMEOUT_MS / 1000}s. The reload's outcome is `
+                + 'unknown - it may have run, or run later when the shard picks the token up. The '
+                + 'file is written either way.',
             errors: [],
             warnings: []
         };
@@ -1563,5 +1728,6 @@ if (require.main === module) {
 
 module.exports = {
     MAX_SAVE_BODY,
-    handleRequest, hostIsLocal, refusalFor, hashOf, ACK_TIMEOUT_MS, SESSION_SECRET, art
+    handleRequest, hostIsLocal, refusalFor, hashOf, ACK_TIMEOUT_MS, SESSION_SECRET, art,
+    judgeSaveAck, judgeShutdownAck, judgeBootAck
 };

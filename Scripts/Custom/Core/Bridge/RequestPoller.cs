@@ -1310,16 +1310,50 @@ namespace Server.Custom
                 // Safe to run inline here. Poll is a Timer callback, so this IS the game thread,
                 // which is where World.Save must run; and Poll has already refused to dispatch
                 // anything while World.Saving, so this cannot re-enter a save in progress.
+                //
+                // THE ACK MEANS A COMPLETED GENERATION, not that AutoSave.Save() returned (REVIEW.md,
+                // "Save acknowledgement is weaker than the restart sequence assumes"). AutoSave.Save
+                // returns without saving during AutoRestart or world creation, World.Save returns
+                // early if a save is already running, and a store that fails to write is caught and
+                // degraded rather than thrown. So this reads PersistenceGeneration.LastSave after the
+                // call and says "saved" only when the generation advanced by exactly one, every store
+                // wrote, and the manifest was written - which is the same test the next boot applies.
                 case "save":
                 {
+                    int before = PersistenceGeneration.Current;
                     var watch = System.Diagnostics.Stopwatch.StartNew();
 
                     Server.Misc.AutoSave.Save();
 
                     watch.Stop();
 
+                    SaveRecord last = PersistenceGeneration.LastSave;
+
+                    if (last == null || last.Generation != before + 1)
+                    {
+                        message = String.Format(
+                            "save did not run - the generation is still {0} ({1})",
+                            PersistenceGeneration.Current,
+                            Server.Misc.AutoRestart.Restarting ? "AutoRestart.Restarting"
+                            : Server.Commands.CreateWorld.WorldCreating ? "CreateWorld.WorldCreating"
+                            : World.Saving ? "a save was already running"
+                            : "no reason the poller can see");
+                        return false;
+                    }
+
+                    if (!last.Ok)
+                    {
+                        message = String.Format(
+                            "world save {0} - {1}", last.Describe(), last.ManifestWritten
+                                ? "the world on disk is at this generation and the store(s) named are not; " +
+                                  "the next boot will refuse the tree until you decide"
+                                : "the stores were written but nothing says which save they belong to");
+                        errors = new List<string>(last.FailedStores);
+                        return false;
+                    }
+
                     message = String.Format(
-                        "world saved in {0:F2}s", watch.Elapsed.TotalSeconds);
+                        "world saved in {0:F2}s, {1}", watch.Elapsed.TotalSeconds, last.Describe());
                     return true;
                 }
 
@@ -1422,11 +1456,20 @@ namespace Server.Custom
                 // The SAVE is the caller's job, not this one's: the bridge drops `save`, waits for
                 // its ack, and only then drops this. Doing both here would make a shutdown that
                 // failed to save indistinguishable from one that did.
+                //
+                // Autosaves are switched off first. The ack carries the generation the shard stops
+                // at, and the bridge's restart compares it with the generation the shard boots at; an
+                // autosave landing in the two seconds between this ack and the kill would move the
+                // number after it was reported. SavesEnabled is the public switch [SetSaves flips
+                // (Scripts/Misc/AutoSave.cs:22,83), and the process is about to end anyway.
                 case "shutdown":
                 {
+                    Server.Misc.AutoSave.SavesEnabled = false;
+
                     Timer.DelayCall(TimeSpan.FromSeconds(2.0), () => Core.Kill(false));
 
-                    message = "shutting down in 2s";
+                    message = String.Format(
+                        "shutting down in 2s at generation {0}", PersistenceGeneration.Current);
                     return true;
                 }
 
@@ -1652,6 +1695,13 @@ namespace Server.Custom
             builder.Append("  \"message\": ").Append(Json.Quote(message)).Append(",\n");
             AppendDetails(builder, "errors", errors);
             AppendDetails(builder, "warnings", warnings);
+
+            // On EVERY ack, not only save's: the completed persistence generation and this
+            // process's identity. A shutdown ack then says which generation the shard stopped at, a
+            // health ack after a boot says which it came back at, and the bridge compares the two
+            // rather than trusting that a save it was told about is the save that is on disk.
+            builder.Append("  \"generation\": ").Append(PersistenceGeneration.Current).Append(",\n");
+            builder.Append("  \"bootId\": ").Append(Json.Quote(PersistenceGeneration.BootId)).Append(",\n");
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append("\n");
             builder.Append("}\n");
 

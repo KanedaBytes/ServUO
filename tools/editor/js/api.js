@@ -159,7 +159,12 @@ export const api = {
             }
 
             if (Date.now() > deadline) {
-                throw new Error('The shard did not answer. Is it running?');
+                // Not "failed": the token may still be on disk for a shard that is saving, or
+                // down, and the poller runs it when it next looks. The outcome contract
+                // (Scripts/Custom/Core/LoopQueue.cs) is that no answer means unknown.
+                throw new Error(
+                    `The shard did not answer within ${Math.round(timeoutMs / 1000)}s. The request's `
+                    + 'outcome is unknown - it may still run when the shard picks the token up.');
             }
 
             await new Promise((resolve) => setTimeout(resolve, 400));
