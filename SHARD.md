@@ -154,12 +154,14 @@ Where a fresh session should start, in order:
    under **History** is a dated finding rather than a statement about now.
 2. **`REVIEW.md`**, the read-only architectural review of 11 September 2026. Required reading
    before changing this layer: it is where the open defects are named and prioritised. F1 fixed,
-   **F2 fixed by the PlayerMobile class swap**, F3 interim only, F4 fixed, **F6 fixed and the save
+   **F2 fixed by the PlayerMobile class swap**, **F3 fixed on 22 September 2026** (every request
+   is `<name>.<id>.token`, claimed by rename and acked by id, and the shard commits the editor's
+   data files against the version a save was based on - which closes the editor restore
+   lost-update finding with it; see *A request has an id* below), F4 fixed, **F6 fixed and the save
    acknowledgement fixed on 21 September 2026** (stamped atomic stores, a generation manifest, a
    boot that refuses a mixed tree, acks that mean a completed generation - see *Persistence has a
-   generation* below), and the **LoopQueue outcome contract** written the same day; F5 and the full
-   F3 request identity are scheduled before 7f. Its section 11 was the documentation discrepancy
-   list and is now closed.
+   generation* below), and the **LoopQueue outcome contract** written the same day; F5 is
+   scheduled before 7f. Its section 11 was the documentation discrepancy list and is now closed.
 3. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
    source and `playerbots/data/` for data - see the table at the top of `CLAUDE.md` for the three
    trees that are *not* it, including the installed snapshot this line used to name. The rule for
@@ -260,7 +262,8 @@ Rules in force for bots and occupied tiles, each with its row in the README's De
   smith is at the bench, a second smith from town settling on a free tile and working.
 
 Running a chain headlessly: set `BotSmokeOnStart=True` in `Config/Custom.cfg`, start `ServUO.exe`
-with its console redirected to a file, drop `Data/Live/requests/livemap-on.token` (body `2 custom`)
+with its console redirected to a file, drop `Data/Live/requests/livemap-on.manual.token` (body `2
+custom`; every token is `<name>.<id>.token`, see *A request has an id* below)
 so `Data/Live/botlog.json` records each bot's route, rung and arrival events, and read the console
 for the five result lines. Put the flag back to `False` before committing - a `git add -A` at a
 checkpoint has shipped it as `True` once already.
@@ -854,11 +857,13 @@ writers and prove each refusal - half-written, generation mismatch, listed-but-m
 fingerprint, failed store, incomplete last save - plus a stamped round trip, the LoopQueue outcomes
 below, and the agreement between the boot-verified generation and what every store loaded and wrote.
 
-**Stopping and starting the shard by hand.** Drop `save.token` and wait for `save.ack.json` with
-`ok:true` and its `generation`; drop `shutdown.token` and read its `generation`; confirm `ServUO.exe`
-is gone. Before every boot check nothing listens on 2594 or 8081 and no `ServUO` process exists;
-after the boot the console's `Persistence:` line (or `Core.Persistence` in health.json) names the
-generation it verified, which must be the one the shutdown ack reported.
+**Stopping and starting the shard by hand.** Drop `save.<id>.token` (any id you like:
+`save.manual.token`) and wait for `save.<id>.ack.json` with `ok:true` and its `generation`; drop
+`shutdown.<id>.token` and read its `generation`; confirm `ServUO.exe` is gone. Before every boot
+check nothing listens on 2594 or 8081 and no `ServUO` process exists; after the boot the console's
+`Persistence:` line (or `Core.Persistence` in health.json) names the generation it verified, which
+must be the one the shutdown ack reported. A token dropped while the shard is down is swept at the
+next boot, not run - drop it again once the console shows the poller's sweep line.
 
 ### A job's outcome is one of four things
 
@@ -868,6 +873,29 @@ nothing happened, safe to retry) and **Unknown** (the waiter gave up while it wa
 process ended with it running, or no ack ever came - never done, never failed, never retried as if
 nothing happened). `nav-adopt.json` and `walk-audit.json` say `failed` with the error or `unknown`
 for a run the shard stopped under, and the editor and bridge word a missing ack as unknown.
+
+### A request has an id
+
+From 22 September 2026 (REVIEW.md F3 and the editor restore lost-update finding, both closed that
+day). Every token the bridge or a hand drops is `Data/Live/requests/<name>.<id>.token`;
+`RequestPoller` **claims** it by renaming it to `.claimed` before dispatching, and acks to
+`<name>.<id>.ack.json` echoing the `id` with an `outcome` word. The bridge matches an ack only on
+that id and the `bootId` `Data/Live/health.json` names; an ack with no id, another id or another
+boot's id is ignored and reported. A token still unclaimed at a timeout is withdrawn by the bridge
+and reported **NotRun** (retried once, never more); a claimed one with no ack is **Unknown**. At
+boot the poller sweeps every token, claimed file, ack, staged commit and the previous boot's
+`health.json` - **a token written while the shard is down is no longer run when it comes back**.
+
+**The shard writes the editor's data files.** A save stages the new text beside the target as
+`<file>.<id>.staged` and drops `commit` carrying the version it was based on (`base=<hash|none>`,
+required); `DataFileCommit` hashes the live file on the game thread, refuses a mismatch naming both
+hashes and - from `DataFileLedger`, which `JsonConfig.TrySaveToken`, `NavigationSystem.Save`,
+`RestrictedZoneSystem.Save` and `BotPopulation.Write` note their hashes in - who last wrote the file
+and when, else replaces the file keeping the previous one as `.bak` and reloads. `restore` checks
+the live file **and** the `.bak` and keeps the file it replaced as the new `.bak` (what
+`spawn-reload` has to unload). A save with the shard down writes nothing and reports NotRun.
+`[CoreSmoke`'s **bridge fixtures** (`BridgeFixtures.cs`) prove each on a scratch tree; the
+protocol's written authority is `tools/editor/README.md`, *The request channel*.
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is

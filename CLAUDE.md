@@ -8,14 +8,15 @@ where this shard's open defects are named and prioritised. Status: **F1 fixed** 
 ticker started twice), **F2 fixed** (12 September 2026, by the `PlayerMobile` class swap rather
 than by a patch to an upstream file; `Bots.Death` turned round with it and now fails if the cast
 ever comes back),
-**F3 interim only** (one pending token per operation; requests still have no durable identity),
-**F4 fixed** (a cached route no longer outlives the edge health it was built from), **F6 fixed**
+**F3 fixed** (22 September 2026: every request is `<name>.<id>.token`, claimed by rename and
+acked by id; the shard commits the editor's data files against the version a save was based on,
+which closes the editor restore lost-update finding with it), **F4 fixed** (a cached route no longer outlives the edge health it was built from), **F6 fixed**
 (21 September 2026: stores are serialized into memory and written stamped and atomic;
 `Saves/Custom/Manifest.json` carries the save generation; the boot refuses a tree whose world and
 custom files disagree), the **save acknowledgement fixed** (an ack means a completed generation,
 and every ack carries `generation` and `bootId`), and the **LoopQueue outcome contract written**
 (`Completed` / `Faulted` / `NotRun` / `Unknown`; no ack is never done and never failed). **F5**
-(delivery reports success after destroying the load) and the **full F3** are scheduled before 7f.
+(delivery reports success after destroying the load) is scheduled before 7f.
 Its section 11 was the documentation-discrepancy list and is closed.
 
 All file:line references below were verified against this tree (assembly 57.4).

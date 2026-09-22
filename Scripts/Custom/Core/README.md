@@ -71,6 +71,16 @@ report through a `Data/Live` file - `nav-adopt`, `walk-audit` - use the same wor
 `status`: `done`, `failed` with the error, `unknown` for a run the shard stopped under
 (`Bridge/LiveStatus.cs` marks a stale `working`/`running` file at boot).
 
+**The bridge's file protocol speaks the same words** (22 September 2026, REVIEW.md F3). Every
+request is `Data/Live/requests/<name>.<id>.token`; `Bridge/RequestPoller.cs` claims it by renaming
+it to `.claimed` before dispatching and acks to `<name>.<id>.ack.json` with the id and an `outcome`.
+The bridge withdraws a token still unclaimed at its timeout (`NotRun`, retried once) and reports a
+claimed one with no ack as `Unknown`; the poller sweeps everything a previous boot left, never
+running it. The editor's data files are committed by the shard (`Bridge/DataFileCommit.cs`) against
+the version a save was based on, and a refusal names who last wrote the file and when
+(`Bridge/DataFileLedger.cs`, which `JsonConfig.TrySaveToken` notes into). `BridgeFixtures.cs` proves
+it from `[CoreSmoke`; `tools/editor/README.md`, *The request channel*, is the written authority.
+
 **Never** call `Timer.DelayCall` or touch world state from a background thread — see CLAUDE.md
 section 4 for why `Timer.DelayCall` is not safe enough to rely on.
 

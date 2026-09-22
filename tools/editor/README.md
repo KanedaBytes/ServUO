@@ -37,23 +37,33 @@ been re-checked**; see [History](#history) for the rule about which is which.
 - **The secret defends against a PAGE, not against a person at this keyboard.** 16 random bytes per
   run, printed on the startup `Auth:` line, which anything with a terminal here can read.
   `accept-adopt.js` and `repoint-arrivals.js` read `GG_BRIDGE_SECRET`.
-- **A save carries a hash of the bytes it started from**, so a stale tab cannot flatten what
-  `[NavRecord` just wrote. Restore does not yet require one (REVIEW.md, section 2).
+- **The shard writes the data files; the bridge stages** (from 22 September 2026). A save
+  **must** say which version it is based on (`baseHash`, or `null` for a file that does not exist
+  yet); the bridge writes the new text beside the target as `<file>.<id>.staged` and drops
+  `commit`; the shard compares the live file with that version on the game thread, refuses with a
+  message naming both hashes and who last wrote the file and when, or replaces it keeping the old
+  file as `.bak` and reloads. Restore (`{baseHash, backupHash}`) checks the live file **and** the
+  `.bak` and keeps the file it replaced as the new `.bak`. **A save with the shard down writes
+  nothing** and answers 503 `notrun`. See [Saving](#saving).
 - **The writable set is a fixed table keyed by name, never a path from the caller.**
-- **One token per operation may be pending.** A publish while one is still on disk answers 409 -
-  the interim guard for F3, which is a request-identity problem and not a transport one.
+- **Every request has an id, in the file name** (`<name>.<id>.token`, `<name>.<id>.ack.json`),
+  the poller claims a token by renaming it before dispatching, and an ack satisfies a request only
+  on its id and the boot `health.json` names - anything else is ignored and reported. Tokens,
+  claimed files, acks and staged commits from a previous boot are swept at boot, never run. One
+  unclaimed token per operation may be pending (409). See [The request channel](#the-request-channel).
 - **Every ack carries `generation` and `bootId`** (from 21 September 2026): the completed
   persistence generation and the process that answered. A `save` ack says `ok:true` only when a
   world save completed with every custom store and its manifest - "saved" is a generation, not
-  a returned call - and the `save` token now carries a nonce like the others. `RESTART` judges
-  each leg with `judgeSaveAck` / `judgeShutdownAck` / `judgeBootAck` (exported, tested): the
-  shutdown must come from the same process at the saved generation or later, the boot from a
-  different process at that generation (`>` warns, `<` fails), and a shard that refused to load
-  `Saves/` is read out of `Data/Live/boot-refusal.json` in one second with its own message.
-- **No ack means unknown**, never failed. `awaitAck`, the reload path and the restart all say so in
-  those words; the request may still run when the shard picks the token up. Long-running jobs
-  (`nav-adopt`, `walk-audit`) end in `done`, `failed` with the error, or `unknown` when the shard
-  stopped under them, and the panels stop polling on either of the last two.
+  a returned call. `RESTART` judges each leg with `judgeSaveAck` / `judgeShutdownAck` /
+  `judgeBootAck` (exported, tested): the shutdown must come from the same process at the saved
+  generation or later, the boot from a different process at that generation (`>` warns, `<`
+  fails), and a shard that refused to load `Saves/` is read out of `Data/Live/boot-refusal.json`
+  in one second with its own message.
+- **No ack means unknown**, never failed - unless the token was still unclaimed at the timeout, in
+  which case the bridge withdraws it and the outcome is **NotRun**, the one outcome it retries on
+  its own, once. `awaitAck`, the commit path and the restart all say so in those words. Long-running
+  jobs (`nav-adopt`, `walk-audit`) end in `done`, `failed` with the error, or `unknown` when the
+  shard stopped under them, and the panels stop polling on either of the last two.
 - **The Admin section exists** - eleven buttons, the console feed, and `RESTART` as the one thing
   here that can leave the shard down. Every button runs without a client.
 - **Never validate a file under `js/` with `node --check`.** It passes ES modules containing syntax
@@ -167,6 +177,9 @@ Auth:  X-GG-Auth: 8f14e45fceea167a5a36dedd4bea2543   (mutating requests from non
 
 ```bash
 curl -X POST -H "X-GG-Auth: 8f14e45fceea167a5a36dedd4bea2543" http://127.0.0.1:8081/api/request/nav-reload
+# -> {"ok":true,"request":"nav-reload","id":"3f9c2a7b1d40"}
+curl http://127.0.0.1:8081/api/ack/nav-reload/3f9c2a7b1d40
+# -> the ack once it exists, or {"pending":true,"state":"queued"|"running"|"gone"}
 ```
 
 Reads need neither the secret nor any metadata, exactly as before:
@@ -1331,36 +1344,69 @@ let the editor flood-fill from the graph instead of measuring straight lines.
 
 ## Saving
 
-`POST /api/save/<file>`, where `<file>` is one of `navigation`, `dailyLife`, `restrictedZones` —
-a **logical name, never a path**. That is the same sandbox the read endpoints use: there is nothing
-to traverse because there is nothing to steer. `entities` and `health` are deliberately not
-writable; the shard writes those, and an editor able to overwrite a snapshot could lie to itself
-about the live world.
+`POST /api/save/<file>`, where `<file>` is one of `navigation`, `dailyLife`, `restrictedZones` or
+`spawn:<facet>/GG_<Name>.xml` — a **logical name, never a path**. That is the same sandbox the read
+endpoints use: there is nothing to traverse because there is nothing to steer. `entities` and
+`health` are deliberately not writable; the shard writes those, and an editor able to overwrite a
+snapshot could lie to itself about the live world.
+
+**The shard is the writer** (from 22 September 2026; REVIEW.md, "Restore has a lost-update hole").
+Until then the bridge wrote the file itself after checking an *optional* base hash, and restore
+checked nothing. The check and the rename were two steps in one process while `[NavRecord`, in the
+other process, could write the same file between them - and the bridge could never say who had.
+Now the bridge computes the new text and **stages** it, and the shard **commits** it on the game
+thread, where every other writer of these files runs.
 
 The body is `{baseHash, updates, creates, deletes}` — the shapes that changed, not the document.
-In order:
+**`baseHash` is required**: the hash `/api/shapes` or `/api/spawners` handed out for the file, or
+`null` for a file that does not exist yet (the Spawner tool creating one; the shard spells that
+`none`). In order:
 
-1. **The hash is checked.** `/api/shapes` hands out a hash of each file's raw bytes, and a save
-   sends back the one it started from. `[NavMark` and `[NavRecord` write these same files from
-   inside the shard, so a stale editor must not be able to flatten a walk somebody just recorded.
-   Mismatch is a **409** carrying the hash the file is actually at, and nothing is written.
-2. **`unproject` runs.** A shape that names no record, belongs to another file, or is derived is a
-   **400**, and still nothing is written.
-3. `<file>.bak`, then a temp file, then a rename — mirroring `AtomicFile.Write` and the `.bak`
-   convention `NavigationSystem.Save` has always used.
-4. A reload token is dropped and its ack awaited, bounded at five seconds.
+1. **`unproject` runs.** A shape that names no record, belongs to another file, or is derived is a
+   **400**, and nothing is staged.
+2. The new text is written beside the target as **`<file>.<id>.staged`** - beside it, not in the
+   request directory, because the shard's `File.Replace` is then a rename within one directory (a
+   rename across volumes is a copy and is not atomic; the rule `AtomicFile` follows).
+3. A `commit` token is dropped: `file=<key> base=<baseHash|none> wrote=<hash of the staged text>
+   reload=yes|no`. Nothing in it is a path; the shard derives the staged name from the key and the id.
+4. The shard (`DataFileCommit.TryCommit`) hashes the live file. **If it is not at `base`, the save
+   is refused** with a message naming the file, both hashes, and - from `DataFileLedger`, which
+   every shard-side writer notes its hash in - who last wrote it and when:
+   `navigation.json is at 3c4d..., not the 1a2b... this save was based on; last written
+   2026-09-22T02:14:03Z by the shard (NavigationSystem.Save). Reload before writing it again`. A file
+   nothing this boot wrote reads `by outside the shard (a hand edit, git, or before this boot)`. The
+   staged file is discarded.
+5. Otherwise the staged file is verified against `wrote`, `File.Replace`d over the live file **with
+   the previous live file kept as `.bak`**, noted in the ledger as `editor commit <id>`, and the
+   key's reload runs - the same call the plain reload token makes.
 
-**A write whose reload was refused answers 200, not an error.** The file *is* on disk and the shard
-*is* still running the previous config; both halves have to reach the editor. Answering 4xx would
-send it down the "nothing happened" path while the file on disk said otherwise — which is the exact
-failure the persistent banner exists for. So the response is
-`{written, reloaded, message, errors, warnings, hash, backup}`, and `written: true, reloaded: false`
-is a normal outcome with the shard's own reason attached.
+The ack's `commit` object is `{written, refused, reloaded, hash, backupHash, actual, expected,
+changedAt, changedBy}`, and the bridge answers from it:
 
-`POST /api/restore/<file>` copies the `.bak` back and reloads. That is what makes discard mean
-discard: a save whose reload was refused has already written, so dropping the editor's local edits
-alone would leave a bad file to fail at the next restart. The `.bak` is the pre-save bytes exactly,
-which no reconstruction from shapes can promise.
+| Answer | Meaning |
+| --- | --- |
+| **200** `written:true reloaded:true` | Committed and reloaded. Carries `id`, `generation`, `hash`, `backupHash`, `backup` |
+| **200** `written:true reloaded:false` | Committed; the shard refused to load it and `message`/`errors` say why. The persistent banner's case: the file on disk is not what the shard is running, and both halves have to reach the editor. Answering 4xx would send it down the "nothing happened" path |
+| **409** | **Refused, nothing written.** `error` is the shard's own message; `expected`, `actual`, `changedAt`, `changedBy` beside it. The editor offers reload-and-reapply |
+| **503** `outcome:'notrun'` | The shard never picked the commit up, twice (the bridge withdraws the unclaimed token and asks once more); nothing written, the staged file removed. **A save with the shard down lands here** - it used to write the file anyway and report "written, not reloaded" |
+| **504** `outcome:'unknown'` | The shard claimed the commit and never answered, and the file on disk is not the version this save wrote. Never retried by the bridge; reload and look |
+| **200** `outcome:'unknown' written:true` | The same, but the file on disk *is* the version this save wrote: committed, reload unknown |
+
+**A dry run** (`dryRun: true`) stops after step 1 and validates instead: `422` with the findings
+when something is fatal, `200` otherwise, nothing staged and nothing asked of the shard.
+
+`POST /api/restore/<file>` with `{baseHash, backupHash}` is discard. That is what makes discard
+mean discard: a save whose reload was refused has already written, so dropping the editor's local
+edits alone would leave a bad file to fail at the next restart. Both versions are checked by the
+shard (`DataFileCommit.TryRestore`): the live file must still be at `baseHash` - the hash the save
+answered with - and the `.bak` must be at `backupHash` - the `backupHash` that same save answered
+with. Either mismatch is a **409** in the shard's words, and the editor then reloads and says so
+rather than putting anything back; a tab that saved, while another tab saved after it, cannot put
+its own `.bak` (which is now the other tab's pre-save file) over the other tab's work. **The file a
+restore replaces becomes the new `.bak`** - every shard replace keeps the previous live file, restore
+included - because `spawn-reload` unloads the spawners named in the `.bak` before loading the file,
+so the `.bak` has to be what the world is running. A restore that kept the older `.bak` orphaned any
+spawner the undone save had created; that hole predates the commit protocol and closed with it.
 
 ## Why `node --check` is not enough
 
@@ -2074,12 +2120,57 @@ and `fetch().arrayBuffer()` gets the exact bytes.
 
 ## The request channel
 
-The bridge drops `Data/Live/requests/<name>.token`; the shard's `RequestPoller` picks it up within
-a second, runs the matching command path, deletes the token and writes `<name>.ack.json`.
+**This section is the protocol's written authority** (REVIEW.md section 8 asked for one, so that
+neither the C# poller nor the fake shard in the tests can drift into being the definition). Where
+`RequestPoller.cs`, `bridge.js` or `fake-shard.js` disagree with it, they are wrong.
+
+**Every request has an id, and the id is in the file name** (from 22 September 2026; REVIEW.md F3).
+The bridge drops `Data/Live/requests/<name>.<id>.token` - `name` matches `[a-z][a-z0-9-]{0,63}`, `id`
+matches `[a-z0-9]{1,32}` (the bridge uses twelve hex characters; a hand driver may type anything
+that fits, `save.manual.token`) - published by rename so the poller never sees a half-written file.
+The body is the request's arguments and nothing else. The shard's `RequestPoller`, once a second:
+
+1. lists the directory and takes every name that parses (a `.token` that does not, such as the old
+   `save.token`, is deleted with a console line saying what the form is);
+2. **claims** it by renaming `.token` to `.claimed` - atomic, so either that poll owns the request or
+   the bridge withdrew it a moment earlier, and a rename that throws is skipped;
+3. reads the claimed file, runs the matching command path, deletes the claimed file, and writes
+   `<name>.<id>.ack.json` **echoing the id**.
+
+So the disk says where a request stands, and the outcome words (`Scripts/Custom/Core/LoopQueue.cs`)
+fall out of it: a `.token` is **queued** and may be withdrawn (the bridge deletes it on a timeout,
+which races the claim atomically, and then reports **NotRun** - nothing happened, safe to ask again;
+the one outcome the bridge retries by itself, once); a `.claimed` is **running**, and a waiter that
+gives up on it reports **Unknown**; an ack is **completed** or **faulted** in its own words. An ack
+never says unknown - an ack is by definition an answer.
+
+**An ack satisfies a request only on its id and the shard's current boot.** The current boot is the
+`bootId` in `Data/Live/health.json` - the shard's own statement, written within seconds of a boot and
+every minute after, and deleted by the poller's boot sweep so that between a stop and the next
+boot's first write there is no file rather than a stale one (no file means no boot check). An ack
+with no id, another id, or another boot's id is **ignored and reported** (`ignored: [...]` in the
+bridge's answers and on `/api/ack`), never taken as this request's. Because the ack file is named by
+the id, an earlier run's ack is simply a file nobody opens; the in-file check is the belt to that
+brace.
+
+**Stale files from a previous boot are swept, never run.** `RequestPoller.Initialize` deletes every
+token, claimed file, ack, staging file and staged commit it finds, and the previous boot's
+`health.json`, before its timer starts. This reverses what the poller used to promise - "a token
+written while the shard is down is picked up when it comes back" - on purpose: a request was
+addressed to the process that was running when it was written, and a boot that ran a `shutdown` or
+a `commit` somebody dropped an hour earlier would be doing something nobody was waiting for. The
+bridge sees the token gone with no ack and says Unknown; a hand driver drops the token again. Acks
+older than ten minutes are pruned once a minute.
+
+**Read it back by hand:** `type Data\Live\requests\save.manual.ack.json` after dropping
+`save.manual.token` (an empty file). `id`, `outcome`, `ok`, `message`, `errors`, `warnings`,
+`generation`, `bootId`, `utc`, and for `commit`/`restore` a nested `commit` object.
 
 | Request | Runs |
 | --- | --- |
-| `nav-reload` | `NavigationSystem.TryReload` |
+| `commit` | **The editor's save.** Body `file=<key> base=<hash\|none> wrote=<hash> reload=yes\|no`. `DataFileCommit.TryCommit`: hashes the live file, refuses if it is not at `base` (naming both hashes and, from `DataFileLedger`, who last wrote it and when), verifies the staged file beside the target hashes to `wrote`, `File.Replace`s it over the live file keeping the old one as `.bak`, then runs the key's reload. See [Saving](#saving) |
+| `restore` | **The editor's discard.** Body `file=<key> base=<hash> backup=<hash>`. Refuses unless the live file is at `base` **and** the `.bak` is at `backup`; puts the `.bak` back and keeps the file it replaced as the new `.bak`; reloads |
+| `nav-reload` | `NavigationSystem.TryReload` - a hand driver's reload after editing the file by hand |
 | `dailylife-reload` | `DailyLifeCommands.TryReload` |
 | `zones-reload` | `RestrictedZoneSystem.TryReload` |
 | `spawn-reload` | `GGSpawnCommands.TryReloadFile`; the body is a file name relative to `Spawns/Custom` |
@@ -2137,41 +2228,42 @@ guard against the two languages drifting apart again.
 
 **An unknown or malformed token is deleted and acked with an error, never ignored.** A token that
 sits on disk forever looks exactly like a bridge that never wrote one, and a token that survives
-its own failure is retried on every tick.
+its own failure is retried on every tick. (A token whose *name* does not parse gets no ack - there
+is no id to write one under - and a console line instead.)
 
 `livemap-on` with `all` and no zone is refused, at both the command and the token — 20,000 mobiles
 every two seconds is not something to do by accident.
 
 ### The ack, and how it stopped answering the wrong question
 
-`WriteAck` produces `{request, token, ok, message, errors, warnings, utc}`. `errors` and `warnings`
-are new, and they carry **the shard's own validator strings unedited** — so the banner and the
-console say the same thing. Before, a reload that succeeded with problems acked `"3 warning(s)"`
-and there was no way to find out which three without reading a console the person driving the
-editor is not looking at. Both arrays are always present, empty when there is nothing: an absent
-key and an empty list only read alike in JavaScript if every reader remembers to guard, and one of
-them will not.
+`WriteAck` produces `{request, id, outcome, token, ok, message, errors, warnings, [commit,]
+generation, bootId, utc}`. `errors` and `warnings` carry **the shard's own validator strings
+unedited** — so the banner and the console say the same thing. Before, a reload that succeeded
+with problems acked `"3 warning(s)"` and there was no way to find out which three without reading
+a console the person driving the editor is not looking at. Both arrays are always present, empty
+when there is nothing: an absent key and an empty list only read alike in JavaScript if every
+reader remembers to guard, and one of them will not.
+
+`id` is the request's, echoed from the file name, and `outcome` is `completed` or `faulted` (or
+`notrun` for the one case the poller refuses before dispatching: an oversized token). `generation`
+and `bootId` are from 21 September 2026; `id`, `outcome` and `commit` from the 22nd.
 
 `JsonConfig.TryLoad` already collected errors as a list and all three systems flattened it with
 `"; "` at the door. They now keep the list — `TryReload(out error, out IList<string> errors)` — and
 flatten only for their own console line. Re-splitting on `"; "` in JavaScript would have been
 unsafe: a Newtonsoft parse message can contain anything.
 
-**A stale ack used to be read as the current answer.** The shard overwrites `<name>.ack.json` in
-place and never deletes it, and `/api/ack/` reports `pending` only when the file is *absent* — so
-from the second request of a session onwards, a waiter got the previous run's answer instantly and
-believed it. Save-then-reload is unusable like that. Two fixes, because they close different holes:
-the bridge **deletes the ack before dropping the token**, which needs no shard change at all; and
-the token body carries a **nonce** that `WriteAck` echoes back in `token`, which survives two
-editor tabs and a bridge that dies mid-sequence. The nonce is generated in the bridge, not the
-browser, and only for the four requests whose dispatch ignores its body — `livemap-on` parses
-its body and is excluded.
-
-The nonce set has grown with the Admin section: `core-smoke`, `bot-smoke`, `bots-reload`,
-`shutdown` and `tile-probe` are all nonced now. **`broadcast` is deliberately not**, for a different
-reason from `livemap-on`'s — its body is the message every player is about to read, and appending
-`#a1b2c3d4` to that is not a thing to do. (`tile-probe` is safe to nonce because its parser skips
-any word that is not an `x,y` pair.)
+**A stale ack used to be read as the current answer** (history, kept for the reasoning). The shard
+overwrote `<name>.ack.json` in place and never deleted it, and `/api/ack/` reported `pending` only
+when the file was *absent* — so from the second request of a session onwards, a waiter got the
+previous run's answer instantly and believed it. Two interim fixes closed different holes: the
+bridge deleted the ack before dropping the token, and the token body carried a **nonce**
+(`#a1b2c3d4`) that `WriteAck` echoed back in `token`, for the requests whose parsers could skip it —
+which is why `broadcast` (its body is the message every player reads) and `livemap-on` (it parses
+its whole body) never had one and were matched by nothing. **The request id replaced the nonce on
+22 September 2026**: it is in the file name, so every request has one, the ack file is named by it,
+and nothing is ever appended to a body. The `#`-skipping in the shard's parsers is still there,
+harmless, for a hand-typed body.
 
 ## History
 
