@@ -19,7 +19,9 @@
 > - **An open question, since decided.** Only 11-13% of gatherer picks chose their own site, because
 >   our crowd floor makes empty far-town banks pull ×4. **Done, 22 September 2026:** a class named in
 >   `destinations.singleMinded` no longer feels the floor (`BotDestinations.CrowdFloor`,
->   `WorkFixtures`). Recorded in the Bots README Deviations row *Gatherers are single-minded again*.
+>   `WorkFixtures`). Recorded in the Bots README Deviations row *Gatherers are single-minded again*,
+>   with the two live windows after it: 18% own-site overall (Miners 3 of 9, against 4.6 expected
+>   from the logged weights), 7 clock-ins, Conservation balanced.
 > - **Seen, not fixed: `Nav.Doors` can fail under traffic.** It read Fail after both `[BotSmoke`
 >   runs and Ok at every boot. The engine patch (MODIFICATIONS entry 6) is intact:
 >   `FastAStarAlgorithm.cs:106`, and both walk audits passed.

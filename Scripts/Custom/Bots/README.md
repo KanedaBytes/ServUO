@@ -453,6 +453,21 @@ unchanged for a single-minded class exactly as it already did for a hauling one,
 exists to draw loiterers and a gatherer's bank is an errand. `WorkFixtures` proves it on
 `[CoreSmoke`: with the floor active, a Miner's empty bank stays 0.3 and a Swordsman's is fourfold.
 
+**Measured after the exemption, two ten-minute windows at the shipped population** (670 live, boot
+`894f75ab`, 22 September 2026): **7 clock-ins** (`brit-mine-north` 2, `brit-mine-west` 2,
+`yew-grove` 3), `Bots.Conservation` Balanced with unexplained 0 at all 30 health samples. Own-site
+share of the gatherer picks the botlog caught: **8 of 44, 18%** (before: 11-13%), made up of
+Lumberjacks **5 of 35, 14%** (the replica's 17-18%: one far wood) and Miners **3 of 9, 33%**. Nine
+Miner picks do not test the 68% figure, and the weights say why the rate sits below it. With the
+floor gone, everything that is not a mine sums to **9.66** for a Britain-born Miner (banks 3.9,
+shops 2.4, inns 1.4, taverns 1.0), so a Miner near `brit-mine-north`, where the mines log 13-23,
+picks one 58-70% of the time, as the replica says. But the replica stood every Miner at its home
+bank. Live, most picks came from wherever the last errand ended — Jhelom, Yew, Trinsic, 500 to
+1,150 road tiles out — where the distance term leaves the mines 2.7-10 and the chance 22-50%. Summed
+over the nine logged picks the weights expect 4.6 own-site picks; 3 were seen. The botlog catches
+about 20-25 gatherer picks per ten minutes whether it is sampled every 10 s or every 4 s, so the pick
+rate, not ring eviction, is what keeps the Miner sample small.
+
 **The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
 (`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
 (`DestinationType.cs:325-332`). Those are the target — but here a Fisherman arriving at a dock
