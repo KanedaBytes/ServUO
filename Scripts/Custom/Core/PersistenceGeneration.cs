@@ -614,7 +614,17 @@ namespace Server.Custom
                     text = reader.ReadToEnd();
                 }
 
-                JObject root = JObject.Parse(text);
+                JObject root;
+
+                // DateParseHandling.None: Newtonsoft otherwise turns the ISO "savedUtc" string into a
+                // DateTime and hands it back reformatted in the current culture, which is how a
+                // refusal once printed "09/22/2026 02:38:52" for a time written as "...T02:38:52Z".
+                using (var stringReader = new StringReader(text))
+                using (var jsonReader = new Newtonsoft.Json.JsonTextReader(stringReader))
+                {
+                    jsonReader.DateParseHandling = Newtonsoft.Json.DateParseHandling.None;
+                    root = JObject.Load(jsonReader);
+                }
 
                 var manifest = new Manifest
                 {
