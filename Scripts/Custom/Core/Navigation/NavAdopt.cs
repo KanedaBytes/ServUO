@@ -104,9 +104,48 @@ namespace Server.Custom
 
         private static bool _running;
 
+        /// <summary>The job Step is chaining through LoopQueue, for the shutdown handler; null between runs.</summary>
+        private static Job _current;
+
         public static bool Running
         {
             get { return _running; }
+        }
+
+        /// <summary>
+        /// A proposal file from a previous boot still saying "working" belongs to a process that is
+        /// gone: it is marked "unknown" here, before the poller's timer can start a new adopt. At
+        /// shutdown a live job writes itself as "unknown" too. Neither is "done" and neither is
+        /// "failed" - the outcome contract in LoopQueue.cs - and the editor stops polling on both.
+        /// </summary>
+        public static void Initialize()
+        {
+            LiveStatus.MarkStale(
+                ProposalPath, new[] { "working" },
+                "the shard restarted while this adopt was running; the proposal was not completed");
+
+            EventSink.Shutdown += OnShutdown;
+        }
+
+        private static void OnShutdown(ShutdownEventArgs e)
+        {
+            Job job = _current;
+
+            if (job == null)
+            {
+                return;
+            }
+
+            try
+            {
+                job.StatusOverride = "unknown";
+                job.Error = "the shard shut down while this adopt was running";
+                Write(job);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Could not mark the adopt unknown at shutdown.");
+            }
         }
 
         /// <summary>
@@ -231,6 +270,7 @@ namespace Server.Custom
             }
 
             _running = true;
+            _current = job;
 
             Write(job);
             LoopQueue.Post(() => Step(job));
@@ -306,6 +346,7 @@ namespace Server.Custom
                 job.PruneUnreachable();
 
                 _running = false;
+                _current = null;
                 job.Finished = true;
                 job.ReleaseProbe();
 
@@ -318,8 +359,22 @@ namespace Server.Custom
             catch (Exception ex)
             {
                 _running = false;
+                _current = null;
                 job.ReleaseProbe();
                 Log.Error(ex, "Adopt threw and was stopped.");
+
+                // Said in the file, not only on the console: the proposal used to stay "working"
+                // for ever after a throw, and the editor polled it to its cap.
+                job.Error = ex.GetType().Name + ": " + ex.Message;
+
+                try
+                {
+                    Write(job);
+                }
+                catch (Exception writeError)
+                {
+                    Log.Error(writeError, "Could not write the failed adopt.");
+                }
             }
         }
 
@@ -336,6 +391,16 @@ namespace Server.Custom
 
             /// <summary>True when this run may propose road over ground we have authored.</summary>
             public readonly bool Rebase;
+
+            /// <summary>
+            /// Set when the run stopped for a reason other than finishing: Step threw, or the shard
+            /// shut down under it. The proposal then says "failed" or "unknown" instead of staying
+            /// "working" for ever, which is what a thrown Step used to leave behind.
+            /// </summary>
+            public string Error;
+
+            /// <summary>"unknown" while the shard is shutting down with this job live; otherwise null.</summary>
+            public string StatusOverride;
 
             /// <summary>
             /// Waypoints of OURS this proposal asks to remove, because the road it proposes runs
@@ -2891,9 +2956,20 @@ namespace Server.Custom
             // and pruning run after that, and the editor accepts the first "done" it polls.
             bool done = job.Finished;
 
+            // "failed" carries the error; "unknown" is what the shutdown handler writes over a live
+            // run. The editor stops polling on either and shows the reason (LoopQueue.cs, the
+            // outcome contract).
+            string status = job.StatusOverride ?? (job.Error != null ? "failed" : (done ? "done" : "working"));
+
             builder.Append("{\n");
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
-            builder.Append("  \"status\": ").Append(Json.Quote(done ? "done" : "working")).Append(",\n");
+            builder.Append("  \"status\": ").Append(Json.Quote(status)).Append(",\n");
+
+            if (job.Error != null)
+            {
+                builder.Append("  \"error\": ").Append(Json.Quote(job.Error)).Append(",\n");
+            }
+
             builder.Append("  \"done\": ").Append(job.Next).Append(",\n");
             builder.Append("  \"total\": ").Append(job.Pending.Count).Append(",\n");
             builder.Append("  \"map\": ").Append(Json.Quote(job.Map.Name)).Append(",\n");

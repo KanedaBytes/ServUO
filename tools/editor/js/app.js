@@ -3142,6 +3142,17 @@ async function pollAdopt() {
             return;
         }
 
+        // The shard's other two words for a run that is over. "failed" is a Step that threw;
+        // "unknown" is a shard that stopped under the run, said either by its shutdown handler
+        // or by the next boot finding the file still "working". Neither is done, and polling
+        // either to the cap would report "did not finish" for a run that will never move again.
+        if (proposal.status === 'failed' || proposal.status === 'unknown') {
+            setStatus(
+                `Adopt ${proposal.status} after ${proposal.done} of ${proposal.total} edge(s): `
+                + `${proposal.error || 'no reason recorded'}`, 'error');
+            return;
+        }
+
         setStatus(`Adopting: walked ${proposal.done} of ${proposal.total} edge(s)...`, 'ok');
 
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -5317,7 +5328,11 @@ async function runWalkAudit() {
             }
 
             if (state.walkAudit.status !== 'running') {
-                setStatus('Walk audit stopped without finishing.', 'error');
+                // "failed" names the throw; "unknown" is a shard that stopped under the run. Said
+                // with the shard's own reason rather than a generic "stopped".
+                setStatus(
+                    `Walk audit ${state.walkAudit.status}: `
+                    + `${state.walkAudit.error || 'stopped without finishing, no reason recorded'}`, 'error');
                 return;
             }
 

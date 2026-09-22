@@ -245,6 +245,44 @@ namespace Server.Custom
 
         private static Job _job;
 
+        /// <summary>
+        /// Two things about a run the shard stopped under. At boot, a walk-audit.json still saying
+        /// "running" belongs to a process that is gone, so it is marked "unknown" before the first
+        /// request can start a new one (the poller's timer starts after every Initialize). At
+        /// shutdown, a live job writes itself as "unknown" while its rows are still in memory.
+        /// Neither says "done", and neither says "failed": the shard cannot know how the walk would
+        /// have ended, which is the outcome contract in LoopQueue.cs.
+        /// </summary>
+        public static void Initialize()
+        {
+            LiveStatus.MarkStale(
+                SnapshotPath, new[] { "running" },
+                "the shard restarted while this walk audit was running; the rows below are what it had walked");
+
+            EventSink.Shutdown += OnShutdown;
+        }
+
+        private static void OnShutdown(ShutdownEventArgs e)
+        {
+            Job job = _job;
+
+            if (job == null)
+            {
+                return;
+            }
+
+            try
+            {
+                job.StatusOverride = "unknown";
+                job.Error = "the shard shut down while this walk audit was running";
+                WriteSnapshot(job, false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Could not mark the walk audit unknown at shutdown.");
+            }
+        }
+
         /// <summary>True while a sweep is running. A second [WalkAudit is refused rather than queued.</summary>
         public static bool IsRunning
         {
@@ -665,6 +703,16 @@ namespace Server.Custom
             public int GatesSkipped;
             public int Total;
             public long StartedTick;
+
+            /// <summary>
+            /// Set when the run stopped for a reason other than finishing: Step threw, or the shard
+            /// shut down under it. The snapshot then says "failed" or "unknown" rather than "done",
+            /// which it used to say for a crashed audit (the outcome contract, LoopQueue.cs).
+            /// </summary>
+            public string Error;
+
+            /// <summary>"unknown" while the shard is shutting down with this job live; otherwise null.</summary>
+            public string StatusOverride;
 
             /// <summary>When progress was last written out. See Step.</summary>
             public long WroteTick;
@@ -1323,6 +1371,10 @@ namespace Server.Custom
             }
             catch (Exception ex)
             {
+                // Recorded BEFORE Finish, which writes the snapshot: without it a crashed audit was
+                // published as "done", and the editor reported it finished.
+                job.Error = ex.GetType().Name + ": " + ex.Message;
+
                 Log.Error(ex, "Walk audit step threw; stopping.");
                 Finish(job);
                 return;
@@ -2105,7 +2157,18 @@ namespace Server.Custom
 
             builder.Append("{\n");
             builder.Append("  \"utc\": ").Append(Json.Quote(DateTime.UtcNow.ToString("o"))).Append(",\n");
-            builder.Append("  \"status\": ").Append(Json.Quote(done ? "done" : "running")).Append(",\n");
+            // "failed" carries the error; "unknown" is the shutdown handler's word for a run the
+            // shard stopped under. Both are the outcome contract's vocabulary (LoopQueue.cs), and
+            // the editor stops polling on either and shows the reason.
+            string status = job.StatusOverride ?? (job.Error != null ? "failed" : (done ? "done" : "running"));
+
+            builder.Append("  \"status\": ").Append(Json.Quote(status)).Append(",\n");
+
+            if (job.Error != null)
+            {
+                builder.Append("  \"error\": ").Append(Json.Quote(job.Error)).Append(",\n");
+            }
+
             builder.Append("  \"seconds\": ").Append(Fixed((Core.TickCount - job.StartedTick) / 1000.0)).Append(",\n");
             builder.Append("  \"probes\": ").Append(job.Runners.Count).Append(",\n");
             builder.Append("  \"selfTest\": ").Append(job.SelfTest ? "true" : "false").Append(",\n");
