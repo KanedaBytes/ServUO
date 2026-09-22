@@ -58,9 +58,12 @@ namespace Server.Custom
         /// deliberate divergence - upstream gives a gatherer 0.02 at a forge - recorded in the
         /// Bots README Deviations table.
         ///
-        /// Everything after WeightFor still applies: home bias, the crowd floor, the just-left
-        /// discount, and for a work site its vacancy and road distance. Those are ours and
-        /// documented, and the distance term is what sends a Minoc Miner to the Minoc face.
+        /// Everything after WeightFor still applies EXCEPT the crowd floor: home bias, the
+        /// just-left discount, and for a work site its vacancy and road distance. Those are ours
+        /// and documented, and the distance term is what sends a Minoc Miner to the Minoc face.
+        /// The crowd floor is skipped for a class named here (BotDestinations.CrowdFloor, 22
+        /// September 2026): it exists to draw loiterers, and fourfold at every empty far-town bank
+        /// turned upstream's occasional-errand 0.3 into 1.2 and out-pulled the mine.
         /// </summary>
         [JsonProperty("singleMinded")]
         public Dictionary<string, Dictionary<string, double>> SingleMinded { get; set; }
@@ -411,6 +414,17 @@ namespace Server.Custom
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Whether this class is named in `singleMinded`, and so weighs by its own table alone
+        /// and does not feel the crowd floor.
+        /// </summary>
+        public bool IsSingleMinded(BotClass cls)
+        {
+            Dictionary<string, double> single;
+
+            return SingleMinded != null && SingleMinded.TryGetValue(cls.ToString(), out single) && single != null;
         }
 
         /// <summary>

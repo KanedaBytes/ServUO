@@ -34,6 +34,7 @@ namespace Server.Custom
                 passed &= FixtureSingleMindedMiner(report);
                 passed &= FixtureSingleMindedLumberjack(report);
                 passed &= FixtureOthersUnchanged(report);
+                passed &= FixtureCrowdFloorSkipsSingleMinded(report);
             }
             catch (Exception ex)
             {
@@ -215,6 +216,42 @@ namespace Server.Custom
                     "Fisherman single-minded {0}; moved: {1}",
                     !fisherman,
                     String.Join("; ", moved.ToArray())));
+        }
+
+        /// <summary>
+        /// The crowd floor passes a single-minded class by: with the floor active (three short,
+        /// the cap), a Miner's empty bank stays upstream's 0.3 rather than 1.2, while a class
+        /// outside singleMinded still gets its fourfold pull.
+        /// </summary>
+        private static bool FixtureCrowdFloorSkipsSingleMinded(List<string> report)
+        {
+            BotDestinationConfig config = BotSystem.Store.Destinations;
+
+            NavDestination bank = Fake("bank", "service");
+
+            double minerBase = config.WeightFor(bank, BotClass.Miner);
+            double miner = BotDestinations.CrowdFloor(minerBase, 3, false, config.IsSingleMinded(BotClass.Miner));
+
+            double warriorBase = config.WeightFor(bank, BotClass.Warrior);
+            double warrior = BotDestinations.CrowdFloor(warriorBase, 3, false, config.IsSingleMinded(BotClass.Warrior));
+
+            bool classes = config.IsSingleMinded(BotClass.Miner)
+                && config.IsSingleMinded(BotClass.Lumberjack)
+                && !config.IsSingleMinded(BotClass.Warrior);
+
+            return Expect(
+                report,
+                classes && Near(miner, 0.3) && warriorBase > 0.0 && Near(warrior, warriorBase * 4.0),
+                "the crowd floor skips a single-minded class: a Miner's empty bank stays 0.3, a Warrior's is fourfold",
+                String.Format(
+                    "single-minded Miner {0}, Lumberjack {1}, Warrior {2}; empty bank Miner {3} -> {4}, Warrior {5} -> {6}",
+                    config.IsSingleMinded(BotClass.Miner),
+                    config.IsSingleMinded(BotClass.Lumberjack),
+                    config.IsSingleMinded(BotClass.Warrior),
+                    minerBase,
+                    miner,
+                    warriorBase,
+                    warrior));
         }
 
         private static bool Expect(List<string> report, bool condition, string ok, string fail)

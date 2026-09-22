@@ -101,24 +101,13 @@ namespace Server.Custom
                     weight *= config.HomeBias;
                 }
 
-                // A destination short of its standing crowd pulls harder. CAPPED at four times,
-                // because an uncapped multiplier on a large floor makes one bank the only place
-                // anybody goes - the shard would empty into it.
-                //
-                // NOT WHILE HAULING, and this one cost two probe runs to find. The floor exists to
-                // draw LOITERERS, so that a bank looks busy; a miner with a pack full of ore is not
-                // a loiterer. Applied to it, an empty bank's fourfold boost turned 2.0 into 8.0 and
-                // pulled roughly a third of all deliveries away from a forge with a dry smith
-                // standing at it - which reads, from outside, as a hand-over that does not work.
-                if (weight > 0.0 && !hauling)
-                {
-                    int shortfall = BotCrowds.Shortfall(candidate);
-
-                    if (shortfall > 0)
-                    {
-                        weight *= 1.0 + Math.Min(shortfall, 3);
-                    }
-                }
+                // A destination short of its standing crowd pulls harder - see CrowdFloor for the
+                // cap and for the two kinds of bot it does not apply to.
+                weight = CrowdFloor(
+                    weight,
+                    BotCrowds.Shortfall(candidate),
+                    hauling,
+                    config.IsSingleMinded(bot.Class));
 
                 if (weight > 0.0)
                 {
@@ -127,7 +116,7 @@ namespace Server.Custom
                     // attractive rather than equally attractive right up to the last slot.
                     if (BotWorkSites.IsWorkType(candidate.Type))
                     {
-                        // NOT WHILE HAULING, and this is the crowd floor's rule from four lines up
+                        // NOT WHILE HAULING, and this is the crowd floor's rule (CrowdFloor)
                         // arriving at the same answer from the other side. Capacity is how many
                         // bots may WORK at a site; VacancyFactor reaches exactly 0.0 at capacity,
                         // which removes the destination from the roll altogether. A miner walking
@@ -197,6 +186,36 @@ namespace Server.Custom
             LogChoice(bot, candidates, weights, routeTiles, noRoute, candidates.Count - 1);
 
             return candidates[candidates.Count - 1];
+        }
+
+        /// <summary>
+        /// The crowd floor: a destination short of its standing crowd pulls harder, by one times
+        /// its weight per missing bot. CAPPED at four times, because an uncapped multiplier on a
+        /// large floor makes one bank the only place anybody goes - the shard would empty into it.
+        ///
+        /// NOT WHILE HAULING, and this one cost two probe runs to find. The floor exists to draw
+        /// LOITERERS, so that a bank looks busy; a miner with a pack full of ore is not a loiterer.
+        /// Applied to it, an empty bank's fourfold boost turned 2.0 into 8.0 and pulled roughly a
+        /// third of all deliveries away from a forge with a dry smith standing at it - which
+        /// reads, from outside, as a hand-over that does not work.
+        ///
+        /// NOT FOR A SINGLE-MINDED CLASS either, for the same reason from the other end (22
+        /// September 2026). Upstream's 0.3 at a bank is an occasional errand; fourfold at every
+        /// empty far-town bank made it 1.2 in eight towns at once, and live only 11-13% of
+        /// gatherer picks went to their own site against the replica's 68%. A Miner that walks to
+        /// Jhelom's bank then rolls its next pick 700 road tiles from the mine. Bots README,
+        /// Deviations, "Gatherers are single-minded again".
+        ///
+        /// Pure, so WorkFixtures can prove both exemptions without a crowd.
+        /// </summary>
+        public static double CrowdFloor(double weight, int shortfall, bool hauling, bool singleMinded)
+        {
+            if (weight <= 0.0 || hauling || singleMinded || shortfall <= 0)
+            {
+                return weight;
+            }
+
+            return weight * (1.0 + Math.Min(shortfall, 3));
         }
 
         /// <summary>

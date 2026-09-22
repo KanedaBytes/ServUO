@@ -416,10 +416,11 @@ It lives in `BotDestinationConfig.WeightFor`, the single entry point, so `Pick`,
   `work`, `forge`, and the other class's site — a single-minded class gets 0 unless its own table
   names the type. Upstream gives a gatherer 0.02 at a forge; here a Miner at a forge is a Miner
   loitering where a Smith works, and the haul roll already sends a laden one there on business.
-- **Everything after `WeightFor` still applies**: home bias (upstream's too), the crowd floor, the
-  just-left discount, and for a work site its vacancy and road distance (*Work sites are weighted by
-  how far they actually are*). The distance term is what keeps a Trinsic-born Miner's odds lower —
-  and what sends a Minoc Miner to the Minoc face once there is one.
+- **Everything after `WeightFor` still applies except the crowd floor**: home bias (upstream's too),
+  the just-left discount, and for a work site its vacancy and road distance (*Work sites are weighted
+  by how far they actually are*). The distance term is what keeps a Trinsic-born Miner's odds lower —
+  and what sends a Minoc Miner to the Minoc face once there is one. The crowd floor is skipped for a
+  single-minded class; see *Measured live* below.
 
 Predicted by an offline replica of `Pick` (a bot standing at its home bank, floors met, sites empty,
 tiles along the waypoint graph with the moongates both ways; the investigation's model, re-run):
@@ -437,7 +438,8 @@ to Britain the long way round. The Lumberjack's odds are what one far site buys:
 road tiles from either bank, so the distance term leaves it a sixth of the roll. A second wood nearer
 home (`brit-lumber-south`, below) is the lever, not a bigger number.
 
-**Measured live, and the replica was optimistic — open, for Sean.** In the first ten-minute window at
+**Measured live, and the replica was optimistic — so the crowd floor no longer applies to a
+single-minded class (22 September 2026, Sean's decision).** In the first ten-minute window at
 the shipped population, 7 gatherers clocked in (before this row: 0-2). But only 11% of the gatherer
 picks the botlog recorded chose their own site, because most of the rest went to **banks in far
 towns**. The replica assumed every crowd floor was met. At a bank nobody stands at, `BotCrowds`
@@ -445,9 +447,11 @@ multiplies the weight by up to 4 (`life.crowds.bank` 3), so upstream's occasiona
 1.2 at each of the empty far-town banks, and a Miner that walks to Jhelom's bank rolls its next pick
 from 700 road tiles away. Re-run with those banks empty: a Britain Miner 58.7%, a Trinsic one 24.1%,
 a Lumberjack 11%, with banks taking 25-60% of the roll. The crowd floor is ours, not upstream's
-(*The bank crowd is a garrison AND a pull*), and it was kept here deliberately. Whether a
-single-minded class should feel it is the next decision. Exempting `singleMinded` classes from the
-floor is one line in `BotDestinations.Pick`.
+(*The bank crowd is a garrison AND a pull*), and it is kept for everybody else. For a class named in
+`destinations.singleMinded` it is now skipped: `BotDestinations.CrowdFloor` returns the weight
+unchanged for a single-minded class exactly as it already did for a hauling one, because the floor
+exists to draw loiterers and a gatherer's bank is an errand. `WorkFixtures` proves it on
+`[CoreSmoke`: with the floor active, a Miner's empty bank stays 0.3 and a Swordsman's is fourfold.
 
 **The Fisherman is deliberately NOT restored.** Upstream classes it as an *artisan*, not a gatherer
 (`BotClass.cs:146-148`), and weighs it `dock` 8.0, `Bank` 0.4, everything else 0.02
