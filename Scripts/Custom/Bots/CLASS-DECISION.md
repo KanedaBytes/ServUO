@@ -14,6 +14,22 @@ pinned reference `E:\dev\UO\uo-offline` @ `7f38c7c`.
 - **PK means Felucca.** Trammel stays as it is.
 - **The migration starts next session, with the locomotion adapter** — the `INavActor` step in
   [§5](#5-what-exists-only-because-bots-are-basecreatures) below.
+- **A named bot whose session ends goes OFFLINE** — decided 21 September 2026, answering
+  `REVIEW.md`'s identity question (its §11 owner list, first bullet). The character and everything
+  it owns persist, exactly as a player logging out: the `Mobile`, its bank box, its house, its
+  vendor, its pack animal all stay in the world save and are the same objects when it comes back.
+  **Named bots are never destroyed.** Only accountless throwaway bots vanish at session end, and
+  they own nothing durable — the existing rule (Bots README, *Current contract*: "an accountless
+  bot owns nothing durable"), which is what makes their deletion safe. **No inheritance:** if a
+  named bot is ever retired, its property is handled the way a quitting player's is — the house
+  decays on the stock schedule, the vendor closes when its wages run out — and is never passed to
+  another bot. Consequences for the code that follows: session churn may **not** replace a named
+  bot's `Mobile` object (an OFFLINE bot is a persisted mobile with no `NetState`, not a spawner slot
+  to refill), account ownership is **individual** (the `Account`-per-persistent-bot half of (d)),
+  and "logout" becomes a state a behaviour can enter and leave rather than `Delete()`. uo-offline
+  has no answer here — its logout *is* `Delete()` (`BotSessionManager.cs:237-257`), and its one
+  persistent kind of bot is persistent only because a player's guild holds a reference to it — so
+  this is a named seam, not a port.
 
 The rest of this file is the evidence that was put in front of that decision, kept because the
 reasons matter more than the verdict: the next person to ask "why is `BotAI` gone?" or "why did we

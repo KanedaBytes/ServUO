@@ -154,9 +154,12 @@ Where a fresh session should start, in order:
    under **History** is a dated finding rather than a statement about now.
 2. **`REVIEW.md`**, the read-only architectural review of 11 September 2026. Required reading
    before changing this layer: it is where the open defects are named and prioritised. F1 fixed,
-   **F2 fixed by the PlayerMobile class swap**, F3 interim only, F4 fixed; F5, F6, the save
-   acknowledgement and the full F3 request identity are scheduled before 7f. Its section 11 was
-   the documentation discrepancy list and is now closed.
+   **F2 fixed by the PlayerMobile class swap**, F3 interim only, F4 fixed, **F6 fixed and the save
+   acknowledgement fixed on 21 September 2026** (stamped atomic stores, a generation manifest, a
+   boot that refuses a mixed tree, acks that mean a completed generation - see *Persistence has a
+   generation* below), and the **LoopQueue outcome contract** written the same day; F5 and the full
+   F3 request identity are scheduled before 7f. Its section 11 was the documentation discrepancy
+   list and is now closed.
 3. **The reference is `E:\dev\UO\uo-offline` @ `7f38c7c`**, `playerbots/source/CustomBots/` for
    source and `playerbots/data/` for data - see the table at the top of `CLAUDE.md` for the three
    trees that are *not* it, including the installed snapshot this line used to name. The rule for
@@ -809,6 +812,62 @@ It reports **Warn, not Ok, before it has seen a save**: a check that has observe
 let a clean `[CoreSmoke` certify a contract it never tested. The defect it was written for is in the
 Bots README under **Ephemerality** — a census that created a bank box on every bot at every save for
 three days, 1,796 warnings, and no build ever went red.
+
+### Persistence has a generation
+
+From 21 September 2026 (REVIEW.md F6 and the save-acknowledgement finding, both closed that day).
+ServUO has no save generation of its own - `World.m_Saves` is internal and starts at zero every
+boot - so `Scripts/Custom/Core/PersistenceGeneration.cs` keeps one: an integer that goes up by one
+per completed world save, persisted in **`Saves/Custom/Manifest.json`**, which is written **last**,
+from `AfterWorldSave`, once the strategy and every `WorldSave` handler in the shard have written
+their files. Every custom store (`CustomPersistence`) is a **stamped file** (`StampedFile.cs`:
+header with the generation, payload length and SHA-256, trailer repeating the generation), produced
+in memory first and written temp-then-rename, so a `SerializeCore` that throws touches nothing and
+a crash can never leave a half file live. The manifest records each store's generation, length and
+hash, and every other file under `Saves/` by length and last-write ticks (not a hash: Items.bin and
+Mobiles.bin together are 48 MB and would add 100-200 ms to a 0.3 s freeze).
+
+**At boot the tree is verified before `World.Load`, and a mixed tree is refused.** A `Configure()`
+at `Int32.MinValue + 1` runs `PersistenceGeneration.Verify` on `Saves/` against its manifest and
+against `Backups/Automatic/Most Recent`'s; if a listed store is missing, half-written, legacy, at
+another generation or rewritten, if a store failed during the save that produced the manifest, if a
+world file's fingerprint differs, or if the manifest is missing while the last backup has one (the
+last save did not complete), the shard prints a red block naming the file and both generations, the
+last complete backup's generation and three choices, writes the same text to
+`Data/Live/boot-refusal.json`, and exits with code 3. **No automatic repair.** The three choices are:
+restore `Most Recent` wholesale; restore the named file from a backup at the right generation; or
+create **`Saves/Custom/ACCEPT`** containing the generation the message prints, which loads the tree as
+it is for one boot and is deleted. A tree with no manifest anywhere and only legacy files is the
+pre-upgrade tree and loads at generation 0; the first save stamps 1.
+
+**An ack means a completed generation.** The `save` token's handler reads `LastSave` after
+`AutoSave.Save()` and answers `ok:true` only when the generation advanced by one with every store
+and the manifest written - otherwise it names the reason (did not run, a store failed, the manifest
+was not written). Every ack and `Data/Live/health.json` carry `generation` and `bootId`, so the
+bridge's restart compares the generation the shard saved, the one it stopped at and the one it came
+back at (`judgeSaveAck` / `judgeShutdownAck` / `judgeBootAck` in `tools/editor/bridge.js`), and reads
+the refusal file so a refused boot fails the handshake in a second with the shard's own words.
+
+`Core.Persistence` reports the boot verdict, the current generation, the boot id and the last save.
+`[CoreSmoke`'s **save integrity fixtures** (in `SaveIntegrity.cs`) build scratch trees with the real
+writers and prove each refusal - half-written, generation mismatch, listed-but-missing, world
+fingerprint, failed store, incomplete last save - plus a stamped round trip, the LoopQueue outcomes
+below, and the agreement between the boot-verified generation and what every store loaded and wrote.
+
+**Stopping and starting the shard by hand.** Drop `save.token` and wait for `save.ack.json` with
+`ok:true` and its `generation`; drop `shutdown.token` and read its `generation`; confirm `ServUO.exe`
+is gone. Before every boot check nothing listens on 2594 or 8081 and no `ServUO` process exists;
+after the boot the console's `Persistence:` line (or `Core.Persistence` in health.json) names the
+generation it verified, which must be the one the shutdown ack reported.
+
+### A job's outcome is one of four things
+
+`Scripts/Custom/Core/LoopQueue.cs`, header, from the same day: **Completed**, **Faulted**, **NotRun**
+(withdrawn by its own timed-out waiter while still queued, or orphaned by a shutdown before it ran -
+nothing happened, safe to retry) and **Unknown** (the waiter gave up while it was running, the
+process ended with it running, or no ack ever came - never done, never failed, never retried as if
+nothing happened). `nav-adopt.json` and `walk-audit.json` say `failed` with the error or `unknown`
+for a run the shard stopped under, and the editor and bridge word a missing ack as unknown.
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is

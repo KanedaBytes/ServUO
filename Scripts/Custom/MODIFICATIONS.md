@@ -421,11 +421,24 @@ Not upstream edits, but places where custom code knowingly does **not** use the 
 previous one therefore leaves stale tail bytes behind. That is harmless for a strictly
 forward-reading loader and fatal for anything that reads to EOF.
 
-`Scripts/Custom/Core/CustomPersistence.cs` opens its own `FileStream` with `FileMode.Create`
-(which truncates) and wraps it in the same `BinaryFileWriter`. **Reads still go through
-`Persistence.Deserialize`**, for its directory-creation and zero-length-file handling.
+Until 21 September 2026 `Scripts/Custom/Core/CustomPersistence.cs` opened its own `FileStream`
+with `FileMode.Create` (which truncates) and wrapped it in the same `BinaryFileWriter`. That was
+REVIEW.md's F6: the live file was truncated before serialization had succeeded.
 
-If upstream ever changes `Persistence.Serialize` to truncate, this deviation can be dropped.
+**Now** (F6 closed) the store is serialized into a `MemoryStream` through the same
+`BinaryFileWriter(Stream, true)` - the encoding and string prefixing are identical to the
+file-backed write, so the payload bytes are the ones a legacy file held after its version int -
+and written as a **stamped file** (`Scripts/Custom/Core/StampedFile.cs`: a header with the
+world-save generation, payload length and SHA-256, and a trailer) to `Persistence.bin.tmp`, then
+renamed over the live file with `File.Replace`, keeping the previous one as `Persistence.bin.prev`.
+**Stamped reads bypass `Persistence.Deserialize` too**: the payload is read by length and handed
+to `DeserializeCore` over a `MemoryStream`. Legacy files (no stamp) still load through
+`Persistence.Deserialize`, for its directory-creation and zero-length-file handling, and only on a
+tree that has no manifest anywhere (`PersistenceGeneration.cs`).
+
+This is a deviation in format as well as in helper: stock `Persistence` files carry no
+generation, and the manifest that ties the custom files to a world save has no stock equivalent.
+If upstream ever grows a save generation, the manifest should record it rather than keep its own.
 
 ---
 
@@ -628,7 +641,13 @@ state. `CustomPersistence` therefore **quarantines** an unreadable save to `Back
 (which AutoSave never touches) at the moment the load fails.
 
 Known limitation: the degraded flag itself does not survive a restart. The quarantined copy
-and the red console log are the durable evidence.
+and the red console log are the durable evidence - and, from 21 September 2026, so is the
+manifest: a store that failed during a save is listed `ok:false` in `Saves/Custom/Manifest.json`
+with the reason, and the next boot refuses the tree until the operator decides
+(`PersistenceGeneration.cs`). The rotation is also why `Backups/Automatic/Most Recent` is the
+"previous generation" the boot check reads, and why every read the check makes is a `using`: one
+handle left open under `Saves/` makes `Directory.Move` throw, the backup fails with a warning, and
+the save proceeds in place.
 
 ### Regions
 

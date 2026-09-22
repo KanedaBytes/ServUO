@@ -48,6 +48,28 @@ if (LoopQueue.TryPostAndWait(() => World.Mobiles.Count, TimeSpan.FromSeconds(10)
 - Each callback is individually guarded; a fault is logged and counted, never propagated.
 - `TryPostAndWait` called *from* the game thread runs inline rather than deadlocking.
 - `AcknowledgeFaults()` clears the health baseline after you have read the errors.
+- `Submit(work)` returns a `LoopJob` handle whose `Outcome` says afterwards whether it ran.
+
+**The outcome contract (21 September 2026, REVIEW.md section 2).** A caller may conclude one of
+four things about work it handed to the queue, and nothing else:
+
+| Outcome | Meaning | May the caller retry? |
+| --- | --- | --- |
+| `Completed` | ran and returned; an ack `ok:true` means this and only this | n/a |
+| `Faulted` | ran and threw; an ack `ok:false` means it failed, and where | after reading why |
+| `NotRun` | **never started**: its waiter timed out and withdrew it while still queued, or the shard shut down first | **yes** - nothing happened |
+| `Unknown` | the waiter gave up while it was **running**, the process ended with it running, or no ack ever came | **no** - re-query the state it would have changed |
+
+`TryPostAndWait(..., out LoopOutcome outcome)` reports which; on a timeout it withdraws the job by
+compare-and-swap (`LoopJob.TryAbandon`) and says `NotRun` if it won, `Unknown` if the drain had
+already begun the job. A save freezes the drain and queued work waits; a waiter expiring inside the
+freeze withdraws its job. A shutdown orphans every queued job, wakes their waiters with `NotRun` and
+says on the console how many there were; nothing runs after `Core.Closing`. A crash raises no
+Shutdown event: waiters time out and withdraw, which is `NotRun` too. **No ack, a timeout, a save,
+a shutdown or a crash are never reported as done and never as failed.** Long-running owners that
+report through a `Data/Live` file - `nav-adopt`, `walk-audit` - use the same words in their
+`status`: `done`, `failed` with the error, `unknown` for a run the shard stopped under
+(`Bridge/LiveStatus.cs` marks a stale `working`/`running` file at boot).
 
 **Never** call `Timer.DelayCall` or touch world state from a background thread — see CLAUDE.md
 section 4 for why `Timer.DelayCall` is not safe enough to rely on.
@@ -95,11 +117,42 @@ public sealed class MyStore : CustomPersistence
 ```
 
 Construct the instance from a `Configure()` somewhere; the base handles all event wiring and
-writes to `Saves/Custom/<Name>/Persistence.bin`. A version `int` is written ahead of the payload.
+writes to `Saves/Custom/<Name>/Persistence.bin`.
+
+**On disk, from 21 September 2026 (REVIEW.md F6): a stamped, atomic file.** `StampedFile.cs`
+defines the format - a header with a magic, the world-save **generation**, the save time, the
+store version, the payload length and the payload's SHA-256; the payload exactly as `SerializeCore`
+wrote it; a trailer repeating the generation. The store is serialized into memory first, so a
+`SerializeCore` that throws touches no file; the bytes go to `Persistence.bin.tmp` with
+`Flush(true)` and are renamed over the live file (`AtomicFile.Write(path, byte[], ".prev", ...)`),
+keeping the previous file as `Persistence.bin.prev` when there was one. A crash mid-write therefore
+leaves the previous whole file live, never a half one. Files in the older format - an `int` version
+then the payload, no stamp - still load, and are accepted only on a tree with no manifest anywhere.
+
+**The generation is `PersistenceGeneration`'s.** Every store in a save is stamped with the same
+number, `Current + 1`, and the manifest written after them (`Saves/Custom/Manifest.json`, from
+`AfterWorldSave` once every stock `WorldSave` handler has written too) lists each store's generation,
+length and hash and fingerprints every other file under `Saves/` by length and last-write ticks.
+`Current` advances only when the manifest wrote. At boot a `Configure()` at `Int32.MinValue + 1`
+verifies the tree - manifest against stores, manifest against world files, and a missing manifest
+against the last backup's - and **refuses with a plain message and exit code 3** when they disagree:
+the file, both generations (or both lengths), the last complete backup, and three choices, of which
+`Saves/Custom/ACCEPT` holding the printed generation is the only override. There is no automatic
+repair. The refusal is also written to `Data/Live/boot-refusal.json` for the bridge. `Verify` is pure
+over two directories, so `[CoreSmoke`'s fixtures run it on scratch trees. `Core.Persistence` is the
+health check; every store's own check names the generation it loaded and last saved.
+
+**The one hole that remains:** a crash inside the very first stamped save leaves a tree with no
+manifest anywhere and only legacy files, which is the pre-upgrade tree and loads. Once one stamped
+save has completed, `Most Recent` carries a manifest and the "last save did not complete" rule
+catches every later one.
 
 **Failure contract.** A store that cannot load goes **degraded**: it loads empty, logs red, and
 then **refuses to save**, so a corrupt or unreadable file is never overwritten with empty state.
-The degraded flag surfaces through `HealthCheck`, so `[CoreSmoke` reports it.
+A store whose save fails is degraded too, its live file is the previous good generation untouched,
+the manifest lists it `ok:false` with the reason, the `save` ack says so, and the next boot refuses
+the tree until the operator decides. The degraded flag surfaces through `HealthCheck`, so
+`[CoreSmoke` reports it.
 
 It also **quarantines** the unreadable file to `Backups/Degraded/<Name>-<timestamp>.bin`.
 That is not belt-and-braces: `AutoSave.Backup()` moves the whole `Saves/` directory into
@@ -107,11 +160,11 @@ That is not belt-and-braces: `AutoSave.Backup()` moves the whole `Saves/` direct
 original for one cycle, and it is gone after three. `Backups/Degraded/` is outside the
 rotation. Recovery is to stop the shard, restore the `.bin`, and restart.
 
-Known limitation: the degraded flag does not survive a restart — the quarantined copy and the
-red console log are the durable evidence.
+Known limitation: the degraded flag does not survive a restart — the quarantined copy, the red
+console log and the manifest's `ok:false` entry are the durable evidence.
 
 Neither the load nor the save path is allowed to throw: `World.cs` turns any exception escaping
-a `WorldSave` or `WorldLoad` handler into a fatal that terminates the shard.
+a `WorldSave`, `WorldLoad` or `AfterWorldSave` handler into a fatal that terminates the shard.
 
 ## `HealthCheck` — the shard health registry
 

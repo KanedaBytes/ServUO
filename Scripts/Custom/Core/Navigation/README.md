@@ -301,6 +301,36 @@ take it offline:
   with no arrival point within the hop cap of a waypoint, **or with any individual arrival beyond
   it** (see below); a waypoint with no edges; a failing self-test.
 
+## Outcome contract
+
+From 21 September 2026 (`Scripts/Custom/Core/LoopQueue.cs`, header; REVIEW.md section 2). Every
+request this layer answers - a token dropped by the bridge, a job chained through `LoopQueue`, a
+status file the editor polls - ends in exactly one of four outcomes, and the words are fixed:
+
+- **Completed.** An ack with `ok:true`, or a status file saying `done`. The work ran to the end.
+- **Faulted.** An ack with `ok:false`, or a status file saying `failed` with an `error` field. The
+  work ran and stopped; the message says where.
+- **NotRun.** The work never started: a `TryPostAndWait` waiter timed out and withdrew its job while
+  it was still queued, or the shard shut down with it queued. Nothing happened, and it is safe to
+  ask again.
+- **Unknown.** No ack came; the waiter gave up while the job was running; the shard stopped under a
+  run (`nav-adopt.json` / `walk-audit.json` say `unknown`, written by the shutdown handler or by the
+  next boot finding the file still `working`/`running`). **Never done, never failed, never retried
+  as if nothing happened** - re-query the state it would have changed at the next completed
+  persistence generation.
+
+What this means for the instruments here. `nav-adopt` and `walk-audit` ack `started`, and their
+outcome is the `status` in their `Data/Live` file, which now takes all four words; `pollAdopt` and
+the walk-audit loop in the editor stop on `failed` and `unknown` and show the reason instead of
+polling to a cap. `nav-audit`, `nav-rejoin`, `botpop-gen` and `nav-resample-z` run inside the poll,
+so their outcome is the ack itself, and the only way they reach Unknown is no ack - which the bridge
+and the editor word as unknown, not as "did not answer, is it running?". A `save` ack means a
+completed persistence generation (SHARD.md, *Persistence has a generation*), and a bridge restart
+that gets no save ack stops there and says so.
+
+uo-offline has no answer here: `Core.LoopContext.Post` is fire-and-forget with no job state, and its
+shutdown drops the queue silently (`Projects/Server/EventLoopTasks.cs`). This is a named seam.
+
 ## The last hop is the one nobody audited
 
 *Measured 9 September 2026 (`6dccdb6f`); the rule it settled is in force.*
@@ -1715,7 +1745,10 @@ is no code path from this file to `navigation.json`.
 **Every edge is re-walked, not copied.** Theirs were authored against a 38-tile leg cap and 56% of
 them are longer than `Custom.NavHopMaxTiles`, so each is flood-filled with `NavCorridor.TryPath` and
 subdivided under the cap. That is a real pathfind per edge, which is why the work runs in
-`LoopQueue` passes and writes progress rather than finishing inside one tick.
+`LoopQueue` passes and writes progress rather than finishing inside one tick. The file's `status`
+is `working`, then `done` - or, from 21 September 2026, `failed` with the error when a pass threw
+(it used to stay `working` for ever), and `unknown` when the shard shut down under the run or the
+next boot found it still `working` (see *Outcome contract* above).
 
 **And every hop is then pathed by the engine, both ways** - `NavCorridor.TryVerifyHopsBothWays`, the
 test `[NavAudit` applies after a save, run before the proposal is written. The flood and

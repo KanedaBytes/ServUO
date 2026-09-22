@@ -42,6 +42,18 @@ been re-checked**; see [History](#history) for the rule about which is which.
 - **The writable set is a fixed table keyed by name, never a path from the caller.**
 - **One token per operation may be pending.** A publish while one is still on disk answers 409 -
   the interim guard for F3, which is a request-identity problem and not a transport one.
+- **Every ack carries `generation` and `bootId`** (from 21 September 2026): the completed
+  persistence generation and the process that answered. A `save` ack says `ok:true` only when a
+  world save completed with every custom store and its manifest - "saved" is a generation, not
+  a returned call - and the `save` token now carries a nonce like the others. `RESTART` judges
+  each leg with `judgeSaveAck` / `judgeShutdownAck` / `judgeBootAck` (exported, tested): the
+  shutdown must come from the same process at the saved generation or later, the boot from a
+  different process at that generation (`>` warns, `<` fails), and a shard that refused to load
+  `Saves/` is read out of `Data/Live/boot-refusal.json` in one second with its own message.
+- **No ack means unknown**, never failed. `awaitAck`, the reload path and the restart all say so in
+  those words; the request may still run when the shard picks the token up. Long-running jobs
+  (`nav-adopt`, `walk-audit`) end in `done`, `failed` with the error, or `unknown` when the shard
+  stopped under them, and the panels stop polling on either of the last two.
 - **The Admin section exists** - eleven buttons, the console feed, and `RESTART` as the one thing
   here that can leave the shard down. Every button runs without a client.
 - **Never validate a file under `js/` with `node --check`.** It passes ES modules containing syntax

@@ -599,15 +599,17 @@ namespace Server.Custom
         {
             // Saves/ has world files and no manifest, but the last backup has one: the save after it
             // began (the rotation moved the old tree away) and never wrote its manifest.
+            // Backups/Automatic/Most Recent IS the previous Saves/ directory, moved whole by
+            // AutoSave.Backup(), so its manifest sits at <Most Recent>/Custom/Manifest.json and the
+            // moved directory itself is what Verify is handed.
             string storeRel, manifestPath;
             string previousSaves = BuildTree(Path.Combine(root, "backup"), 41, SamplePayload(), out storeRel, out manifestPath);
-            string previousDir = Path.GetDirectoryName(previousSaves);
 
             string saves = Path.Combine(root, "Saves");
             Directory.CreateDirectory(Path.Combine(saves, "Items"));
             File.WriteAllBytes(Path.Combine(saves, "Items", "Items.bin"), new byte[] { 1 });
 
-            Verdict verdict = PersistenceGeneration.Verify(saves, previousDir);
+            Verdict verdict = PersistenceGeneration.Verify(saves, previousSaves);
 
             return Expect(report,
                 !verdict.Ok && verdict.Message.Contains("did not complete") && verdict.Message.Contains("generation 41")
