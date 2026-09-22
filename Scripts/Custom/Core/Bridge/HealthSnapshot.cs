@@ -37,6 +37,12 @@ namespace Server.Custom
 
                 builder.Append("{\n");
                 builder.Append("  \"utc\": \"").Append(DateTime.UtcNow.ToString("o")).Append("\",\n");
+
+                // The completed persistence generation and this process's identity, so the editor
+                // and the bridge's restart handshake can tell "the shard I asked" from "the shard
+                // that answered" and compare the generation it booted at with the one it saved.
+                builder.Append("  \"generation\": ").Append(PersistenceGeneration.Current).Append(",\n");
+                builder.Append("  \"bootId\": ").Append(Json.Quote(PersistenceGeneration.BootId)).Append(",\n");
                 builder.Append("  \"worst\": \"").Append(HealthCheck.Worst(results)).Append("\",\n");
                 builder.Append("  \"checks\": [\n");
 

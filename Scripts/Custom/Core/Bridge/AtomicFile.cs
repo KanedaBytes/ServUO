@@ -17,6 +17,71 @@ namespace Server.Custom
     /// </summary>
     public static class AtomicFile
     {
+        /// <summary>
+        /// The binary, durable variant, for persistence rather than snapshots.
+        ///
+        /// Three differences from the text overload, each on purpose. The bytes go through a
+        /// FileStream with Flush(true) - File.WriteAllBytes never fsyncs, and on ext4 a rename over
+        /// an existing file is only crash-safe once the new file's data has reached the disk. The
+        /// live file, when there is one, is kept as <paramref name="backupSuffix"/> beside it by
+        /// File.Replace's third argument, so the previous generation survives the write in place
+        /// (REVIEW.md F6: keep the last known-good, not just avoid destroying it) and the rare
+        /// ERROR_UNABLE_TO_MOVE_REPLACEMENT can never leave no destination at all. And a snapshot
+        /// written every two seconds could not afford either.
+        /// </summary>
+        public static bool Write(string relativePath, byte[] bytes, string backupSuffix, out string error)
+        {
+            error = null;
+
+            string fullPath = Path.Combine(Core.BaseDirectory, relativePath);
+            string temporary = fullPath + ".tmp";
+
+            try
+            {
+                string directory = Path.GetDirectoryName(fullPath);
+
+                if (!String.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                using (var fs = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush(true);
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    File.Replace(temporary, fullPath, backupSuffix == null ? null : fullPath + backupSuffix);
+                }
+                else
+                {
+                    File.Move(temporary, fullPath);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+
+                try
+                {
+                    if (File.Exists(temporary))
+                    {
+                        File.Delete(temporary);
+                    }
+                }
+                catch
+                {
+                    // A leftover .tmp is untidy, not harmful; the real error is the one above.
+                }
+
+                return false;
+            }
+        }
+
         public static bool Write(string relativePath, string contents, out string error)
         {
             error = null;

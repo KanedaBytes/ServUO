@@ -75,4 +75,13 @@ Write-Host "Starting shard..." -ForegroundColor Cyan
 Write-Host ""
 
 & $exe @runArgs
-exit $LASTEXITCODE
+$shardExit = $LASTEXITCODE
+
+if ($shardExit -ne 0) {
+    # A non-zero exit is the shard refusing to run, not crashing: PersistenceGeneration exits 3
+    # when Saves/ and the custom files disagree, and its message is the red block above this line.
+    Write-Host ""
+    Write-Host "ServUO exited with code $shardExit. Its last words are above." -ForegroundColor Red
+}
+
+exit $shardExit

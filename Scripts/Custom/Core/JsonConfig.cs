@@ -224,25 +224,20 @@ namespace Server.Custom
                 return false;
             }
 
-            string fullPath = Resolve(relativePath);
+            // Temp-then-rename, like every other custom data file this shard writes (21 September
+            // 2026). This was the one remaining direct File.WriteAllText of a Data/Custom file: a
+            // crash between the truncate and the last byte left navigation.json empty, and the
+            // .bak beside it was the bridge's, not the shard's. Same bytes, same UTF-8 without a
+            // BOM, same line endings - only the moment the live file changes is different.
+            string written;
 
-            try
+            if (!AtomicFile.Write(Resolve(relativePath), SerializeCompact(token), out written))
             {
-                string directory = Path.GetDirectoryName(fullPath);
-
-                if (!String.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                File.WriteAllText(fullPath, SerializeCompact(token), new UTF8Encoding(false));
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = "Could not write " + relativePath + ": " + ex.Message;
+                error = "Could not write " + relativePath + ": " + written;
                 return false;
             }
+
+            return true;
         }
 
         /// <summary>
