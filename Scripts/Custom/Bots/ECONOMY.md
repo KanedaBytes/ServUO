@@ -79,8 +79,11 @@ box or an account. When a later slice does, it goes through this contract and na
 
 ## 3. The price
 
-**Data, not code:** every number below is in `Data/Custom/bots.json`, section `economy`, validated
-at load. The stock files it came from are cited in the section's `comment`.
+**Data, not code — except the smelt ratio.** The prices, both ladders, the margin and the starting
+purse are in `Data/Custom/bots.json`, section `economy`, validated at load (a ladder must name every
+colour), with the stock files they came from cited in the section's `comment`. The smelt ratio is
+code (`BotPrice`), because it is not a judgement: it is what `BaseOre` does to a pile of that
+graphic, and a config that disagreed would price a load at one yield and hand the buyer another.
 
 | Step | Ore | Log |
 |---|---|---|

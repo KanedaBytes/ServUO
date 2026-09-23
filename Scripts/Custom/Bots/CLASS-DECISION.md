@@ -92,6 +92,40 @@ is on no spawner at all, and the world save carries the rest.
 Where it lives: `BotRoster.cs`, `NamedBots.cs`, `NamedBotFixtures.cs`; the Bots README, **Named
 bots**.
 
+### The economy — decided 23 September 2026, built as 7f-1
+
+**Sean's decisions, recorded the day they were taken** (they close `REVIEW.md` owner question 3):
+
+- **Gold's source and sink are the stock NPC shopkeepers, at player prices.** Nothing invented,
+  nothing minted.
+- **Bots trade with each other in the supply chain:** a gatherer delivers to a named crafter and the
+  crafter pays, at or a little above the NPC buy price, so the walk is worth it.
+- **Every bot, named or throwaway, starts with 10,000 gold at creation.** A throwaway's gold vanishes
+  with it and is recorded as a loss, like its starting stash.
+- **Named bots keep everything they bought across a restart;** throwaways lose it with the bot,
+  recorded.
+- **Player-facing bot shops are a later slice.**
+- **Coloured ore counts:** the whole ore family and log family are carried, capacity-checked,
+  ledgered and priced by colour at stock NPC prices. No stock NPC buys ore or any coloured good, so
+  **a colour is the plain NPC price times the stock community-collection ladder** (Bonnie's ingots,
+  Zorda's boards), and plain ore is priced by the NPC ingot price and the stock smelt ratio.
+- **Owner direction for a later slice, no code now:** skill gain as a motive — a bot's assigned build
+  decides which skills it is motivated to raise.
+
+**Taken in the plan and approved with it:** a throwaway crafter clocked in at a bench buys from its
+own purse through the same path (a named one is preferred); the 21 named bots built on 22 September
+receive the 10,000 once, on top of what they already held.
+
+**Which gold a named bot uses: its pack.** The trade path spends and credits pack gold only, for
+every bot — upstream's rule too (`CrafterStock.SpendGold`, uo-offline `CrafterStock.cs:110-118`). For
+a named bot it is a decision, because §3 below is true: an `Account` moves bank gold into account
+currency. Three reasons, in `ECONOMY.md` section 2: `Account.TotalCurrency` is a `double` and the
+ledger balances to the coin; pack gold never converts; and `Banker.Withdraw` can create gold. Account
+currency is **counted** in the gold census and moved by nothing.
+
+The contract is `ECONOMY.md`; the code is `BotTrade.cs` (the one path), `BotGoldLedger.cs`
+(`Bots.Gold`), `BotEconomyConfig.cs` (`bots.json` `economy`) and `EconomyFixtures.cs`.
+
 The rest of this file is the evidence that was put in front of that decision, kept because the
 reasons matter more than the verdict: the next person to ask "why is `BotAI` gone?" or "why did we
 edit `FastAStarAlgorithm.cs`?" should find the answer here rather than re-derive it.
@@ -184,6 +218,14 @@ resolves the ore a swing produces through `PlayerMobile pm = from as PlayerMobil
 `resource.Types[0]` at `:229` — plain iron, forever. Sand is `PlayerMobile`-gated outright
 (`:286`). **A `BaseCreature` Miner can never bring home coloured ore, granite or gems**, and that is
 the engine's decision, not a config one.
+
+> **Corrected 23 September 2026 (7f-1).** Half of that paragraph was wrong. Granite, gems and sand
+> are `PlayerMobile`-and-flag gated, as it says. Coloured ore is not: `resource` at `:229` is the
+> vein's resource, chosen by `HarvestSystem` from the bank's vein and the miner's skill
+> (`HarvestSystem.cs:142-143`, `:368`), so `Types[0]` is `DullCopperOre` on a dull copper vein for any
+> mobile whose skill reaches it. Coloured ore was always possible, and the haul counted only
+> `IronOre`, so a coloured pile was invisible to the pack-full check and the ledger. 7f-1 counts the
+> whole ore and log family (`BotHaul.FamilyOf`).
 
 *Confirms `REVIEW.md` §3's skill row* ("BaseCreature can gain some skills, so 'it cannot gain skills'
 is false; player-equivalent progression is also false"), and adds the stat-cap breach and the ore
@@ -343,6 +385,10 @@ That is the concrete thing that rules out option (b) below.
 
 *Confirms `REVIEW.md` §3's Banker inference*: an account is not mandatory for a purchase, and is
 consequential rather than cosmetic where it exists.
+
+*Settled by 7f-1 (23 September 2026):* the trade path moves **pack** gold only, so a named bot's
+account never enters a trade; the gold census counts account currency, rounded to the coin, and
+nothing moves money into or out of one. See *The economy* under Sean's decision above.
 
 ---
 

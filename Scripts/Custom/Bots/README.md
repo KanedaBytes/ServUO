@@ -196,7 +196,9 @@ the table (`Accounts.cs:56`) and an account made any earlier would be thrown awa
 - **`LastLogin` is refreshed every boot**, so the account never reads `Inactive`
   (`Account.cs:508-519`) - which would condemn a house it owns in 7f (`BaseHouse.cs:102`).
 - **Account gold is on** (`CurrentExpansion.cs:20`): gold dropped in a named bot's bank becomes
-  account currency and is saved in `accounts.xml`, not as an item. That is 7f's to use.
+  account currency and is saved in `accounts.xml`, not as an item. **7f-1 does not use it:** the
+  trade path spends and credits pack gold only, because `Account.TotalCurrency` is a `double` and the
+  gold ledger balances to the coin (`ECONOMY.md`, section 2). The census still counts it.
 
 ### Reserved names
 
@@ -214,13 +216,22 @@ birth and the boot purge put them in an offline bucket (`BotGoodsLedger.NoteOffl
 therefore reads "inherited N, held N" for the named cast and never `boot-purge`. The health line
 carries `named offline: U unit(s) held by K named bot(s)`.
 
+**Gold is held the same way, and more directly** (7f-1). `Bots.Gold` keeps the offline named bots
+as a set of *bots*, not a bucket of numbers: a named bot offline is a persisted mobile with a real
+pack, bank box and account, so every census re-reads it rather than remembering what it held at
+logout. Every named bot was given the 10,000 starting purse once, on top of what it already held
+(`PlayerBot.StartingGoldGranted`, save v4); the 21 built on 22 September got it late, at the first
+boot of 7f-1, and the grant never repeats.
+
 ### Commands and health
 
 `[BotNamed [list | mark <name> [text] | bank <name> | logout <name> | login <name>]` (Administrator;
 token `bot-named`, same body). Every form writes `Data/Live/bot-named.json`: each entry's account
 (banned, tagged), serial, state, position, whether it is at its post, and its bank item count - with
 the box item by item for the bot named in `mark` or `bank`. `logout` holds the bot offline until
-`login`. The marker is a `BlankScroll`, not gold, for the account-gold reason above.
+`login`. The marker is a `BlankScroll`, not gold, for the account-gold reason above. Since 7f-1 each
+bot also carries `gold {pack, bank, account, total, startingGranted, startingRemaining}` in the JSON
+and `gold N` on its ack line - how "Bruenor's gold before and after" is read headlessly.
 
 **`Bots.Named`** fails if a named bot is ever deleted outside a fixture or an account is not locked;
 warns on a refused entry, an unheld offline bot, or a bot away from its post 150 s after the logins.
@@ -782,10 +793,13 @@ edit is taken only if that number justifies it.
 Upstream's `BotEconomy.DeliverMaterials` (uo-offline `BotEconomy.cs:273-345`) deletes the whole haul
 to count it, pays the gatherer for all of it, and lets `CrafterStock.Add` take what fits — the
 overflow "goes to the shop", which is a sentence rather than a code path. That is coherent on their
-side because the gold covers it. Here the gold is 7f, so the goods have to survive on their own:
+side because the gold covers it. Here the goods had to survive on their own before there was gold:
 `BotWorkDelivery.Settle` moves only what the receiver takes and leaves the remainder in the pack.
 **The conservation rules are ours; upstream has no answer to port.** See *Delivery conservation*
-under **Working**, and REVIEW.md F5.
+under **Working**, and REVIEW.md F5. **Since 7f-1 the gold moves too, and by the same rule**: the
+buyer pays for exactly what it takes (`BotTrade`), which is what makes the remainder staying with
+the seller coherent here rather than a loss to one side — `ECONOMY.md`, section 5, lists every
+place we part from `DeliverMaterials`.
 
 The one half that IS theirs is the pack beast's ordering. Their caller disposes of it *after*
 `DeliverMaterials` returns (`TravelerBehavior.cs:2484-2508`) — to a stables when one is in reach,
@@ -1765,7 +1779,7 @@ reader of an older diff will find their markers and should not go looking for wh
 | --- | --- | --- | --- |
 | ~~1~~ | `BotClassHelper.StationFor` | ~~Not ported. It returned upstream's `DestinationType` enum~~ | **Done (7e)** — returns a `BotStation`: our nav `type` token plus a tag, because 13 of 27 destinations are `shop` and type alone cannot tell a loom from a bakery. `CrafterTypeHelper.StationFor` did **not** come back: the subtypes are real classes now, so the station belongs to the class |
 | 2 | `EquipmentTable.AddMarkedRune` | A blank `RecallRune`. Upstream marked it from its `DestinationCatalog`; nothing routes yet, and a rune marked to somewhere no bot can walk is a lie in the pack | Travel session — wires to `Nav.Destinations(...)` |
-| ~~3~~ | `EquipmentTable.SeedCrafterStarterProps`, `EquipCrafterTool` | ~~Empty. Both read `CrafterProfiles`~~ | **Done (7e)**, minus the gold in upstream's `StarterProps` — seeding a purse for a purse system that does not exist would be inventing an economy one item at a time. That half is 7f |
+| ~~3~~ | `EquipmentTable.SeedCrafterStarterProps`, `EquipCrafterTool` | ~~Empty. Both read `CrafterProfiles`~~ | **Done (7e)**, minus the gold in upstream's `StarterProps` — seeding a purse for a purse system that does not exist would be inventing an economy one item at a time. **7f-1 did not restore it either:** every bot now has the one starting purse (`economy.startingGold`), and a trade extra on top would be a second source of coin |
 | 4 | `EquipmentTable` → `BotItemFactory` | **Not severed** — pulled in as a leaf, since it is self-contained and the outfit roller cannot work without it | n/a |
 | ~~5~~ | ~~**`BotAI`'s base class**~~ | ~~`: VendorAI`~~ | **Closed 12 September 2026, by deletion rather than by the combat session that was scheduled to replace it.** A `PlayerMobile` has no AI, so `BotAI` and `ForcedAI` both went: their two overrides existed only to stop `BaseAI.DoActionWander` fighting the walker and to stop `SpeedInfo` re-inflating a pace the bot had been given. `IBotActor` outlived the file it lived in and is now `IBotActor.cs` |
 | 6 | `BankSitterBehavior` Hawker's **WTS** half | Only `wtb`. Upstream's hawker shouts a line `BotShop` builds from a real item in its pack, so "WTS GM halberd 5k" means there *is* one and 5k buys it. A WTS from a bot holding nothing is the lie this system exists not to tell | Economy session, with `BotShop` |
@@ -1774,7 +1788,7 @@ reader of an older diff will find their markers and should not go looking for wh
 | 9 | `friend_greet` and `BotSocialGraph` | Not wired. `{name}` **resolves**, but nothing decides that two bots are friends, so no path picks the category | Social session |
 | 10 | **Fisherman** — `CrafterProfiles` has no entry and `StationFor` answers `dock`. **Corrected 22 September 2026:** the docks exist — the Trammel adopt brought nine, so the class is not stationless and `Bots.Work` does not report it — but a Fisherman arriving at one becomes nothing, because `BuildVisit` has no fishing behaviour to hand it | Its weights are left as they are until then; upstream's single-minded `dock` 8.0 / `Bank` 0.4 / else 0.02 is the target (Deviations, *Gatherers are single-minded again*). Its production is not a craft at all — upstream drove `Fishing.System`, walking to the water's edge and casting only when open water was directly adjacent, which needs their `IsWet` / `HasStandableStatic` scan to tell a pier from the sea | Dock session. Britain's waterfront is **The Oaken Oar** (1424,1747, the dockside tavern) and **Customs** (1480,1746, on the docks) |
 | 11 | The gatherer's **stable round trip** | The beast is deleted on delivery — upstream's own no-stables-in-range path. `AnimalTrainer.EndStable` hard-codes a 30gp fee from pack or bank, `DoClaim` is private, and there is no `stables` destination to walk to | Economy session (7f): add their Britain Stables (1393,1645, just outside our west edge), the fee, and the detour |
-| 12 | The **gold half of the hand-over** | The load moves, the coin does not. Upstream paid 2–4gp a unit from the crafter's purse and refused the sale when it was broke; the crafter's three-minute counter restock went with it | Economy session (7f) |
+| ~~12~~ | The **gold half of the hand-over** | ~~The load moves, the coin does not~~ | **Done (7f-1, 23 September 2026)** — the hand-over at a bench is a paid trade through `BotTrade`, at stock NPC prices, and a broke buyer takes nothing (`ECONOMY.md`). The crafter's three-minute counter restock is **not** restored: it bought stock from nowhere, and Sean's sources and sinks are the stock NPC shopkeepers — a crafter restocking by buying from the NPC is a later 7f slice, through the same path |
 | 13 | A gatherer **under attack** | Downs tools and travels. Upstream swapped to a defender `AdventurerBehavior` — "the tool is a real axe" — and there is no Adventurer here yet. Until then no class walks into a hostile spawn on purpose: Deviations, *Classes without combat skip hostile destinations* | Combat session (7g) |
 
 **Seam 5 was a discipline, and the discipline is what made it cheap to close.** `BotAI.cs` was the
@@ -2872,20 +2886,26 @@ Everything worked. The ore was mined, hauled and delivered; it just went to the 
 smith stood at the forge. `IsStaffed` costs one pass over the live crafters, and only for a station
 that already matched the trade.
 
-### The hand-over, and what does not change hands
+### The hand-over is a trade
 
 `BotWorkDelivery` fires on arrival, **before** the handoff rolls: arriving is what completes the
 errand, and a declined handoff would otherwise send the bot away still loaded. If a Crafter of the
-matching trade is working within 12 tiles, it is offered the load and takes what its stock cap
-allows. Otherwise the receiver is the bot's own bank box — the "no buyer today" ending, not a
-failure. Either way **only what the receiver accepts moves**, and the remainder stays in the pack;
-see *Delivery conservation* below.
+matching trade is working within 12 tiles — a **named** one first, a throwaway clocked in at a bench
+otherwise — the load is **sold** to it through `BotTrade`, the one transaction path
+(`ECONOMY.md`). Otherwise the receiver is the bot's own bank box — the "no buyer today" ending, not
+a failure, and unchanged. Either way **only what the receiver takes moves**, and the remainder stays
+in the pack; see *Delivery conservation* below.
 
-**No gold moves, in either direction.** Upstream paid the gatherer 2–4gp a unit out of the crafter's
-purse and refused the sale when the crafter was broke; that is the economy, and the economy is 7f.
-The *scene* still plays, on upstream's delays, because the scene is the visible part: the gatherer
-says its line, the crafter answers two seconds later, the trade closes. An instant answer is the
-loudest tell there is.
+**Gold moves since 7f-1 (23 September 2026).** The crafter pays from its own pack for exactly the
+units it takes, at the stock NPC price in `bots.json` `economy` — the ingot an ore smelts into at
+3gp, a log at 1gp, times the colour's rung on the stock collection ladder, plus 25% — and the
+gatherer is paid into its pack, in the same step as the goods move. A crafter that cannot cover
+the whole load takes what its purse covers; one that cannot cover a single unit takes nothing and
+says so (`haggle_broke`, with the price it was offered), and the hauler keeps its load. Upstream
+paid the gatherer anyway, from nowhere, when the crafter was broke (`BotEconomy.cs:340-344`); that
+is gone. The *scene* still plays, on upstream's delays, because the scene is the visible part: the
+gatherer says its line, the crafter answers two seconds later, the trade closes. An instant answer
+is the loudest tell there is. See **The economy** below.
 
 A crafter that runs out says so — `craft_need`, which is what wires `{mat}` — and then **stays dry
 until somebody brings it something**. That is not a gap. It is the motive the whole loop exists to
@@ -2944,7 +2964,8 @@ fixture on that path would pass either way.
 **Upstream has no answer here and that is the seam.** `BotEconomy.DeliverMaterials`
 (uo-offline `BotEconomy.cs:273-345`) deletes the haul exactly as ours did, and its overflow past the
 stock cap "goes to the shop" — a sentence, not a code path; it is harmless there because gold
-changes hands for the whole load, and gold is 7f. What upstream *does* answer is rule 2: its caller
+changes hands for the whole load. Ours now pays for only what is taken (7f-1, `BotTrade`), so the
+remainder staying put is fair to both sides. What upstream *does* answer is rule 2: its caller
 disposes of the beast **after** `DeliverMaterials` returns (`TravelerBehavior.cs:2484-2508`), walking
 it to a stables or turning it loose when none is in reach. Ours had it three lines before the buyer
 was even looked for.
@@ -3010,6 +3031,57 @@ empty-handed end of shift, a probe tearing down — genuinely does discard.
 > correct-but-inert in production today and is proved by `HaulFixtures` rather than by a live haul;
 > it becomes load-bearing the day a load actually rides the beast. Filling them was not this
 > session's work.
+
+## The economy
+
+**7f-1, 23 September 2026.** The contract is `ECONOMY.md`, and every later 7f feature goes through
+it; this section is where the pieces are.
+
+| Piece | File | What it does |
+| --- | --- | --- |
+| The one trade path | `BotTrade.cs` | `Quote` reads what would move: every colour of the good on offer, the buyer's room (`CrafterStock.Room`, in products), and what its pack gold covers. `Execute` moves it in one step with an undo per step, or refuses, or rolls back - and journals all three to `Data/Live/trade-journal.jsonl` |
+| The price | `BotEconomyConfig.cs`, `bots.json` `economy` | Stock NPC prices (ingot 3gp, log 1gp), the stock smelt ratio by pile graphic (code, `BotPrice`), the stock collection ladder per colour, 125% rounded up once |
+| The gold books | `BotGoldLedger.cs` | `Bots.Gold`; losses to `Data/Live/gold-lost.jsonl` |
+| The purse | `PlayerBot` constructor, `BotGoldLedger.GrantStartingGold` | 10,000 in the pack of every bot at birth; once, late, for the named cast built before the rule (`StartingGoldGranted`, save v4). An instrument (the walk-audit probe) gets none |
+| The first trade | `BotWorkDelivery.SettleTrade` | A gatherer's hand-over at a staffed bench, named crafter first |
+| The family | `BotHaul.FamilyOf` | A good is `BaseOre` or `BaseLog`, every colour; `YieldFor` and `RawGood` stay the plain types because they name a trade |
+| The proof | `EconomyFixtures.cs` | From `[CoreSmoke` - see below |
+
+**Nothing mints coin any more.** `EquipmentTable` rolled a tier-scaled purse and coin in four other
+places (merchant, loose coin, a rainy-day bag, the thief's pouch); all five are gone, and a re-derive
+(`StripGearAndPack`) keeps the purse rather than deleting it with the kit.
+
+**The fixtures** (`EconomyFixtures`, after `NamedBotFixtures`): ten medium iron ore sell for 38 gold
+and both custodies and both ledgers move together; a failure forced after each of the four steps
+rolls everything back exactly; a buyer with 12 gold takes the 3 units 12 buys and the other 7 stay,
+and with no gold it takes nothing and the refusal is journalled; a throwaway's inherited purse is
+counted in at the purge and written down as a 10,000 boot-purge loss; a named bot's purse survives a
+logout and a login and is held offline between them; 4 large dull copper + 2 medium valorite + 3
+small iron are carried as nine, priced at 357, and refine to 8 + 2 + 1 ingots with the odd small ore
+left; five oak logs sell for 19 and become five oak boards; a loss record names `ValoriteOre`; and a
+newborn of every class holds exactly 10,000 and is not overloaded by it.
+
+### Measured, 23 September 2026
+
+At the shipped population (721 live), a ten-minute window from 22:29:46Z, `Bots.Gold` and
+`Bots.Conservation` both **Ok and balanced at every one of eleven one-minute checks**, unexplained 0
+throughout. Four live trades, every one a gatherer selling to a named smith:
+
+| UTC | Seller | Buyer | Units | Products | Gold |
+| --- | --- | --- | --- | --- | --- |
+| 22:35:05 | Jareth Fairweather (Miner) | Flint | 19 of 20 | 20 IronIngot + 18 DullCopperIngot | 210 |
+| 22:35:56 | Imogen (Miner) | Flint | 24 of 25 | 36 IronIngot | 135 |
+| 22:37:40 | Helmir (Miner) | Bruenor | 30 of 30 | 37 IronIngot | 139 |
+| 22:39:05 | Garrick (Miner) | Bruenor | 16 of 17 | 31 IronIngot | 117 |
+
+The first is the colour case live: 10 large iron (120 half-gold) and 9 large dull copper (216) are
+worth 168 gold and cost 210. The three part-trades were each one odd small ore the smelt will not
+take alone (`limit: pairs`). **Bruenor held 11,010 before** (the 10,000 purse and 1,010 of his old
+tier gold) **and 10,754 after**. Then `save` (generation 42), `shutdown` (generation 42), boot:
+`Core.Persistence` verified generation 42, Bruenor 10,754 and Flint 9,770 unchanged, no second grant,
+and `trade-journal.jsonl` byte-identical (15 lines, SHA-1 `cc878c45`).
+
+Loads are smaller than the 60 cap because a gatherer hauls at the end of its shift, not when full.
 
 ## Class-weighted destinations
 
@@ -3466,6 +3538,21 @@ corpus 123 file(s) + 22 gossip held back, 1224 line(s): 1060 wired, 164 reserved
 spoken since boot: 3 (0 repl(ies)). Last load 06:29:43Z
 ```
 
+`Bots.Gold` — the gold ledger (7f-1, `BotGoldLedger`, `ECONOMY.md` section 4): in (opening +
+starting + received), out (paid + lost, split throwaway from named, and by reason), unexplained
+(appeared + vanished), held split pack / bank / account with the offline named bots re-read, the
+purses granted this boot, and the trades — completed, cut short by gold or by room, refused for
+want of gold, rolled back. **Fail** if any gold appeared or vanished with nothing to account for
+it; **Warn** on a drift or before the first census.
+
+```
+at the census - in: opening 309,561 + starting 10,070,000 + received 0 = 10,379,561. out: paid 0,
+lost 3,164,133 (3,164,133 throwaway, 0 named); unexplained 0 (appeared 0, vanished 0); held
+7,215,428 over 721 live bot(s) and 0 offline named (pack 7,215,428, bank 0, account 0; offline
+named 0). 1012 purse(s) granted this boot (21 late, to named bots built before the rule). ...
+Balanced.
+```
+
 `Bots.Work` — the working-class census: work sites with occupancy against capacity, crafters at
 station, gatherers out and hauling, **units mined**, loads delivered, pack animals
 live/reaped/released. **Warn** for a site excluded at load, a crafter blocked at its bench, a
@@ -3828,10 +3915,16 @@ simply does not model a bot whose job is to stay put.
    `CompleteCraft`, so the behaviour learns what happened by looking at the pack on its next tick.
    A craft that fails and one that was never attempted look the same from outside; `Attempts` and
    `Made` are reported separately so the gap between them is visible.
-4. **A dry crafter stays dry.** With no gold there is no counter restock, so a Smith with no Miner
+4. **A dry crafter stays dry.** There is no counter restock — upstream's bought stock from nowhere,
+   and since 7f-1 a crafter's only supply is a gatherer it pays — so a Smith with no Miner
    supplying it stands at a full forge saying "need iron ingots" indefinitely. That is the intended
-   picture this session, not a bug — but on a shard with no gatherers alive it reads as a stuck
-   bot.
+   picture, not a bug — but on a shard with no gatherers alive it reads as a stuck bot. A crafter
+   buying from the NPC smith is a later 7f slice, through `BotTrade`.
+5. **Crafters only buy, until 7f-2.** A fresh purse covers about 22 loads of large iron ore; a full
+   load of valorite empties it. Selling ingots to the NPC smith is the next slice and the only
+   source of crafter income it will have.
+6. **Coloured stock counts against the cap, but crafting uses the plain material.** A smith holding
+   250 coloured ingots takes nothing more until a later slice spends them.
 5. **A bot only ever talks to the room.** It has no memory of a conversation, so it cannot be
    asked a follow-up: the second question gets another line from the same pool, not an answer to
    the first. That is deliberately upstream's shape too — these are passers-by, not quest NPCs.

@@ -324,7 +324,7 @@ checkpoint has shipped it as `True` once already.
 | `[BotSteps [clear]` | GameMaster | Steps per bot-minute in each phase and what moved them - wander, drift-back, walk, teleport. `clear` opens a fresh window (token: `bot-steps`) |
 | `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, split into **named** posts (the roster's) and **throwaway** spawners, any ROSTER GAP, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
 | `[BotPopulationGen` | Administrator | Write the recipe's **throwaway** slots to `Spawns/Custom/<facet>/GG_BotPop.xml` (the named posts are never spawners); then `[GG_Reimport` |
-| `[BotNamed [list\|mark <name> [text]\|bank <name>\|logout <name>\|login <name>]` | Administrator | The named cast: every roster entry with its account and where it stands; put a marker scroll in a named bot's bank box; list a bank box; log a named bot out (held offline) or back in. Writes `Data/Live/bot-named.json` (token: `bot-named`, same body) |
+| `[BotNamed [list\|mark <name> [text]\|bank <name>\|logout <name>\|login <name>]` | Administrator | The named cast: every roster entry with its account and where it stands; put a marker scroll in a named bot's bank box; list a bank box; log a named bot out (held offline) or back in. Every line and every JSON entry carries the bot's gold (pack, bank, account). Writes `Data/Live/bot-named.json` (token: `bot-named`, same body) |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
 | `[BotSendTo <destination or words> [bot name]` | GameMaster | Send a bot to a destination by id or by words, for testing a route by hand. Headless as the `bot-send` token: body `<destination> [bot=Name_With_Underscores]`, and with no name the live bot nearest `Custom.NavHomeWaypoint` goes; the ack names the bot and its serial |
@@ -965,6 +965,44 @@ the stash first, which is the conservative direction.
 A measured restart at the shipped population reads, for example, `404 boot-purge (404 stash, 0 haul)`:
 everything the purge destroyed was spawn kit and no delivery was in flight. `HaulFixtures` proves the five
 cases from `[CoreSmoke`.
+
+**Since 7f-1 a good is a family.** Every count above - `Carried`, the pack-full check, the offer, the bank
+move, the census and the loss records - takes the whole ore family (`BaseOre`) or log family (`BaseLog`), so
+a dull copper pile is carried, capacity-checked and conserved like an iron one, and a loss record names the
+concrete type (`ValoriteOre`).
+
+### Coin is conserved, and one path moves it
+
+From 23 September 2026 (7f-1; the contract is `Scripts/Custom/Bots/ECONOMY.md`). **Every bot is born with
+10,000 gold in its pack** (`bots.json` `economy.startingGold`), and **one path moves gold between bots**:
+`BotTrade`, which moves the goods and the gold in one step or not at all, and in which a buyer takes only
+what it can pay for. The first trade is the gatherer's hand-over at a staffed bench: the crafter pays, at the
+stock NPC price for the ingot the ore smelts into (3gp, by the stock smelt ratio) or the log (1gp), times the
+colour's rung on the stock collection ladder, plus 25%, rounded up once. Nothing else mints or destroys coin -
+`EquipmentTable` no longer rolls a purse - and the trade uses **pack gold only**, for named bots too, because
+account currency is a `double`.
+
+**`Bots.Gold`** is the standing check, shaped like `Bots.Conservation`:
+
+```
+in    = opening + starting + received
+out   = paid + lost                 lost split throwaway / named, and by reason
+held  = a census of every live bot's pack gold, bank gold and checks, and account currency,
+        plus every OFFLINE named bot, re-read from the bot
+
+in == out + held,  appeared == vanished == 0
+```
+
+Gold has no unrecorded source, so gold that **appeared** is an alarm as much as gold that **vanished**,
+and either fails the check with the bot named on the console. A throwaway's purse is written down when it
+goes (`boot-purge`, `logout`, `death`, `spawn-refused`, `deleted`); a named bot's is held offline and never
+lost. **Losses go to `Data/Live/gold-lost.jsonl`** (`utc`, `bootId`, `generation`, `why`, `bot`, `serial`,
+`class`, `named`, `map`, `x`, `y`, `from` pack/bank/account/corpse, `amount`, and the `starting` / `earned`
+split). **Trades go to `Data/Live/trade-journal.jsonl`**, completed, refused and rolled-back alike: both
+parties, every stack by type and graphic, offered, accepted, the price and its basis, and both purses before
+and after. Both files are appended each census and each save and rotated at 4 MB; a line whose `generation`
+the next boot did not verify was written after the last save and describes a world that was rolled back.
+`EconomyFixtures` proves the contract from `[CoreSmoke`.
 
 `[CoreSmoke` (Administrator) exercises the `Custom/Core` foundations and reports every
 registered health check — including any persistence store that has gone **degraded** and is
