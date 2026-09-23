@@ -228,13 +228,18 @@ namespace Server.Custom
         ///   wanted PlayerMobile's behaviour without the census would have to skip a level, which
         ///   C# does not allow.
         ///
+        ///   THE PURSE (7f-1) is given by this class's constructor, before a subclass constructor
+        ///   could take it back, and an instrument owns nothing: BotGoldLedger.GrantStartingGold
+        ///   reads this instead. Without it every health run's two walk probes were born with
+        ///   10,000 gold and written down as losing it a second later - balanced, and noise.
+        ///
         /// Everything else an instrument has to stay out of goes through LiveRegistry - the
         /// behaviour tick, the lifecycle roller, the session curve, the crowd counts, the live map
         /// and all three population censuses read LiveRegistry.Snapshot() and nothing else - so a
         /// single Unregister in the subclass constructor covers all of them and needs no flag.
         ///
-        /// Deliberately NOT a general "is this real" switch. Two call sites, both named above; if
-        /// a third wants it, the question to ask first is whether that site should be reading
+        /// Deliberately NOT a general "is this real" switch. Three call sites, all named above; if
+        /// a fourth wants it, the question to ask first is whether that site should be reading
         /// LiveRegistry.
         /// </summary>
         public virtual bool IsInstrument

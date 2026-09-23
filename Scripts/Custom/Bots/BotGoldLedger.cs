@@ -249,7 +249,10 @@ namespace Server.Custom
 
             bot.StartingGoldGranted = true;
 
-            if (amount <= 0)
+            // An instrument - the walk audit's probe - is not a person and owns nothing. Asked here
+            // because this runs in PlayerBot's constructor, before a subclass could take a purse
+            // back (PlayerBot.IsInstrument).
+            if (amount <= 0 || bot.IsInstrument)
             {
                 return;
             }
