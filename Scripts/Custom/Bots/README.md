@@ -1693,7 +1693,9 @@ census, the lifecycle and the session still take the snapshot in its own order. 
 the **longest wait** in passes, a run of consecutive refusals ending in a grant (a bot that stops
 asking, say made Idle by the lifecycle, starts a new run), which first come, first served never
 bounded. `PlanFixtures` proves it on `[CoreSmoke`, and runs the old order as a
-control that must starve the tail.
+control that must starve the tail. Live, the refusal share stopped climbing with uptime. It holds
+at 16-36% from 15 to 45 minutes where it used to reach 95%, and `Bots.Shift` passed at 25-45
+minutes uptime four times out of four (`SCALE.md`, *Round-robin admission*).
 
 ## Travelling
 

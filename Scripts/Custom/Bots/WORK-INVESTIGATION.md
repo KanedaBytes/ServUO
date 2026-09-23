@@ -55,6 +55,16 @@
 >   - **For Sean.** A fair budget (start each pass where the last one stopped, or serve the
 >     longest-waiting first) changes fleet-wide scheduling that `SCALE.md` measured, so it is his
 >     call. Until then, both probes can fail on a shard that has been up a while.
+>   - **Done, 22 September 2026.** The budget is served round-robin: each pass starts at the first
+>     bot refused on the pass before (`BotPlanRota`, `PlanFixtures`). The rate is unchanged. Four
+>     `[BotSmoke` runs on shards up 25-45 minutes gave **`Bots.Shift` Ok all four times**.
+>     `Bots.Life` was Ok twice on the first build and Warn twice on the final one: once for a bot
+>     mid-recovery at the close, once for `skara-brae-bank` one short of its floor. Neither is Fail,
+>     and neither is starvation. **The refusal share no longer climbs.** It reads 1-4% from 5 to 15
+>     minutes, then holds at 16-36% from 15 to 45 minutes, against 79%, 86% and 95% before. The
+>     starved bots used to re-ask and be refused every pass; now they are served. The longest wait
+>     since boot is 44 passes, from the boot rush, and no wait after it came near that. Numbers in
+>     `SCALE.md`, *Round-robin admission*.
 
 Read-only investigation of 22 September 2026, at `982fa8c7`. Nothing in the code, config or data was
 changed; this file is the only commit. It **proposes**; the decisions are Sean's.

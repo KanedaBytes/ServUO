@@ -469,3 +469,65 @@ finding; fixing them is nav work for another session.
 - **The p99 gate was re-anchored** on Ramp 1's 400 row (33.5 ms), its busiest passing window, rather
   than on the idle 60-bot baseline — and unlike Ramp 1's, it fired, at exactly the count where the
   loop stopped idling.
+
+---
+
+# Round-robin admission, 22 September 2026
+
+**What changed.** Only the order. `PlansFor` still sets how many plans a pass may grant (0.02 per
+live bot, floor 8). Before, those plans were granted first come, first served in `LiveRegistry`
+order. That is a `List` new bots are appended to, so the newest bots starved once refusals climbed
+with uptime, and the `[BotSmoke` probes' bots were always the newest (WORK-INVESTIGATION.md, status
+block). Now `BotPlanRota` starts each pass's behaviour loop at the first bot refused on the pass
+before. `Bots.Recipe` adds the longest wait, meaning the longest run of consecutive refused passes
+that ended in a grant.
+
+Conditions are not Ramp 2's. The shipped curve was in force, not a flat one, with 751-825 live
+against Ramp 2's 761. The graph has since gained `yew-grove` and `minoc-mine`, and gatherers are
+single-minded. So the row below is set beside Ramp 2's 800 row to show whether the change cost
+anything visible. It is not a controlled comparison. There was no client, `MeasurementProfile` was
+off, and each window was 10 minutes after a 15-minute settle. `tick~` for the rota rows is
+`BotTickManager`'s mean since boot, read just after the window, not over the window alone.
+
+| | live | travelling | p50 | p95 | **p99** | max | tick~ | granted/s | refused share |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ramp 2, 800 | 761 | 240 | 14.7 | 32.5 | **42.5** | 271 | 19.6 | 6.6 | (44,688 refused) |
+| rota, first build (`7c470621`) | 751 | 273-306 | 14.7 | 35.2 | **46.1** | 374 | 19.1 | 6.8 | 18.2% |
+| rota, final build (`8e33c9d9`) | 764 | 272-304 | 13.9 | 39.0 | **51.8** | 382 | 22.1 | 7.4 | 27.8% |
+
+**The cost is small, and not clearly the rota's.** p99 rose 4-9 ms against Ramp 2's 800 row. In
+the same windows about a fifth more bots were travelling, and plans were admitted at 6.8-7.4 a
+second against 6.6. The rota itself is one `IndexOf` over the snapshot per pass and a dictionary
+entry per waiting bot, and the behaviour tick mean stayed at 19-22 ms against 19.6. Both maxes
+include an autosave: 0.327 s and 0.338 s, each landing inside its window. The max is the save, as
+it was in the ramps.
+
+**The refusal share no longer climbs with uptime.** Here is the final boot, in five-minute buckets
+from boot:
+
+| uptime | 0-5 | 5-10 | 10-15 | 15-20 | 20-25 | 25-30 | 30-35 | 35-40 | 40-45 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| refused share | 91.5% | 1.1% | 3.9% | 16.1% | 34.2% | 35.7% | 18.8% | 19.1% | 30.8% |
+
+- **0-5 is the boot rush.** Every bot asks at once, and the longest wait of the boot, 44 passes,
+  was set there. At 771 bots and 16 a pass, one round of the rota is 48 passes.
+- **20-45 includes two `[BotSmoke` runs**, which add probe bots.
+- **Under first come, first served** the same shard read 79%, 86% and then 95% across three
+  smokes, about 236 refusals a pass. The starved bots asked on every pass, were refused on every
+  pass, and never left the queue. Served in turn, they travel and stop asking. What remains is
+  ordinary excess demand, about 5-10 refusals a pass.
+- **Granted is pinned at the budget from 20 minutes on**, about 480 a minute at 16 a pass. So the
+  admission rate is still what limits travel, as Ramp 2 found. The order was only ever deciding
+  who waited.
+
+**The probes.** `Bots.Shift` passed all four `[BotSmoke` runs, at 25, 37, 26 and 36 minutes
+uptime. `Bots.Life` passed both runs on the first build. On the final build it read Warn twice,
+never Fail: first *1 bot mid-recovery when the window closed*, then *skara-brae-bank -1* below
+floor. Both are warnings the probe raises by design after its churn bar is met. The final build
+differs from the first only in how the longest wait is measured.
+
+**One measurement correction on the way.** The first build counted a wait from a bot's first
+refusal, and it read 95 and then 122 passes during the smokes. That is impossible at one round of
+under 50. The life probe makes Travelers Idle and back, and a bot refused as a Traveler, then made
+Idle, was charged the whole gap when it next asked. A wait is now a run of consecutive refused
+passes. `PlanFixtures` proves it: a wait of 0 after a 50-pass gap, and 1 for two bots taking turns.
