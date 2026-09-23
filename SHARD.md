@@ -185,18 +185,26 @@ and a **home town** rolled at creation. It picks destinations from `navigation.j
 `bots.json` - class × kind, times 2.5 for its home town, with a distance term only on work sites -
 walks them on `NavWalker`, and hands off to a visit behaviour on arrival. A 60-second roller
 transitions it between `Traveler` and `Idle` when its phase expires and it is not mid-walk. **Nothing
-about it survives a restart** — `BotStartupPurge` sweeps every bot out of the world save at boot and
-says how many, which is upstream's mechanism and replaced a `Timer.DelayCall(Delete)` at the tail of
-`Deserialize` — and what does survive is the spawner file it came from, which is rebuilt into
+about a throwaway bot survives a restart** — `BotStartupPurge` sweeps every one out of the world save
+at boot and says how many, which is upstream's mechanism and replaced a `Timer.DelayCall(Delete)` at
+the tail of `Deserialize` — and what does survive is the spawner file it came from, which is rebuilt into
 spawners by `[GG_Reimport` and filled at `ServerStarted`. The `GG_` spawners needed no regeneration
 for the class swap: XmlSpawner resolves a spawn by **type name** (`XmlSpawner2.cs:9262`), and the
 name did not change.
+
+**The fixed-role cast is named, and survives** (22 September 2026). The 21 bots at the bank crowds
+and the staffed benches are characters listed in `Data/Custom/bot-roster.json` — Bruenor at the
+Britain forge, Gandalf at the east bank, and so on — each with **its own ServUO `Account`**, banned so
+no human can log in on it and named so no human can take the name. The world save keeps them like
+players; the boot purge keeps them, as upstream's keeps a guild-bound bot; they go **offline** rather
+than being deleted, and log in at their posts at `ServerStarted`. They are on no spawner.
+`[BotNamed` lists them. See the Bots README, **Named bots**, and `CLASS-DECISION.md`.
 
 A bot is one of two things, and it is the difference the whole population layer turns on. A
 **lifecycle** bot has a session: it rolls behaviours, plays for one to four hours, says goodbye and
 vanishes, and the daily curve decides how many of them are on. A **fixed-role** bot is furniture: it
 never rolls, never logs out and never counts toward the target, so the bank crowds and the staffed
-benches are there at 05:00 exactly as at 19:00. Which one it is comes from its spawner, as a
+benches are there at 05:00 exactly as at 19:00 — and every fixed-role bot is now a named one. Which one it is comes from its spawner, as a
 property on the bot rather than as the spawner's type — because XmlSpawner calls `OnAfterSpawn`
 *before* it applies the spawn string, so upstream's `Spawner is FixedRoleBotSpawner` could not be
 carried across.
@@ -314,8 +322,9 @@ checkpoint has shipped it as `True` once already.
 | `[BotSmoke` | Administrator | Spawn one bot per class, check them against the caps, then run the party, five-traveller and twelve-bot lifecycle probes |
 | `[BotPace [auto] [seconds]` | GameMaster | Target a walking bot; measure its step cadence for N seconds and report the pace the engine actually used against the pace it was given. `auto` picks a walking bot itself rather than asking for a target, which is how it runs without a client |
 | `[BotSteps [clear]` | GameMaster | Steps per bot-minute in each phase and what moved them - wander, drift-back, walk, teleport. `clear` opens a fresh window (token: `bot-steps`) |
-| `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
-| `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`; then `[GG_Reimport` |
+| `[BotPopulationAudit` | Administrator | What the population recipe would produce per town, split into **named** posts (the roster's) and **throwaway** spawners, any ROSTER GAP, and whether `GG_BotPop.xml` still matches it. Spawns nothing |
+| `[BotPopulationGen` | Administrator | Write the recipe's **throwaway** slots to `Spawns/Custom/<facet>/GG_BotPop.xml` (the named posts are never spawners); then `[GG_Reimport` |
+| `[BotNamed [list\|mark <name> [text]\|bank <name>\|logout <name>\|login <name>]` | Administrator | The named cast: every roster entry with its account and where it stands; put a marker scroll in a named bot's bank box; list a bank box; log a named bot out (held offline) or back in. Writes `Data/Live/bot-named.json` (token: `bot-named`, same body) |
 | `[BotPopulation [n]` | Administrator | Live count against the curve target and the tick cost, or set the target for this session |
 | `[BotSessions [on\|off]` | GameMaster | Report the logon/logoff curve, or pin the population where it is |
 | `[BotSendTo <destination or words> [bot name]` | GameMaster | Send a bot to a destination by id or by words, for testing a route by hand. Headless as the `bot-send` token: body `<destination> [bot=Name_With_Underscores]`, and with no name the live bot nearest `Custom.NavHomeWaypoint` goes; the ack names the bot and its serial |
@@ -925,6 +934,11 @@ discrepancy - measured at six units on a quiet shard, one spawn's starting stash
 the walk and the read. So the census snapshots its own totals and the check reads those. A non-zero
 **drift** can therefore only be arithmetic in `BotGoodsLedger` itself; a genuine shortfall is
 `unexplained`, which fails the check and names the bot on the console.
+
+A **named** bot's goods are `held` across a logout and a restart, never lost: logging out, being born
+and being kept by the purge put them in an offline bucket that is part of `held`, and logging in takes
+them out again — so a restart counts them in as `opening` and holds them, rather than writing them
+down as `boot-purge`.
 
 `opening` is what the boot inherited from the world save before `BotStartupPurge` destroyed it; `seeded` is
 EquipmentTable's 3-15 unit spawn stash; `accepted` is what a crafter took over the counter, which is

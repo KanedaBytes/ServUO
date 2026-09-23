@@ -33,8 +33,10 @@
 //     have an AI to stand aside; the daily-life actors still do, and still work, because the
 //     walker no longer cares which it is driving.
 //
-// AN ACCOUNTLESS BOT OWNS NOTHING DURABLE. This is a rule, not a preference, and it is a crash
-// guard. BaseHouse.HandleDeletion returns early on zero houses (BaseHouse.cs:3531) and then reads
+// AN ACCOUNTLESS BOT OWNS NOTHING DURABLE - which, since 22 September 2026, means a THROWAWAY: a
+// NAMED bot (RosterName, NamedBots) has an Account of its own and is persisted by the world save,
+// and the rule below is about the bots that have neither. This is a rule, not a preference, and
+// it is a crash guard. BaseHouse.HandleDeletion returns early on zero houses (BaseHouse.cs:3531) and then reads
 // acct.Length with no null check (:3534-3537) - and it is reached from PlayerMobile.OnAfterDelete
 // (:5250), which every bot deletion now goes through. So an accountless bot that owns a house and
 // is deleted throws a NullReferenceException ON THE GAME THREAD. As a BaseCreature it never
@@ -45,8 +47,9 @@
 // actually owned - so until a bot has an Account, it gets no house, no player vendor and no
 // durable property of any kind.
 //
-// PERSISTENCE. Bots still do not survive a restart, and this shard still has to do something
-// about it: ServUO's StandardSaveStrategy.SaveMobiles writes every mobile in World.Mobiles with no
+// PERSISTENCE. Throwaway bots still do not survive a restart - named bots do, and are the one
+// exception (BotStartupPurge keeps any bot with a RosterName, as upstream keeps a guild-bound one).
+// For the throwaways this shard still has to do something about it: ServUO's StandardSaveStrategy.SaveMobiles writes every mobile in World.Mobiles with no
 // account filter, so an accountless bot IS in the save here even though it is not in ModernUO.
 // What changed is WHERE the answer lives. It used to be Timer.DelayCall(Delete) at the tail of
 // Deserialize; it is now a single boot sweep in BotStartupPurge, which is what upstream does
@@ -1024,7 +1027,13 @@ namespace Server.Custom
             if (IsNamed)
             {
                 BotMovement.ReleaseMount(this);
-                BotDeaths.Note(this);
+
+                // A fixture's own named bot is killed on purpose; it is not a death on the shard.
+                if (!String.Equals(DeletionReason, NamedBots.FixtureReason, StringComparison.Ordinal))
+                {
+                    BotDeaths.Note(this);
+                }
+
                 NamedBots.OnDied(this, c);
                 return;
             }
@@ -1439,9 +1448,10 @@ namespace Server.Custom
 
         // ---- serialization ----
         //
-        // This exists because ServUO saves every mobile in World.Mobiles, not because anything
-        // reads it back: Deserialize schedules the bot's own deletion. It is written properly
-        // anyway - a half-written mobile in the save is a load-time exception, and the version
+        // For a throwaway this exists because ServUO saves every mobile in World.Mobiles, not
+        // because anything reads it back: BotStartupPurge deletes it at boot. For a NAMED bot it
+        // is the character - class, tier, personality and identity come back from here, the way
+        // a player's do. It is written properly either way - a half-written mobile in the save is a load-time exception, and the version
         // ladder costs nothing now and is impossible to retrofit later.
 
         public override void Serialize(GenericWriter writer)
@@ -1463,7 +1473,8 @@ namespace Server.Custom
 
             // v2. THE ONE TRANSIENT THAT IS WRITTEN, AND ONLY BECAUSE OF WHAT READS IT BACK.
             //
-            // Nothing restores a bot - BotStartupPurge deletes every one of them at Initialize.
+            // Nothing restores a throwaway - BotStartupPurge deletes every one of them at
+            // Initialize (a named bot is kept, and its StashRemaining is simply its own again).
             // But the purge also WRITES DOWN what each bot was holding (REVIEW.md F5, rule 4),
             // and Sean's rule is that a lost delivery must never be filed under the spawn stash.
             // Without this, a restart erases which half was which and every inherited unit would

@@ -138,10 +138,12 @@ namespace Server.Custom
             // different things and the message should say which.
             //
             // Why refuse rather than allow: a jail record is durable and keyed to the character,
-            // and a bot is not - BotStartupPurge deletes every one of them at boot. A sentence
-            // served by a mobile that will not exist after the next restart is a record that
-            // outlives its subject, and the escalation count it carries would be inherited by
-            // whoever next rolls that name out of the pool.
+            // and a throwaway bot is not - BotStartupPurge deletes every one of them at boot. A
+            // sentence served by a mobile that will not exist after the next restart is a record
+            // that outlives its subject, and the escalation count it carries would be inherited by
+            // whoever next rolls that name out of the pool. A NAMED bot (NamedBots) does survive,
+            // and is refused all the same: there is no client to serve a sentence to, and whether
+            // a named bot answers to the jail at all is an owner question nobody has asked yet.
             if (player is IBotActor)
             {
                 return "That is a bot, not a player.";

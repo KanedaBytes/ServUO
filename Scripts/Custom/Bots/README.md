@@ -46,11 +46,21 @@ a source line. Most of this file is dated narrative - how a rule was arrived at 
 find out. **Where the two disagree, this section is the one that has been re-checked**; see
 [History](#history) for the rule about which is which.
 
-- **A bot is an accountless `PlayerMobile` with `Player = true`**, as upstream runs it. The class
-  changed on 12 September 2026; `CLASS-DECISION.md` is the evidence Sean decided on and REVIEW.md
-  section 3 the question it answers. The flag is still what gets a bot past the party gate and onto
-  the live map, and still why it ghosts rather than vanishing on death - that was never the class.
+- **There are two kinds of bot, named and throwaway** (22 September 2026). The **21 named bots** are
+  the fixed-role cast: every bank-crowd seat and every staffed bench, listed in
+  `Data/Custom/bot-roster.json`. Each has **its own ServUO `Account`**, banned so no human can log in
+  on it, and **is a character the world save keeps**. It goes **offline** at session end and comes
+  back at its post; it is **never destroyed**. Everyone else is a **throwaway**: made by a
+  `GG_BotPop.xml` spawner, deleted at logout and at every boot, owning nothing durable. See
+  [Named bots](#named-bots).
+- **A throwaway bot is an accountless `PlayerMobile` with `Player = true`**, as upstream runs it. A
+  named bot is the same class with an `Account` behind it. The class changed on 12 September 2026;
+  `CLASS-DECISION.md` is the evidence Sean decided on and REVIEW.md section 3 the question it
+  answers. The flag is still what gets a bot past the party gate and onto the live map, and still
+  why it ghosts rather than vanishing on death - that was never the class.
 - **An accountless bot owns nothing durable, and that is a crash guard rather than a preference.**
+  That now means every throwaway; a named bot has an `Account`, which is what the rule was waiting
+  for.
   `BaseHouse.HandleDeletion` returns early on zero houses (`BaseHouse.cs:3531`) and then reads
   `acct.Length` with no null check (`:3534-3537`), reached from `PlayerMobile.OnAfterDelete`
   (`:5250`) - which every bot deletion now goes through. An accountless bot that owns a house and is
@@ -68,7 +78,9 @@ find out. **Where the two disagree, this section is the one that has been re-che
   speech cannot reach a `Banker` by construction (`PlayerBot.cs:1163-1174`). Anything that merely
   *inspects* a bot must use `FindBankNoCreate()` (`Server/Mobile.cs:10518-10528`) or read
   `Mobile.Items`, which already contains the box when there is one. `Core.SaveIntegrity` enforces
-  the save-path half of this; see [The census was not a passive observer](#ephemerality).
+  the save-path half of this; see [The census was not a passive observer](#ephemerality). The one
+  other writer is `[BotNamed mark`, which puts a staff marker in a **named** bot's box - a named bot
+  may own one, and keeps it across a restart.
 - **A bot walks through every occupant, a real player included, and that is now Sean's decision
   rather than an accident.** It matches upstream (`uo-offline CustomBots/PlayerBot.cs:595`). The
   class swap spent that deviation silently and `Bots.Shove` is what caught it; the decision of 12
@@ -103,12 +115,136 @@ find out. **Where the two disagree, this section is the one that has been re-che
   is where pathfinding is actually paid for. The tick decides, and watches for stranded walkers. Any
   figure quoted from the tick's stopwatch is that callback's duration and not the layer's cost.
 - **A behaviour is constructible from its name but not restored from a save.**
-  `BotBehaviors.Create(string)` is the registry; `Deserialize` does not call it, because every bot
-  deletes itself on load.
+  `BotBehaviors.Create(string)` is the registry; `Deserialize` does not call it. A throwaway is
+  purged at boot, and a named bot's brain comes from the **roster** when it logs in, through the same
+  seed a spawner would have given it - so its post, not whatever it was doing when the save was
+  taken, is what it wakes up to.
 - **Caps are read from `Config/PlayerCaps.cfg`**, never written as literals - `bots.json` may only
   override, and says so in the boot line when it does.
-- **The population target is 60**, in `bots.json`, a measured starting point rather than upstream's
-  1600. `Bots.Recipe` reports the tick cost beside the live count so the next value is arithmetic.
+- **The population target is 1000**, in `bots.json` (see [Population](#population) and `SCALE.md`),
+  of which **21 are the named cast** and 979 are throwaway spawner slots. `Bots.Recipe` reports the
+  tick cost beside the live count so the next value is arithmetic.
+
+## Named bots
+
+**22 September 2026.** The fixed-role cast became **people**: a named character each, with an
+account, a bank box and a save file entry, where it used to be a spawner slot refilled by whoever
+turned up. `CLASS-DECISION.md`'s *Named bots* section records Sean's decisions and the seams against
+upstream; this is how it works.
+
+### What a named bot is
+
+A `PlayerBot` whose **`RosterName`** is set (save v3). That one field is the whole of the difference
+every destructive path asks about, exactly as upstream's `GuildBound` / `IsPermanent` is
+(`uo-offline PlayerBot.cs:166-168`):
+
+| Path | A throwaway | A named bot |
+| --- | --- | --- |
+| Boot (`BotStartupPurge`) | deleted, its goods written down as `boot-purge` | **kept**, its goods counted in and held offline |
+| Session end (`BotSession.FinishLogout`) | deleted, `logout` | **logged out**: `LogoutLocation`, `LogoutMap`, `Map.Internal` - never deleted |
+| Spawner respawn, `[GG_Reimport` | deleted with its spawner | **on no spawner**, so out of reach by construction |
+| Death | deleted a second later | **interim**: resurrected a second later, takes everything back off its corpse, back to its post (7h replaces this) |
+| Mount | rolled at birth | **none until 7f** - the boot mount sweep would take it |
+| Name | from `NamePool`, claimed | from the roster, **reserved**: no throwaway and no new human character may wear it |
+
+**The engine already knows how to keep one.** `StandardSaveStrategy` writes every mobile, the bank box
+is an equipped item written with it, and `Mobile.Deserialize` parks every Player-flagged mobile on
+`Map.Internal` with its logout location (`Server/Mobile.cs:6182-6188`). So a named bot loaded from the
+save is already a logged-out player; `NamedBots.LogIn` puts it back at its post. **Nothing custom
+persists its belongings.**
+
+### The roster
+
+`Data/Custom/bot-roster.json`, CRLF like `bots.json`, read by the shard and never written by it:
+
+```
+{ "schemaVersion": 1, "comment": "...", "pool": [ 42 names ],
+  "bots": [ { "name": "Bruenor", "class": "Smith", "home": "britain", "post": "brit-forge", "female": false }, ... ] }
+```
+
+- **Identity is the pool name a bot was born with.** The account is named after it. To rename a bot,
+  change `name` and set `renamedFrom` to the pool name it had: the account and the character stay
+  the same objects and only the display name moves.
+- **Load validation refuses the whole file** on a duplicate name (either field, any case), a name
+  outside the pool, an illegal player name, an unknown or legacy (`Crafter`) class, or a home that is
+  not a town - and the previous roster stays in force, which is every custom config's failure
+  contract here.
+- **Post validation runs against the graph and refuses one entry**: a post must be a destination in
+  that town that is either a `bank` (any class, a crowd) or a craft station whose trade is this class
+  (one bot each). A refused entry stays offline and is named on `Bots.Named` - it is never deleted.
+- **Removing an entry retires the bot**: kept by the purge, offline for ever, like a player who quit.
+- `[BotsReload` re-reads the roster with `bots.json` and applies renames and new entries.
+
+The 21 today, assigned by fit: smiths **Bruenor, Gimli, Flint** (Britain) and **Wulfgar** (Trinsic);
+tailors **Regis, Buttercup** (Britain) and **Tasslehoff, Goldmoon** (Trinsic); carpenter **Samwise**;
+Britain's banks **Volo, Elminster, Jarlaxle** and **Gandalf, Drizzt, Legolas**; Trinsic's **Sturm,
+Aragorn, Boromir** and **Eowyn, Minsc, Shadowheart**.
+
+### Accounts
+
+One per named bot, created at boot if missing (`NamedBots.EnsureAccount`, idempotent), at
+`[CallPriority(905)]` - after `World.Load` has loaded the account table, because that load replaces
+the table (`Accounts.cs:56`) and an account made any earlier would be thrown away.
+
+- **Username = identity**, so a person typing the name at the login screen meets an existing account
+  rather than auto-creating one (`AccountHandler.cs:277-283`).
+- **Locked**: `Banned` with no ban tags (permanent, `Account.cs:454-457`), a random password nobody
+  keeps, `Young = false`, `AccessLevel.Player`, and `NamedBots.GuardAccountLogin` / `GuardGameLogin`,
+  which run after stock and refuse any account tagged `GG.PlayerBot` whatever the ban flag says.
+- **An existing account of that name without the tag is a person's**: the entry is refused and the
+  account is never touched.
+- **`LastLogin` is refreshed every boot**, so the account never reads `Inactive`
+  (`Account.cs:508-519`) - which would condemn a house it owns in 7f (`BaseHouse.cs:102`).
+- **Account gold is on** (`CurrentExpansion.cs:20`): gold dropped in a named bot's bank becomes
+  account currency and is saved in `accounts.xml`, not as an item. That is 7f's to use.
+
+### Reserved names
+
+A new human character given a roster name is renamed `Generic Player`, stock's own fallback
+(`CharacterCreation.cs:363`), on `CharacterCreated`; the same check runs at every `Login`. **Known
+gap:** the rename items (`NameChangeDeed`, `NameChangeToken`) set the name directly and raise no
+event, so a person can wear a named bot's name until their next login. Closing that is an upstream
+edit and was not made.
+
+### The ledger
+
+`Bots.Conservation` counts a named bot's goods as **held** across a logout and a restart: logout,
+birth and the boot purge put them in an offline bucket (`BotGoodsLedger.NoteOffline`,
+`NoteNamedCarried`), which is added to `held`; login takes them out (`NoteOnline`). A restart
+therefore reads "inherited N, held N" for the named cast and never `boot-purge`. The health line
+carries `named offline: U unit(s) held by K named bot(s)`.
+
+### Commands and health
+
+`[BotNamed [list | mark <name> [text] | bank <name> | logout <name> | login <name>]` (Administrator;
+token `bot-named`, same body). Every form writes `Data/Live/bot-named.json`: each entry's account
+(banned, tagged), serial, state, position, whether it is at its post, and its bank item count - with
+the box item by item for the bot named in `mark` or `bank`. `logout` holds the bot offline until
+`login`. The marker is a `BlankScroll`, not gold, for the account-gold reason above.
+
+**`Bots.Named`** fails if a named bot is ever deleted outside a fixture or an account is not locked;
+warns on a refused entry, an unheld offline bot, or a bot away from its post 150 s after the logins.
+
+### Measured, 22 September 2026
+
+First boot: 21 accounts and 21 characters created, all 21 logged in at their posts; a
+`[GG_Reimport` deleting 208 spawners left all 21 standing. `[BotNamed mark Bruenor` put
+`0x40048FA4` in Bruenor's bank; save (generation 39), shutdown, boot: *"Purged 950 stale bot(s) from
+the world save; kept 21 named bot(s)"*, 0 characters and 0 accounts created, and the same scroll in
+the same box of the same bot (`0x4CE`) - and again after a third boot.
+
+A ten-minute window at the shipped population (967-971 live) straight after that restart: `health`
+every minute, **`Bots.Conservation` Ok and balanced in 11 of 11 samples** (0 unexplained; the final
+census *in 1167 = accepted 62 + lost 474 + held 631*), **`Bots.Named` Ok in 11 of 11** with 21 of 21
+at their post, and **0 records in `goods-lost.jsonl`** for the window, so 0 named-bot losses. The
+restart's `boot-purge` line (459 units) is throwaways only. Worth saying plainly: the named cast holds
+no tracked raw goods today - smiths receive ore as `accepted`, bank sitters bank nothing - so the
+offline bucket read 0 units live. It is proved on a real bot by `NamedBotFixtures`, not by this window.
+
+`[CoreSmoke` PASS with the named fixtures - roster refusals, account idempotence, the login guards,
+the purge keeping a named bot, a bank box across logout and login, the regen, a reserved name, and
+the interim death (killed at the Britain bank, back alive at full health wearing its 8 items, nothing
+left on the corpse).
 
 ## The constraint everything else followed from, and what it cost to spend
 
@@ -271,8 +407,10 @@ exists.
 > than changes: bots are still transient, and now so is nothing else — the spawners that make them
 > are rebuilt from a file on every import. See **Population**.
 
-**Bots never survive a restart**, and this shard has to do something about it — *and so does
-upstream*, which this section used to get wrong.
+**Throwaway bots never survive a restart**, and this shard has to do something about it — *and so
+does upstream*, which this section used to get wrong. **Named bots do survive**, since 22 September
+2026, by the same exemption upstream gives a guild-bound bot; see [Named bots](#named-bots). What
+follows is about the throwaways.
 
 It said ModernUO writes player characters through their **account**, so an accountless bot "was
 never in the world save at all — upstream got the guarantee for free". The first half is true; the
@@ -378,6 +516,30 @@ looks like a mistake later, read the reason before "fixing" it back.
 > once would restate seventy citations nobody had re-checked. The navigation data itself is
 > identical at both pins (`Data/Custom/reference/README.md` has the record-level comparison), so no
 > row that turns on waypoints or destinations is affected by the move.
+
+### The fixed cast is named, from a roster, with an Account each — added 22 September 2026
+
+Upstream has one persistent kind of bot, a **guild recruit**: a player recruits it, `OnGuildChange`
+sets `GuildBound` (`PlayerBot.cs:176`, serialized at v7 `:1068`) and detaches it from its spawner
+(`:185-189`), and the boot purge, the session logout and the regen all skip `IsPermanent`
+(`BotStartupManager.cs:106`, `BotSessionManager.cs:228`, `GenerateBotsCommand.cs:174`). It has **no
+account** and its logout is a delete. Pinned at `7f38c7c`.
+
+| | Upstream | Here |
+| --- | --- | --- |
+| who is permanent | a bot a player recruits into a guild | **the fixed-role cast** - every bank seat and staffed bench, from `bot-roster.json` |
+| the flag | `GuildBound` (v7) | `RosterName` (v3), the pool name it was born with |
+| an account | none | **one each**, banned, tagged `GG.PlayerBot`, username = identity |
+| session end | never logs out (`CanLogoutNow`) | **logs out**: `Map.Internal`, never deleted |
+| spawner | detached on recruit | never on one; the recipe writes no fixed spawner |
+| death | its death manager's corpse run | **interim** corpse run, until 7h |
+| mount | kept | none until 7f (the boot sweep would take it) |
+| promotion | the recruit | **deferred to 7g** |
+
+Why each differs is in `CLASS-DECISION.md`, *Named bots*: Sean's decisions of 21 and 22 September
+2026. Guild recruitment itself cannot be ported as it stands - their shard runs the old guild system
+and watches `Accepted`, while this EJ shard's recruit target is cast to `PlayerMobile` at
+`GuildRosterGump.cs:206` - which is part of why promotion waits for 7g.
 
 ### Classes without combat skip hostile destinations — until 7g, added 22 September 2026
 
@@ -2908,8 +3070,9 @@ default and not a degraded state. `Bots.Config` failure is reported through `Bot
 | `[BotTrace on\|off` | GameMaster | Target a bot; echo everything it does to the console. `[BotTrace off all` quiets every traced bot, `[BotTrace list` names them |
 | `[BotPace [seconds]` | GameMaster | Target a walking bot; sample its steps for N seconds (default 30) and report the walker tick, the pace it was given, the delay the engine used, the interval between steps and how many carried the running bit |
 | `[BotPace auto [seconds]` | GameMaster | The same, with **no target**: takes any bot already walking a route. This is the form a headless run can use, and it is why the token exists — the targeted form was the only one, so the one instrument that reads both the pace given and the delay the engine used was unreachable from a run with no client. Refuses when no bot is walking rather than waiting, because a sampler that waited would report a window that never started as a window with no problems (token: `bot-pace`, body a window length or `last`; answers to `Data/Live/bot-pace.json`) |
-| `[BotPopulationAudit` | Administrator | What the recipe would produce for each town, and whether `GG_BotPop.xml` still matches it. Spawns nothing and writes nothing (token: `botpop-audit`) |
-| `[BotPopulationGen` | Administrator | Write the recipe to `Spawns/Custom/<facet>/GG_BotPop.xml`. Run `[GG_Reimport` afterwards (token: `botpop-gen`) |
+| `[BotPopulationAudit` | Administrator | What the recipe would produce for each town, split into **named** posts (the roster's) and **throwaway** spawners, any ROSTER GAP, and whether `GG_BotPop.xml` still matches it. Spawns nothing and writes nothing (token: `botpop-audit`) |
+| `[BotPopulationGen` | Administrator | Write the recipe's **throwaway** slots to `Spawns/Custom/<facet>/GG_BotPop.xml`; the named posts are never spawners. Run `[GG_Reimport` afterwards (token: `botpop-gen`) |
+| `[BotNamed [list \| mark <name> [text] \| bank <name> \| logout <name> \| login <name>]` | Administrator | The named cast: each roster entry with its account and where it stands; a marker scroll into a named bot's bank; a bank box item by item; log a named bot out (held offline) or back in. Writes `Data/Live/bot-named.json` (token: `bot-named`) |
 | `[BotPopulation` | Administrator | Live count against the curve target, the tick cost, and how many bot spawners exist |
 | `[BotPopulation <n>` | Administrator | Set the target for this session. Says out loud that it is memory only — the file is the record |
 | `[BotSessions [on\|off]` | GameMaster | The curve's status, or pin the population where it is |
@@ -2961,8 +3124,8 @@ recipe grows; nothing in `BotPopulation.cs` knows the name "Britain".**
 
 | Slot | Role | Rule |
 | --- | --- | --- |
-| `bank` | **Fixed** | One spawner per bank **destination**, holding `life.crowds.bank` sitters |
-| `station` | **Fixed** | One crafter per craft-station **destination**, class forced from the station |
+| `bank` | **Fixed - named** | `life.crowds.bank` sitters per bank **destination**, held by the roster's named cast, **not a spawner** |
+| `station` | **Fixed - named** | One crafter per craft-station **destination**, of the station's trade, held by the roster's named cast, **not a spawner** |
 | `shop` | Lifecycle | One shopper per `shop` destination that is not already somebody's bench |
 | `roam` | Lifecycle | The town's remaining share, in chunks of `population.perSpawner` |
 
@@ -2985,10 +3148,26 @@ target 1000 on Trammel: 1000 bot(s) across 201 spawner(s), 21 of them fixed.
   trinsic: share 278, pinned 19 - 10 shop, 259 roam, 3 station, 6 bank.  roamers anchor on trinsic-bank (bank).
 ```
 
-**The pinned count does not scale with the target and is not meant to.** Those 49 are the fixed-role
-garrison — the bank crowds and the staffed benches — which never roll, never log out and never count
+**The pinned count does not scale with the target and is not meant to.** Those 49 are the shops plus
+the fixed-role garrison — the bank crowds and the staffed benches — which never roll and never count
 toward the target, so a forge has its smith at 05:00 exactly as it does at 19:00. Everything above
 them is roamers.
+
+**Since 22 September 2026 the 21 fixed posts are the named cast, not spawners.** The recipe still
+works every post out - the audit, `Bots.Recipe` and the roster check all need to know what the graph
+asks for - but `[BotPopulationGen` writes only the throwaway slots, 188 spawners for 979 bots, and
+the audit reads the split:
+
+```
+target 1000 on Trammel: 1000 bot(s) - 979 throwaway across 188 spawner(s), 21 named at 13 post(s).
+  named: 21 in the roster, 21 character(s), 21 online, 0 offline
+```
+
+A post the recipe wants that the roster does not cover is a **ROSTER GAP** on the audit and on
+`Bots.Recipe` - nothing fills it, because a spawner would delete and replace a named bot on every
+respawn, reimport and death, which is exactly what a named bot may never suffer. Upstream detaches a
+bot from its spawner the moment it becomes permanent (`uo-offline PlayerBot.cs:185-189`); ours are
+never on one.
 
 ### 1000, not 60 and not 1600 — and it is now a measured number
 
@@ -3070,7 +3249,8 @@ standing population does not all leave in one wave three hours after every resta
 counts toward the target, so the bank crowds and the staffed benches are there at the 05:00 trough
 exactly as they are at the peak. That is upstream's rule — *"fixtures are furniture, not sessions"*
 — and it is also what makes the economy session's premise true at every hour rather than only at
-peak.
+peak. **Every fixture is now a named bot** (see [Named bots](#named-bots)); if one is ever given a
+session, `BotSession.FinishLogout` logs it out rather than deleting it.
 
 ### The seed, and why it is properties rather than a spawner subclass
 
@@ -3126,15 +3306,15 @@ Both halves of that were the same bug from opposite ends.
 ### Boot
 
 Upstream's `BotStartupManager` does two things: it sweeps `World.Mobiles` deleting stale bots, and
-it forces every spawner to `Respawn` *"rather than waiting up to 15 minutes"*. **Only the second
-half is ported**, at `EventSink.ServerStarted` rather than `Initialize` — the same reason
-`BotSystem` already defers `[BotSmoke`, that spawning during `Initialize` puts mobiles in the world
-before the map and the regions have settled.
+it forces every spawner to `Respawn` *"rather than waiting up to 15 minutes"*. **Both halves are
+ported.** The sweep is `BotStartupPurge`, at `Initialize` priority -1000, and it keeps the named cast
+exactly as upstream's keeps a guild-bound bot (`BotStartupManager.cs:106-110`). The fill is at
+`EventSink.ServerStarted` rather than `Initialize` — the same reason `BotSystem` already defers
+`[BotSmoke`, that spawning during `Initialize` puts mobiles in the world before the map and the
+regions have settled — and the named cast logs in at the same moment (`NamedBots.LogInAll`).
 
-The first half is already done, better, and elsewhere: `PlayerBot.Deserialize` ends in
-`Timer.DelayCall(Delete)`, so every bot deletes itself on load however it got into the save. For
-upstream that sweep is a mop for orphans, because ModernUO never wrote accountless bots at all; here
-it is the mechanism, because ServUO writes every mobile in `World.Mobiles`.
+*(This section used to say the sweep was done by `Timer.DelayCall(Delete)` at the tail of
+`PlayerBot.Deserialize`. That went with the class swap; see [Ephemerality](#ephemerality).)*
 
 A `[GG_Reimport` and a per-file spawn reload fill the bot spawners too, for the same reason the boot
 does: a reimport that leaves the towns empty for a quarter of an hour reads as a reimport that did

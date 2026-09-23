@@ -48,6 +48,8 @@ namespace Server.Custom
             int logouts = NamedBots.Logouts;
             int refused = NamedBots.RefusedLogins;
             int renamed = NamedBots.RenamedHumans;
+            int deaths = NamedBots.Deaths;
+            int runs = NamedBots.CorpseRuns;
 
             try
             {
@@ -58,6 +60,7 @@ namespace Server.Custom
                 passed &= FixtureBankSurvivesTheSessionBoundary(report);
                 passed &= FixtureRegenLeavesNamed(report);
                 passed &= FixtureReservedName(report);
+                passed &= FixtureInterimDeath(report);
             }
             catch (Exception ex)
             {
@@ -72,6 +75,8 @@ namespace Server.Custom
                 NamedBots.Logouts = logouts;
                 NamedBots.RefusedLogins = refused;
                 NamedBots.RenamedHumans = renamed;
+                NamedBots.Deaths = deaths;
+                NamedBots.CorpseRuns = runs;
 
                 RemoveAccount(FixtureAccount);
                 RemoveAccount(FixtureHuman);
@@ -486,6 +491,103 @@ namespace Server.Custom
                     human.Delete();
                 }
             }
+        }
+
+        // ---- 8. the INTERIM death rule: a named bot that dies comes back ----
+
+        /// <summary>
+        /// Killed for real at a real post, then the corpse run the one-second timer would do, run
+        /// here instead so the smoke stays synchronous (the timer, when it fires, finds the bot gone).
+        /// INTERIM, with the rule it proves: 7h Death replaces both.
+        /// </summary>
+        private static bool FixtureInterimDeath(List<string> report)
+        {
+            PlayerBot bot = null;
+            Container corpse = null;
+
+            try
+            {
+                BotRosterEntry entry = Valid(Entry("Fixturebot", "Warrior", "brit-bank"));
+
+                bot = MakeNamed();
+
+                // Marked BEFORE the death, so OnDeath knows it is a fixture's and BotDeaths is not told.
+                bot.DeletionReason = NamedBots.FixtureReason;
+
+                NamedBots.LogIn(bot, entry, "fixture");
+
+                int wornBefore = Worn(bot);
+
+                bot.Kill();
+
+                corpse = bot.Corpse;
+
+                bool ok = Expect(report,
+                    !bot.Deleted && !bot.Alive && bot.CorpseRunPending && corpse != null,
+                    "a named bot that dies is a ghost with a corpse, not a deleted mobile",
+                    String.Format("after Kill: deleted {0}, alive {1}, pending {2}, corpse {3}",
+                        bot.Deleted, bot.Alive, bot.CorpseRunPending, corpse != null));
+
+                NamedBots.CorpseRun(bot);
+
+                ok &= Expect(report,
+                    !bot.Deleted && bot.Alive && !bot.CorpseRunPending && bot.Hits == bot.HitsMax,
+                    "the corpse run resurrects it at full health (interim rule; 7h replaces it)",
+                    String.Format("after the run: alive {0}, pending {1}, hits {2}/{3}",
+                        bot.Alive, bot.CorpseRunPending, bot.Hits, bot.HitsMax));
+
+                int wornAfter = Worn(bot);
+
+                ok &= Expect(report,
+                    wornAfter == wornBefore && !(bot.FindItemOnLayer(Layer.OuterTorso) is DeathRobe)
+                        && (corpse == null || Remaining(corpse) == 0),
+                    String.Format("and it is wearing what it wore ({0} item(s)), no death robe, nothing left on the corpse", wornAfter),
+                    String.Format("worn {0} -> {1}, robe {2}, left on corpse {3}",
+                        wornBefore, wornAfter, bot.FindItemOnLayer(Layer.OuterTorso) is DeathRobe,
+                        corpse == null ? 0 : Remaining(corpse)));
+
+                return ok;
+            }
+            finally
+            {
+                Unmake(bot);
+
+                if (corpse != null && !corpse.Deleted)
+                {
+                    corpse.Delete();
+                }
+            }
+        }
+
+        private static int Worn(Mobile mobile)
+        {
+            int worn = 0;
+
+            foreach (Item item in mobile.Items)
+            {
+                if (item.Layer != Layer.Backpack && item.Layer != Layer.Bank && item.Layer != Layer.Hair
+                    && item.Layer != Layer.FacialHair && !(item is DeathRobe))
+                {
+                    worn++;
+                }
+            }
+
+            return worn;
+        }
+
+        private static int Remaining(Container corpse)
+        {
+            int left = 0;
+
+            foreach (Item item in corpse.Items)
+            {
+                if (item.Layer != Layer.Hair && item.Layer != Layer.FacialHair)
+                {
+                    left++;
+                }
+            }
+
+            return left;
         }
 
         // ---- helpers ----

@@ -1102,7 +1102,7 @@ namespace Server.Custom
             }
 
             return String.Format(
-                "named: {0} in the roster, {1} character(s), {2} online, {3} offline{4}.",
+                "named: {0} in the roster, {1} character(s), {2} online, {3} offline{4}",
                 BotRoster.Store.Bots.Count,
                 characters,
                 online,

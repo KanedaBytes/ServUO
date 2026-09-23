@@ -31,6 +31,67 @@ pinned reference `E:\dev\UO\uo-offline` @ `7f38c7c`.
   persistent kind of bot is persistent only because a player's guild holds a reference to it — so
   this is a named seam, not a port.
 
+### Named bots — decided and built 22 September 2026
+
+The identity/custody session that (d)'s second half was deferred to, run before 7f. **Sean's
+decisions, recorded here the day they were taken:**
+
+- **Named bots are the fixed-role cast**: every fixed post today — twelve bank-crowd seats and nine
+  staffed benches, **21** — plus any role 7f adds that owns stock or gold. **Throwaway bots are
+  unchanged** and still own nothing durable.
+- **They come from a roster in data**, `Data/Custom/bot-roster.json`: name, class, home town, post
+  (plus `female`, because a name picked for fit needs a body that fits it). **Promotion** —
+  upstream's guild recruit — **is deferred to 7g.**
+- **One real ServUO `Account` per named bot**, locked so no human can log in, with the name
+  reserved so a player cannot take it.
+- **Names come from a fixed pool of 42**, assigned by fit to the post (the smiths are Bruenor, Gimli,
+  Flint and Wulfgar); Sean may rename anyone in the roster file later.
+- **Already decided (Q1, 21 September):** a named bot goes OFFLINE at session end and is never
+  destroyed; no inheritance.
+- **Death is an INTERIM rule** (Sean, 22 September 2026): a named bot that dies is resurrected a
+  second later, takes everything back off its corpse and returns to its post. **7h Death replaces it
+  with a player-like ghost and resurrection.** Nothing about the interim rule is meant to survive 7h.
+
+**What upstream does, which we did** (uo-offline @ `7f38c7c`, `playerbots/source/CustomBots/`). One
+saved flag decides permanence — `PlayerBot.GuildBound` (`PlayerBot.cs:166`, written at v7 `:1068`),
+`IsPermanent => GuildBound && Guild is Guild` (`:168`) — and every destructive path asks it: the boot
+purge `if (bot.IsPermanent) { kept++; continue; }` (`BotStartupManager.cs:106-110`), the session
+logout (`BotSessionManager.cs:228`), the regen (`GenerateBotsCommand.cs:174`,
+`ClearSpawnersCommand.cs:47`). Becoming permanent detaches the bot from its spawner
+(`PlayerBot.cs:185-189`). **Nothing custom persists its belongings** — the engine's save carries the
+mobile, pack and bank. Ours: `PlayerBot.RosterName` (save v3), `BotStartupPurge.IsStale`, a named bot
+is on no spawner at all, and the world save carries the rest.
+
+**The named seams, where we did not:**
+
+1. **An `Account` per bot.** Upstream has none; the only "Account" in its bot source is a `Banker`
+   helper (`BotBankTest.EmptyAccount`). The username is the bot's pool name, so a human typing it at
+   the login screen meets an existing, banned account rather than auto-creating one
+   (`AccountHandler.cs:277-283`). Locked three ways: `Banned` with no ban tags, which is permanent
+   (`Account.cs:454-457`); a random password nobody is told; and our own `AccountLogin`/`GameLogin`
+   guard after stock's. Tagged `GG.PlayerBot`. `LastLogin` is refreshed every boot so the account
+   never reads `Inactive` (`Account.cs:508-519`), which would condemn a 7f house (`BaseHouse.cs:102`).
+2. **The trigger is a roster, not a recruit.** Identity is the pool name a bot was born with; a
+   rename sets `renamedFrom` and moves only the display name.
+3. **Logout is `Internalize`, not `Delete`.** Upstream's permanent bot never logs out. Ours does what
+   the engine does for a player whose client goes — `LogoutLocation`, `LogoutMap`, `Map.Internal`
+   (`Mobile.cs:1990-2000`) — and a restart is the same thing, because `Mobile.Deserialize` parks
+   every Player-flagged mobile on `Map.Internal` (`:6182-6188`).
+4. **Death is a corpse run** — the interim rule above.
+5. **No mount until 7f.** `BotMovement.SweepStrayMounts` deletes at boot any animal whose master is a
+   `PlayerBot`, and mount ownership is transient, so a named bot is built without one.
+6. **The goods ledger holds a named bot's goods offline.** Logout, birth and the boot purge put them
+   in an offline bucket that is counted in `held`; login takes them out. A restart reads "inherited
+   N, held N", never `boot-purge`.
+7. **Reserved names are a guard, not a patch.** A new human character with a roster name is renamed
+   `Generic Player` (stock's own fallback) on `CharacterCreated`, and again at `Login`. The rename
+   items (`NameChangeDeed`, `NameChangeToken`) raise no event, so a human can wear the name until
+   their next login. **That gap is written down rather than closed**, because closing it is an upstream
+   edit.
+
+Where it lives: `BotRoster.cs`, `NamedBots.cs`, `NamedBotFixtures.cs`; the Bots README, **Named
+bots**.
+
 The rest of this file is the evidence that was put in front of that decision, kept because the
 reasons matter more than the verdict: the next person to ask "why is `BotAI` gone?" or "why did we
 edit `FastAStarAlgorithm.cs`?" should find the answer here rather than re-derive it.
@@ -675,7 +736,8 @@ Stated rather than guessed:
   "fairness" question.
 - **What it means for a named bot to end a session** — offline, retired, or destroyed.
   `REVIEW.md`'s "identity" question, and the thing that decides whether guild-bound bots persist the
-  way upstream's do (`PlayerBot.cs:166-168`).
+  way upstream's do (`PlayerBot.cs:166-168`). **Answered 21 September 2026 (OFFLINE) and built 22
+  September 2026** — see *Named bots* at the top of this file.
 - **The real per-bot cost.** [§6](#6-cost-per-bot-on-the-game-thread) is arithmetic read off the
   timer bucket, not a measurement. `REVIEW.md` §5's instrumentation plan still stands and should run
   after the F1 rebaseline, not before.
