@@ -840,9 +840,10 @@ namespace Server.Custom
                     // something has done its job.
                     warnings = report;
                     message = String.Format(
-                        "{0} spawner(s) for {1} bot(s); {2}",
-                        recipe.Slots.Count,
-                        recipe.TotalBots,
+                        "{0} throwaway spawner(s) for {1} bot(s), {2} named post bot(s); {3}",
+                        recipe.Spawners.Count,
+                        recipe.ThrowawayBots,
+                        recipe.FixedBots,
                         differences.Count == 0 ? "the file matches" : differences.Count + " difference(s)");
                     return true;
                 }
@@ -863,10 +864,10 @@ namespace Server.Custom
 
                     warnings = recipe.Notes;
                     message = String.Format(
-                        "wrote {0}: {1} spawner(s) for {2} bot(s), {3} fixed. Now gg-reimport.",
+                        "wrote {0}: {1} throwaway spawner(s) for {2} bot(s); {3} named post bot(s) are the roster's. Now gg-reimport.",
                         BotPopulation.GeneratedPath(facet),
-                        recipe.Slots.Count,
-                        recipe.TotalBots,
+                        recipe.Spawners.Count,
+                        recipe.ThrowawayBots,
                         recipe.FixedBots);
                     return true;
                 }
@@ -1457,6 +1458,20 @@ namespace Server.Custom
 
                     return BotCommands.TrySendHeadless(
                         String.Join(" ", query.ToArray()), botName, out message);
+                }
+
+                // The named cast. Body: "list" (default), "mark <name> [text]", "bank <name>",
+                // "logout <name>" or "login <name>" - the same as [BotNamed, which shares the code.
+                // Every form writes Data/Live/bot-named.json; the ack carries one line per bot.
+                case "bot-named":
+                {
+                    List<string> lines;
+
+                    bool ran = NamedBots.Run(body, out message, out lines);
+
+                    warnings = lines;
+
+                    return ran;
                 }
 
                 case "botinfo":

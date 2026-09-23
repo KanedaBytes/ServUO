@@ -95,7 +95,7 @@ namespace Server.Custom
             Map map = BotPopulation.Facet;
             BotRecipe recipe = BotPopulation.Build(map);
 
-            if (recipe.Slots.Count == 0)
+            if (recipe.Spawners.Count == 0)
             {
                 from.SendMessage(0x35, "The recipe is empty - nothing was written.");
 
@@ -116,10 +116,10 @@ namespace Server.Custom
             }
 
             from.SendMessage(0x40, String.Format(
-                "Wrote {0}: {1} spawner(s) for {2} bot(s), {3} of them fixed.",
+                "Wrote {0}: {1} throwaway spawner(s) for {2} bot(s). The {3} named post bot(s) are the roster's and are not spawners.",
                 BotPopulation.GeneratedPath(map),
-                recipe.Slots.Count,
-                recipe.TotalBots,
+                recipe.Spawners.Count,
+                recipe.ThrowawayBots,
                 recipe.FixedBots));
 
             foreach (string note in recipe.Notes)
@@ -138,8 +138,8 @@ namespace Server.Custom
                     "{0} {1} generating the bot population ({2} spawner(s), {3} bot(s))",
                     from.AccessLevel,
                     CommandLogging.Format(from),
-                    recipe.Slots.Count,
-                    recipe.TotalBots));
+                    recipe.Spawners.Count,
+                    recipe.ThrowawayBots));
         }
 
         // -------------------------------------------------------------------
@@ -189,6 +189,7 @@ namespace Server.Custom
 
             int live = 0;
             int fixtures = 0;
+            int named = 0;
 
             foreach (Mobile mobile in LiveRegistry.Snapshot())
             {
@@ -197,6 +198,11 @@ namespace Server.Custom
                 if (bot == null || bot.Deleted)
                 {
                     continue;
+                }
+
+                if (bot.IsNamed)
+                {
+                    named++;
                 }
 
                 if (bot.LifecycleExempt)
@@ -210,10 +216,13 @@ namespace Server.Custom
             }
 
             from.SendMessage(String.Format(
-                "{0} lifecycle bot(s) live against a curve target of {1}, plus {2} fixture(s).",
+                "{0} lifecycle bot(s) live against a curve target of {1}, plus {2} fixture(s), {3} of them named.",
                 live,
                 BotSession.TargetNow,
-                fixtures));
+                fixtures,
+                named));
+
+            from.SendMessage(BotPopulation.DescribeNamed());
 
             from.SendMessage(BotSession.Describe());
             from.SendMessage(BotTickManager.DescribeCost());

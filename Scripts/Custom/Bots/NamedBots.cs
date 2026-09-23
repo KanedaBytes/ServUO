@@ -92,14 +92,16 @@ namespace Server.Custom
         private static long _loggedInAt;
         private static bool _loggedIn;
 
-        public static int CharactersCreated { get; private set; }
-        public static int AccountsCreated { get; private set; }
-        public static int Logins { get; private set; }
-        public static int Logouts { get; private set; }
-        public static int Deaths { get; private set; }
-        public static int CorpseRuns { get; private set; }
-        public static int RefusedLogins { get; private set; }
-        public static int RenamedHumans { get; private set; }
+        // Internal setters so NamedBotFixtures can put these back after proving the paths that move
+        // them - a [CoreSmoke run must not read on Bots.Named as a human refused at the login screen.
+        public static int CharactersCreated { get; internal set; }
+        public static int AccountsCreated { get; internal set; }
+        public static int Logins { get; internal set; }
+        public static int Logouts { get; internal set; }
+        public static int Deaths { get; internal set; }
+        public static int CorpseRuns { get; internal set; }
+        public static int RefusedLogins { get; internal set; }
+        public static int RenamedHumans { get; internal set; }
 
         // -------------------------------------------------------------------
         // Boot

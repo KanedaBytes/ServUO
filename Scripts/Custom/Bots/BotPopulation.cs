@@ -29,6 +29,15 @@
 //
 // The small ones are marked (DEVIATION) at each site.
 //
+// THE FIXED POSTS ARE NOT SPAWNERS ANY MORE (22 September 2026). The bank crowds and the staffed
+// benches are the NAMED cast - real characters with accounts, listed in Data/Custom/bot-roster.json
+// and brought in by NamedBots - and a spawner would delete and replace them on every respawn,
+// reimport and death, which is exactly what a named bot may never suffer. So the recipe still
+// works out every post (the audit, Bots.Recipe and the roster check all need to know what the graph
+// asks for) but a FIXED slot is a named post: Write and DiffAgainstFile skip it, and RosterGaps
+// compares it against the roster instead. Upstream detaches a bot from its spawner the moment it
+// becomes permanent (uo-offline PlayerBot.cs:185-189); ours are never on one.
+//
 // The recipe reads the SAME graph the bots read. There is no city column here
 // and no coordinate table: a town is a tag in bots.json destinations.towns, a
 // bank is a `bank` destination carrying that tag, a station is whatever
@@ -128,11 +137,20 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>
+        /// A named post: held by the roster's cast, never written as a spawner. Every fixed slot is
+        /// one - see the note at the top of this file.
+        /// </summary>
+        public bool IsNamedPost
+        {
+            get { return Role == BotRole.Fixed; }
+        }
+
         public string Describe()
         {
             return String.Format(
                 "{0} x{1} {2}{3} at {4} ({5},{6})",
-                Role == BotRole.Fixed ? "FIXED" : "seed",
+                Role == BotRole.Fixed ? "NAMED" : "seed",
                 Count,
                 Class == null ? "" : BotClassHelper.DisplayName(Class.Value) + " ",
                 Behaviour,
@@ -177,6 +195,32 @@ namespace Server.Custom
             }
         }
 
+        /// <summary>The slots that are written as spawners: every one but the named posts.</summary>
+        public List<BotSlot> Spawners
+        {
+            get
+            {
+                var spawners = new List<BotSlot>();
+
+                foreach (BotSlot slot in Slots)
+                {
+                    if (!slot.IsNamedPost)
+                    {
+                        spawners.Add(slot);
+                    }
+                }
+
+                return spawners;
+            }
+        }
+
+        /// <summary>Bots the spawners make: the throwaway population.</summary>
+        public int ThrowawayBots
+        {
+            get { return TotalBots - FixedBots; }
+        }
+
+        /// <summary>Bots the named posts want, which the roster provides.</summary>
         public int FixedBots
         {
             get
@@ -620,17 +664,20 @@ namespace Server.Custom
         {
             error = null;
 
-            if (recipe == null || recipe.Slots.Count == 0)
+            List<BotSlot> spawners = recipe == null ? new List<BotSlot>() : recipe.Spawners;
+
+            if (spawners.Count == 0)
             {
                 error = "the recipe is empty, and writing an empty spawn file would delete the population";
                 return false;
             }
 
-            var text = new StringBuilder(recipe.Slots.Count * 1200);
+            var text = new StringBuilder(spawners.Count * 1200);
 
             text.Append("<Spawns>\n");
 
-            foreach (BotSlot slot in recipe.Slots)
+            // Throwaway spawners only. A named post is the roster's, not a spawner's.
+            foreach (BotSlot slot in spawners)
             {
                 AppendPoint(text, map, slot);
             }
@@ -848,7 +895,7 @@ namespace Server.Custom
                 return differences;
             }
 
-            foreach (BotSlot slot in recipe.Slots)
+            foreach (BotSlot slot in recipe.Spawners)
             {
                 string want = String.Format(
                     "{0}|{1}|{2}|{3}|{4}",
@@ -910,12 +957,21 @@ namespace Server.Custom
             BotPopulationConfig config = BotSystem.Store.Population;
 
             lines.Add(String.Format(
-                "target {0} on {1}: {2} bot(s) across {3} spawner(s), {4} of them fixed.",
+                "target {0} on {1}: {2} bot(s) - {3} throwaway across {4} spawner(s), {5} named at {6} post(s).",
                 config.Target,
                 (map ?? Map.Trammel).Name,
                 recipe.TotalBots,
-                recipe.Slots.Count,
-                recipe.FixedBots));
+                recipe.ThrowawayBots,
+                recipe.Spawners.Count,
+                recipe.FixedBots,
+                recipe.Slots.Count - recipe.Spawners.Count));
+
+            lines.Add("  " + DescribeNamed());
+
+            foreach (string gap in RosterGaps(recipe))
+            {
+                lines.Add("  ROSTER GAP: " + gap);
+            }
 
             foreach (var entry in recipe.TownTargets)
             {
@@ -964,6 +1020,94 @@ namespace Server.Custom
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// Where the roster and the recipe disagree: a post the graph asks for that no named bot
+        /// holds, a bank whose named crowd is short of its floor, or a roster post the recipe does
+        /// not know. Empty when the named cast covers every fixed post exactly.
+        ///
+        /// A gap is NOT filled by a spawner - that is the point of the named cast - so it is said
+        /// here, on the audit and on Bots.Recipe, for somebody to add an entry to the roster.
+        /// </summary>
+        public static List<string> RosterGaps(BotRecipe recipe)
+        {
+            var gaps = new List<string>();
+            var wanted = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (BotSlot slot in recipe.Slots)
+            {
+                if (slot.IsNamedPost)
+                {
+                    wanted[slot.DestinationId] = slot.Count;
+                }
+            }
+
+            var held = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (BotRosterEntry entry in BotRoster.Store.Bots)
+            {
+                int count;
+                held.TryGetValue(entry.Post, out count);
+                held[entry.Post] = count + 1;
+            }
+
+            foreach (var want in wanted)
+            {
+                int have;
+                held.TryGetValue(want.Key, out have);
+
+                if (have < want.Value)
+                {
+                    gaps.Add(String.Format(
+                        "{0} wants {1} named bot(s) and the roster gives it {2}", want.Key, want.Value, have));
+                }
+            }
+
+            foreach (var have in held)
+            {
+                if (!wanted.ContainsKey(have.Key))
+                {
+                    gaps.Add(String.Format(
+                        "the roster posts {0} bot(s) at {1}, which the recipe does not staff", have.Value, have.Key));
+                }
+            }
+
+            gaps.Sort(StringComparer.Ordinal);
+
+            return gaps;
+        }
+
+        /// <summary>One line on the named cast, for the audit: the roster against the world.</summary>
+        public static string DescribeNamed()
+        {
+            int characters = 0;
+            int online = 0;
+
+            foreach (BotRosterEntry entry in BotRoster.Store.Bots)
+            {
+                PlayerBot bot = NamedBots.Get(entry);
+
+                if (bot == null)
+                {
+                    continue;
+                }
+
+                characters++;
+
+                if (NamedBots.IsOnline(bot))
+                {
+                    online++;
+                }
+            }
+
+            return String.Format(
+                "named: {0} in the roster, {1} character(s), {2} online, {3} offline{4}.",
+                BotRoster.Store.Bots.Count,
+                characters,
+                online,
+                characters - online,
+                BotRoster.LastError == null ? "" : "; ROSTER NOT LOADED: " + BotRoster.LastError);
         }
 
         /// <summary>Live bot spawners in the world - the ones this recipe owns.</summary>

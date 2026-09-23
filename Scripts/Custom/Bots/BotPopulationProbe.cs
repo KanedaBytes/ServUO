@@ -24,8 +24,12 @@
 //   2. Is every staffed bench actually staffed?  This is 7f's premise, and the
 //      predicate is BotDestinations.IsStaffed's own so the probe cannot pass
 //      while the economy's haul roll disagrees.
-//   3. Did any spawner quietly fail to place its bots?  XmlSpawner drops a
-//      spawn it cannot position and says nothing at all.
+//   3. Does the NAMED cast cover every fixed post, and is the world rid of the
+//      fixed spawners that used to staff them?  Since 22 September 2026 a bank
+//      crowd or a staffed bench is a roster entry, not a spawner (BotRoster,
+//      NamedBots), so a post the roster does not cover stays empty and nothing
+//      else would say so; and a fixed spawner still in the world from before
+//      would put a throwaway on a named bot's post.
 //   4. Are the towns within tolerance of their share, and what does a tick cost
 //      at this population?
 //
@@ -89,10 +93,12 @@ namespace Server.Custom
             var detail = new StringBuilder(320);
 
             detail.AppendFormat(
-                "recipe: {0} spawner(s) for {1} bot(s), {2} fixed",
-                recipe.Slots.Count,
-                recipe.TotalBots,
+                "recipe: {0} spawner(s) for {1} throwaway bot(s), {2} named post bot(s) from the roster",
+                recipe.Spawners.Count,
+                recipe.ThrowawayBots,
                 recipe.FixedBots);
+
+            detail.Append(". ").Append(BotPopulation.DescribeNamed());
 
             // Which stop each town's roamers resolved at. Reported unconditionally, because the
             // point of the anchor being a rule over tags rather than a table of town names is that
@@ -129,6 +135,25 @@ namespace Server.Custom
                     BotPopulation.GeneratedPath(map),
                     String.Join("; ", differences.GetRange(0, Math.Min(3, differences.Count)).ToArray()),
                     differences.Count > 3 ? "; ..." : "",
+                    detail));
+            }
+
+            // ---- the roster covers every fixed post ----
+            //
+            // Before the live census, because it is a data fault like the file above and needs no
+            // settling: a post nobody on the roster holds is empty at every hour, and adding a roster
+            // entry is the fix.
+
+            List<string> gaps = BotPopulation.RosterGaps(recipe);
+
+            if (gaps.Count > 0)
+            {
+                return HealthResult.Warn(String.Format(
+                    "ROSTER GAP: {0} post(s) and {1} disagree ({2}{3}). Add or move a roster entry. {4}",
+                    gaps.Count,
+                    BotRoster.ConfigPath,
+                    String.Join("; ", gaps.GetRange(0, Math.Min(3, gaps.Count)).ToArray()),
+                    gaps.Count > 3 ? "; ..." : "",
                     detail));
             }
 
@@ -219,36 +244,33 @@ namespace Server.Custom
                     detail));
             }
 
-            // ---- 3. no spawner quietly fell short ----
+            // ---- 3. no fixed spawner is left over from before the named cast ----
+            //
+            // This check used to ask whether a fixture spawner had quietly failed to place its
+            // bots. There are no fixture spawners now - the posts are the roster's - so the one
+            // spawner that can still be wrong is one the world save kept from before: it would put
+            // a throwaway on a named bot's post. [GG_Reimport deletes every GG_ spawner and loads
+            // the file, which no longer has any.
 
-            var short_ = new List<string>();
+            var leftover = new List<string>();
 
             foreach (XmlSpawner spawner in spawners)
             {
-                // Only the fixtures. A lifecycle spawner is SUPPOSED to sit under its count
-                // whenever the curve is below its peak - that is the curve working, and calling it
-                // a fault would make this check fail every night.
-                if (!IsFixture(spawner))
+                if (IsFixture(spawner))
                 {
-                    continue;
-                }
-
-                if (spawner.SafeCurrentCount < spawner.MaxCount)
-                {
-                    short_.Add(String.Format(
-                        "{0} ({1}/{2})", spawner.Name, spawner.SafeCurrentCount, spawner.MaxCount));
+                    leftover.Add(spawner.Name);
                 }
             }
 
-            if (short_.Count > 0)
+            if (leftover.Count > 0)
             {
-                short_.Sort(StringComparer.Ordinal);
+                leftover.Sort(StringComparer.Ordinal);
 
                 return HealthResult.Warn(String.Format(
-                    "{0} fixture spawner(s) could not place their bots - nowhere standable in the "
-                    + "spawn area, and XmlSpawner does not say so: {1}. {2}",
-                    short_.Count,
-                    String.Join(", ", short_.ToArray()),
+                    "{0} fixed spawner(s) from before the named cast are still in the world: {1}. "
+                    + "Run [GG_Reimport to retire them. {2}",
+                    leftover.Count,
+                    String.Join(", ", leftover.ToArray()),
                     detail));
             }
 
@@ -390,7 +412,8 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// A fixture spawner, read off the spawn string rather than off a second record of it.
+        /// A fixed-role spawner, read off the spawn string rather than off a second record of it.
+        /// Only a leftover can match now: the generator writes none (BotPopulation.Write).
         ///
         /// The Objects2 entry is what the shard actually spawns from, so asking it is asking the
         /// thing that decides. A parallel list of which names are fixtures would be one more thing

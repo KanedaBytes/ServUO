@@ -245,6 +245,14 @@ namespace Server.Custom
             // the old first-come order run as a control (Scripts/Custom/Bots/PlanFixtures.cs).
             passed &= PlanFixtures.RunFixtures(report);
 
+            // The named cast: the roster refuses a duplicate name, an unknown post and an unknown
+            // class; an account is made once; no human logs in on one; the boot purge keeps a named
+            // bot; a bank box survives a logout and a login; the regen writes no fixed spawner and no
+            // named bot is on one; a person cannot take a named bot's name
+            // (Scripts/Custom/Bots/NamedBotFixtures.cs). Fixture accounts and bots are removed in a
+            // finally.
+            passed &= NamedBotFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 
