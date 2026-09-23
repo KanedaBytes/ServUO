@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "comment": "The named cast: one entry per fixed post, and every one of them a real character. A named bot has its own ServUO Account (banned, so no human can log in on it, and tagged GG.PlayerBot), is written by the world save like a player, goes OFFLINE at session end rather than being deleted, and is never destroyed (Sean, 21 and 22 September 2026, CLASS-DECISION.md). Throwaway bots are everyone else, come from GG_BotPop.xml spawners and own nothing durable. IDENTITY IS THE POOL NAME A BOT WAS BORN WITH: the account is named after it. To rename a bot, change name and set renamedFrom to the pool name it had - the account and the character stay the same and only the display name moves. A name must be in pool unless its renamedFrom is. class is a BotClass (never the legacy Crafter); home is a town from bots.json destinations.towns; post is a nav destination in that town, either a bank (any class, a crowd of several) or a craft station whose trade is this class (one each). female picks the body, because a name chosen for fit needs a body that fits it. The file is refused whole on any error and the previous roster is kept; a post the graph cannot place refuses only that entry, which stays offline and is reported on Bots.Named - it is never deleted. Removing an entry retires the bot: it stays offline in the save for ever, like a player who quit.",
+  "pool": [
+    "Drizzt", "Elminster", "Minsc", "Bruenor", "Wulfgar", "Regis", "Jarlaxle",
+    "Artemis", "Volo", "Raistlin", "Caramon", "Tanis", "Kitiara", "Sturm",
+    "Tasslehoff", "Flint", "Goldmoon", "Astarion", "Shadowheart", "Karlach", "Gale",
+    "Wyll", "Gandalf", "Aragorn", "Legolas", "Gimli", "Frodo", "Samwise",
+    "Boromir", "Eowyn", "Conan", "Inigo", "Fezzik", "Westley", "Buttercup",
+    "Willow", "Madmartigan", "Sorsha", "Atreyu", "Bastian", "Jareth", "Ludo"
+  ],
+  "bots": [
+    { "name": "Bruenor", "class": "Smith", "home": "britain", "post": "brit-forge", "female": false },
+    { "name": "Gimli", "class": "Smith", "home": "britain", "post": "brit-forge-south", "female": false },
+    { "name": "Flint", "class": "Smith", "home": "britain", "post": "brit-forge-south-2", "female": false },
+    { "name": "Wulfgar", "class": "Smith", "home": "trinsic", "post": "trinsic-forge", "female": false },
+    { "name": "Regis", "class": "Tailor", "home": "britain", "post": "brit-shop-tailor", "female": false },
+    { "name": "Buttercup", "class": "Tailor", "home": "britain", "post": "brit-shop-tailor-east", "female": true },
+    { "name": "Tasslehoff", "class": "Tailor", "home": "trinsic", "post": "trinsic-shop-tailor", "female": false },
+    { "name": "Goldmoon", "class": "Tailor", "home": "trinsic", "post": "trinsic-shop-tailor-2", "female": true },
+    { "name": "Samwise", "class": "Carpenter", "home": "britain", "post": "brit-shop-carpenter", "female": false },
+    { "name": "Volo", "class": "Bard", "home": "britain", "post": "brit-bank", "female": false },
+    { "name": "Elminster", "class": "Mage", "home": "britain", "post": "brit-bank", "female": false },
+    { "name": "Jarlaxle", "class": "Thief", "home": "britain", "post": "brit-bank", "female": false },
+    { "name": "Gandalf", "class": "Mage", "home": "britain", "post": "brit-bank-east", "female": false },
+    { "name": "Drizzt", "class": "Ranger", "home": "britain", "post": "brit-bank-east", "female": false },
+    { "name": "Legolas", "class": "Archer", "home": "britain", "post": "brit-bank-east", "female": false },
+    { "name": "Sturm", "class": "Warrior", "home": "trinsic", "post": "trinsic-bank", "female": false },
+    { "name": "Aragorn", "class": "Ranger", "home": "trinsic", "post": "trinsic-bank", "female": false },
+    { "name": "Boromir", "class": "Warrior", "home": "trinsic", "post": "trinsic-bank", "female": false },
+    { "name": "Eowyn", "class": "Fencer", "home": "trinsic", "post": "trinsic-bank-2", "female": true },
+    { "name": "Minsc", "class": "Tamer", "home": "trinsic", "post": "trinsic-bank-2", "female": false },
+    { "name": "Shadowheart", "class": "Healer", "home": "trinsic", "post": "trinsic-bank-2", "female": true }
+  ]
+}

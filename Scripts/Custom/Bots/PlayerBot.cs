@@ -90,6 +90,40 @@ namespace Server.Custom
         [CommandProperty(AccessLevel.GameMaster)]
         public MountDisposition MountDisposition { get; set; }
 
+        /// <summary>
+        /// The pool name this bot was born with, when it is one of the NAMED cast; null for a
+        /// throwaway. Serialized (v3), and the one field that decides whether this bot survives a
+        /// restart.
+        ///
+        /// Upstream's GuildBound by another name (uo-offline PlayerBot.cs:166, written at v7
+        /// :1068): a single saved flag that every destructive path asks about before it acts. Theirs
+        /// is set by a player recruiting the bot into a guild; ours by Data/Custom/bot-roster.json
+        /// (BotRoster), with an Account of its own behind it (NamedBots). It is the IDENTITY, not
+        /// the display name - a rename in the roster moves Name and leaves this alone, which is how
+        /// the account and the character stay the same objects.
+        /// </summary>
+        [CommandProperty(AccessLevel.GameMaster, true)]
+        public string RosterName { get; private set; }
+
+        /// <summary>
+        /// One of the named cast: never destroyed, logged out rather than deleted, and skipped by
+        /// every purge (BotStartupPurge), regen and session logout. See NamedBots.
+        /// </summary>
+        public bool IsNamed
+        {
+            get { return !String.IsNullOrEmpty(RosterName); }
+        }
+
+        /// <summary>
+        /// A named bot has died and not yet been through its corpse run. Transient.
+        ///
+        /// While it is set the goods census leaves this bot's books alone: its pack is on the corpse
+        /// for the second between the death and the run, and reading that as units gone would fail
+        /// Bots.Conservation over goods that are about to come straight back. INTERIM, with the
+        /// death rule it serves - see NamedBots.CorpseRun.
+        /// </summary>
+        public bool CorpseRunPending { get; set; }
+
         /// <summary>Inclination toward each behaviour. Read by BotLifecycle when a phase expires.</summary>
         public BotPersonality Personality { get; set; }
 
@@ -542,10 +576,31 @@ namespace Server.Custom
         }
 
         public PlayerBot(BotClass cls, BotSkillTier tier)
+            : this(cls, tier, null)
+        {
+        }
+
+        /// <summary>
+        /// A NAMED bot, built from its roster entry: its name rather than a roll, its body, its
+        /// town, its identity - and neither the live map nor a horse. It is born OFFLINE, on
+        /// Map.Internal and out of LiveRegistry, and NamedBots.LogIn is what puts it at its post.
+        ///
+        /// No mount, deliberately, until 7f: BotMovement.SweepStrayMounts deletes at boot any animal
+        /// whose master is a PlayerBot, and OwnedMount / HeldMount are transient, so a horse is the
+        /// one thing a named bot could not keep across a restart. Better not to give it one than to
+        /// give it one the next boot takes away.
+        /// </summary>
+        internal static PlayerBot CreateNamed(BotRosterEntry entry)
+        {
+            return new PlayerBot(entry.ParsedClass, BotSkillTierHelper.RollRandom(), entry);
+        }
+
+        private PlayerBot(BotClass cls, BotSkillTier tier, BotRosterEntry named)
             : base()
         {
             Class = cls;
             SkillTier = tier;
+            RosterName = named == null ? null : named.Identity;
 
             // A pace before anybody asks for one. NavPlayerActor falls back to the engine's walk
             // constant for a zero, but a bot that reached a walker before BotMovement had settled
@@ -574,12 +629,12 @@ namespace Server.Custom
             // Where it lives. Upstream rolls this in the constructor too (PlayerBot.cs:301-303),
             // independent of where the bot is about to be placed: born in Britain and living in
             // Trinsic is a real thing, and the bias is what walks it home.
-            HomeTown = BotHomeTowns.Roll();
+            HomeTown = named == null ? BotHomeTowns.Roll() : named.Home;
 
             _behavior = new IdleBehavior();
 
             Race = Race.Human;
-            Female = Utility.RandomBool();
+            Female = named == null ? Utility.RandomBool() : named.Female;
             Body = Female ? 0x191 : 0x190;
             Hue = Race.RandomSkinHue();
 
@@ -588,7 +643,9 @@ namespace Server.Custom
             // death instead of vanishing - handled in OnDeath).
             Player = true;
 
-            Name = NamePool.PickUnique(Female);
+            // A named bot's name is its roster entry's and is withheld from the pool altogether
+            // (NamePool.Reserve), so it is never Claimed and never counted by the throwaway census.
+            Name = named == null ? NamePool.PickUnique(Female) : named.Name;
             Title = BuildTitle();
 
             // SpeechHue is Mobile's own and is persisted by Mobile. Deliberately not redeclared
@@ -618,6 +675,14 @@ namespace Server.Custom
             // 0,0,0 would be walked there.
             Home = Point3D.Zero;
             IdleTolerance = 0;
+
+            // A named bot is born offline and is on the live map only while logged in.
+            if (named != null)
+            {
+                Role = BotRole.Fixed;
+                MountDisposition = MountDisposition.Dismounts;
+                return;
+            }
 
             LiveRegistry.Register(this);
 
@@ -951,6 +1016,19 @@ namespace Server.Custom
         {
             base.OnDeath(c);
 
+            // A NAMED BOT IS NEVER DESTROYED, and death is no exception (Sean, 21 September 2026).
+            // INTERIM RULE (Sean, 22 September 2026): resurrect after a second, take everything
+            // back off the corpse, return to the post. 7h Death replaces it with a player-like
+            // ghost and resurrection. See NamedBots.CorpseRun. The load is not written down as lost
+            // here, because it is coming straight back; whatever the run cannot recover is.
+            if (IsNamed)
+            {
+                BotMovement.ReleaseMount(this);
+                BotDeaths.Note(this);
+                NamedBots.OnDied(this, c);
+                return;
+            }
+
             // THE LOAD IS ON THE CORPSE NOW, AND THAT IS AN EXIT FROM THIS BOT'S CUSTODY.
             //
             // Mobile.Kill moves every pack item whose GetInventoryMoveResultFor says MoveToCorpse
@@ -1032,6 +1110,13 @@ namespace Server.Custom
             _seedPending = false;
 
             if (Deleted)
+            {
+                return;
+            }
+
+            // A named bot logged out between the seed and this tick. Its brain is attached at the
+            // next login, not on Map.Internal where a walker could be started for nobody.
+            if (IsNamed && (Map == null || Map == Map.Internal))
             {
                 return;
             }
@@ -1292,6 +1377,15 @@ namespace Server.Custom
 
         public override void OnDelete()
         {
+            // A named bot is never destroyed, so a delete that reaches one is a fault somewhere -
+            // except a fixture's own bot, which is built to be thrown away. Said loudly and failed
+            // on Bots.Named; the delete itself goes ahead, because refusing it here would leave a
+            // half-deleted mobile.
+            if (IsNamed)
+            {
+                NamedBots.NoteDeleted(this, DeletionReason);
+            }
+
             // Detach the brain first. A Traveler's OnDetached stops its walker and clears
             // Commuting; without it, NavWalker would keep a reference to a deleted mobile until
             // its own next tick noticed.
@@ -1354,7 +1448,7 @@ namespace Server.Custom
         {
             base.Serialize(writer);
 
-            writer.Write(2); // version
+            writer.Write(3); // version
 
             writer.Write((byte)Class);
             writer.Write((byte)SkillTier);
@@ -1375,6 +1469,10 @@ namespace Server.Custom
             // Without this, a restart erases which half was which and every inherited unit would
             // be reported as a lost haul. One int is a cheap price for a true number.
             writer.Write(StashRemaining);
+
+            // v3. THE NAMED CAST'S IDENTITY, and the reason a named bot comes back at all:
+            // BotStartupPurge keeps any bot that carries one. Null for a throwaway.
+            writer.Write(RosterName);
         }
 
         public override void Deserialize(GenericReader reader)
@@ -1404,7 +1502,22 @@ namespace Server.Custom
                 StashRemaining = reader.ReadInt();
             }
 
+            if (version >= 3)
+            {
+                RosterName = reader.ReadString();
+            }
+
             _behavior = new IdleBehavior();
+
+            // A named bot loads OFFLINE, and the engine has already done it: Mobile.Deserialize
+            // parks every Player-flagged mobile on Map.Internal with its LogoutLocation and
+            // LogoutMap (Server/Mobile.cs:6182-6188). It is kept by the purge and put back at its
+            // post by NamedBots.LogIn. Role is transient, so it is restored here: a named bot is
+            // the fixed cast, whatever state it is in.
+            if (IsNamed)
+            {
+                Role = BotRole.Fixed;
+            }
 
             // NO LiveRegistry.Register ON THIS PATH, deliberately, and that is unchanged: a bot
             // that is about to be purged would sit on the editor's live map for one tick.

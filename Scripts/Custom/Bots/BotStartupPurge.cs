@@ -4,7 +4,9 @@
 // See LICENSE-BOTS at the repository root.
 // -----------------------------------------------------------------------------
 //
-// BotStartupPurge.cs - nothing about a bot survives a restart, and this is where that is enforced.
+// BotStartupPurge.cs - nothing about a THROWAWAY bot survives a restart, and this is where that is
+// enforced. A NAMED bot (PlayerBot.RosterName, the roster cast) is kept, as upstream keeps a
+// guild-bound one (BotStartupManager.cs:106-110), and comes back through NamedBots.
 //
 // A PORT OF BotStartupManager.PurgeStaleBots (uo-offline BotStartupManager.cs:92-119), adopted in
 // the PlayerMobile class swap in place of the Timer.DelayCall(Delete) that used to close
@@ -53,21 +55,23 @@ namespace Server.Custom
         private static readonly CustomLogger Log = CustomLogger.For("Bots");
 
         /// <summary>
-        /// How many bots the last purge deleted, for Bots.Population to report.
+        /// How many bots the last purge deleted, for Bots.Named to report beside the kept count.
         /// </summary>
         public static int LastPurged { get; private set; }
+
+        /// <summary>How many NAMED bots the last purge kept. Upstream logs the same number (:119).</summary>
+        public static int LastKept { get; private set; }
 
         /// <summary>Whether a purge has run this boot at all.</summary>
         public static bool HasRun { get; private set; }
 
         /// <summary>
-        /// Early, though nothing yet depends on it being early.
+        /// Early, and now it matters: NamedBots.Initialize (905) finds the named cast in the world
+        /// by what this left standing.
         ///
-        /// Lower runs first and untagged is 0 (CLAUDE.md section 3). Nothing else in Initialize
-        /// counts bots - the population fill is at ServerStarted, later - so the ordering is
-        /// insurance rather than a requirement. It is worth having anyway: the day something does
-        /// count them, the count should be of the bots this boot created and not of the ghosts of
-        /// the last one.
+        /// Lower runs first and untagged is 0 (CLAUDE.md section 3). The population fill is at
+        /// ServerStarted, later, so the count here is of the bots the last boot left behind and
+        /// never of the ones this boot is about to create.
         /// </summary>
         [CallPriority(-1000)]
         public static void Initialize()
@@ -77,28 +81,8 @@ namespace Server.Custom
 
         public static int Purge()
         {
-            var stale = new List<PlayerBot>();
-
-            // SNAPSHOT, THEN DELETE. Deleting inside the enumeration would throw
-            // "Collection was modified" the moment the first bot's cascade touched World.Mobiles,
-            // and upstream's version carries the same two-pass shape for the same reason.
-            foreach (Mobile mobile in World.Mobiles.Values)
-            {
-                var bot = mobile as PlayerBot;
-
-                if (bot == null || bot.Deleted)
-                {
-                    continue;
-                }
-
-                // Upstream keeps guild-bound bots here: a bot a real player has recruited into a
-                // real guild is the one kind that is meant to still be standing after a restart
-                // (PlayerBot.cs:166-168, and every deletion path on their side checks it). We have
-                // no guild layer yet, so nothing is exempt and the test would be a branch nothing
-                // can take. The exemption belongs with the guild session that creates the state.
-
-                stale.Add(bot);
-            }
+            int kept;
+            List<PlayerBot> stale = Collect(World.Mobiles.Values, out kept);
 
             // COUNT WHAT THIS BOOT INHERITED, BEFORE DESTROYING IT (REVIEW.md F5, rule 4).
             //
@@ -129,6 +113,7 @@ namespace Server.Custom
             }
 
             LastPurged = stale.Count;
+            LastKept = kept;
             HasRun = true;
 
             // One write for the whole sweep. A laden fleet hands the ledger a record per bot and
@@ -136,18 +121,63 @@ namespace Server.Custom
             // the boot.
             BotGoodsLedger.Flush();
 
-            if (stale.Count > 0)
-            {
-                Log.Info(
-                    "Purged {0} stale bot(s) from the world save. Bots do not survive a restart.",
-                    stale.Count);
-            }
-            else
-            {
-                Log.Info("No stale bots in the world save.");
-            }
+            Log.Info(
+                "Purged {0} stale bot(s) from the world save; kept {1} named bot(s). Throwaway bots do not survive a restart.",
+                stale.Count,
+                kept);
 
             return stale.Count;
+        }
+
+        /// <summary>
+        /// Which of these mobiles the purge deletes, and how many named bots it keeps.
+        ///
+        /// SNAPSHOT, THEN DELETE: the caller deletes after this returns, because deleting inside
+        /// the enumeration would throw "Collection was modified" the moment the first bot's cascade
+        /// touched World.Mobiles. Upstream carries the same two-pass shape for the same reason.
+        ///
+        /// A kept named bot's goods are counted in as this boot's opening balance and held -
+        /// offline, not lost (BotGoodsLedger.NoteNamedCarried). Internal so NamedBotFixtures can
+        /// run the real pass over a list of its own; Purge over World.Mobiles would delete every
+        /// throwaway on a live shard.
+        /// </summary>
+        internal static List<PlayerBot> Collect(IEnumerable<Mobile> mobiles, out int kept)
+        {
+            var stale = new List<PlayerBot>();
+
+            kept = 0;
+
+            foreach (Mobile mobile in mobiles)
+            {
+                var bot = mobile as PlayerBot;
+
+                if (bot == null || bot.Deleted)
+                {
+                    continue;
+                }
+
+                // UPSTREAM'S EXEMPTION, NOW OURS: `if (bot.IsPermanent) { kept++; continue; }`
+                // (uo-offline BotStartupManager.cs:106-110). Theirs is a guild recruit; ours is the
+                // named cast (PlayerBot.RosterName, NamedBots). Kept whether or not the roster still
+                // lists it - a bot taken out of the roster is RETIRED, and retired means offline for
+                // ever, like a player who quit, never destroyed.
+                if (!IsStale(bot))
+                {
+                    BotGoodsLedger.NoteNamedCarried(bot);
+                    kept++;
+                    continue;
+                }
+
+                stale.Add(bot);
+            }
+
+            return stale;
+        }
+
+        /// <summary>Does the boot purge delete this bot? Every throwaway; never a named bot.</summary>
+        internal static bool IsStale(PlayerBot bot)
+        {
+            return bot != null && !bot.IsNamed;
         }
 
         /// <summary>

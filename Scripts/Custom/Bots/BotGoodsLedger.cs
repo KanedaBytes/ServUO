@@ -15,7 +15,9 @@
 //                                        before BotStartupPurge destroyed it
 //     out   = accepted + lost            terminal both ways: the crafter turned it into something
 //             + unexplained              else, or it was destroyed, or nothing can say
-//     held  = a census of every live bot's pack, panniers and bank box
+//     held  = a census of every live bot's pack, panniers and bank box, plus what the OFFLINE
+//             named bots hold - a named bot's goods are held across a logout and a restart,
+//             never lost (NoteOffline / NoteOnline / NoteNamedCarried)
 //
 //     in == out + held,  and unexplained == 0
 //
@@ -161,8 +163,51 @@ namespace Server.Custom
         /// <summary>Hand-overs that settled, whole or partial.</summary>
         public static int Handovers { get; private set; }
 
-        /// <summary>Units held by live bots at the last census: pack, panniers and bank box.</summary>
+        /// <summary>
+        /// Units held by bots at the last census: every live bot's pack, panniers and bank box,
+        /// plus what the offline named bots hold (<see cref="OfflineHeld"/>).
+        /// </summary>
         public static int Held { get; private set; }
+
+        // ---- the named cast, offline ----
+        //
+        // A NAMED BOT'S HOLDINGS ARE HELD ACROSS A LOGOUT AND A RESTART, never lost (Sean, 22 September
+        // 2026). The census walks LiveRegistry, and an offline named bot is not in it - so without
+        // this its units would drop out of `held` with no exit booked and the books would be out by
+        // exactly that much. So a logout (and a boot that finds the bot in the save, and a birth -
+        // they are born offline) books what the bot holds into this bucket, keyed by serial; a login
+        // takes it back out and hands it to the bot's TrackedCustody, and the ordinary reconcile
+        // carries on from there. At boot the same units are counted in as `opening`, exactly as the
+        // purge counts a throwaway's - and then, unlike the purge, nothing destroys them.
+
+        private static readonly Dictionary<Serial, int> _offline = new Dictionary<Serial, int>();
+
+        /// <summary>Units the offline named bots hold, as of now.</summary>
+        public static int OfflineHeld
+        {
+            get
+            {
+                int total = 0;
+
+                foreach (int units in _offline.Values)
+                {
+                    total += units;
+                }
+
+                return total;
+            }
+        }
+
+        /// <summary>Named bots whose holdings are in the offline bucket.</summary>
+        public static int OfflineBots
+        {
+            get { return _offline.Count; }
+        }
+
+        /// <summary>Of <see cref="Held"/>, the part the offline named bots held at the last census.</summary>
+        public static int OfflineHeldAtCensus { get; private set; }
+
+        public static int OfflineBotsAtCensus { get; private set; }
 
         // THE EQUATION IS READ AT ONE INSTANT, WHICH IS THE CENSUS.
         //
@@ -276,6 +321,67 @@ namespace Server.Custom
             }
 
             bot.TrackedCustody = held;
+        }
+
+        /// <summary>
+        /// A NAMED bot came out of the world save. Its goods are counted in as this boot's opening
+        /// balance, exactly as the purge counts a throwaway's - and then they stay: the bot is kept,
+        /// offline, and its units go into the offline bucket rather than being written down as a
+        /// boot-purge loss. Called by BotStartupPurge in place of Prepare.
+        /// </summary>
+        public static void NoteNamedCarried(PlayerBot bot)
+        {
+            if (bot == null)
+            {
+                return;
+            }
+
+            NoteOpening(bot);
+
+            _offline[bot.Serial] = bot.TrackedCustody;
+        }
+
+        /// <summary>
+        /// A named bot is going offline, or was just born offline. Reconcile it one last time, the
+        /// way the census would, and move what it holds into the offline bucket.
+        /// </summary>
+        public static void NoteOffline(PlayerBot bot)
+        {
+            if (bot == null || bot.Deleted)
+            {
+                return;
+            }
+
+            ReconcileOne(bot);
+
+            _offline[bot.Serial] = bot.TrackedCustody;
+        }
+
+        /// <summary>
+        /// A named bot has logged in. What the ledger held for it while it was offline becomes its
+        /// TrackedCustody again, and the next census carries on as for any live bot - so anything that
+        /// really did change while it was away is booked then, by the ordinary rule.
+        /// </summary>
+        public static void NoteOnline(PlayerBot bot)
+        {
+            if (bot == null)
+            {
+                return;
+            }
+
+            int held;
+
+            if (_offline.TryGetValue(bot.Serial, out held))
+            {
+                bot.TrackedCustody = held;
+                _offline.Remove(bot.Serial);
+            }
+        }
+
+        /// <summary>Is this bot's custody in the offline bucket?</summary>
+        public static bool IsOffline(PlayerBot bot)
+        {
+            return bot != null && _offline.ContainsKey(bot.Serial);
         }
 
         /// <summary>
@@ -462,7 +568,16 @@ namespace Server.Custom
         /// </summary>
         public static void NoteDeparture(PlayerBot bot)
         {
-            if (bot == null || bot.TrackedCustody <= 0)
+            if (bot == null)
+            {
+                return;
+            }
+
+            // An offline named bot's units leave the bucket with it: everything it held has just
+            // been written down by NoteBotLoss, and leaving the entry would count them twice.
+            _offline.Remove(bot.Serial);
+
+            if (bot.TrackedCustody <= 0)
             {
                 return;
             }
@@ -560,45 +675,33 @@ namespace Server.Custom
 
                 bots++;
 
-                // A WORKING GATHERER LOOKS FIRST. HarvestSystem.Give drops ore into the pack from
-                // its own timer, and GathererBehavior.NoticeYield counts it on the next behaviour
-                // tick, up to two seconds later. A census landing in that gap used to count the
-                // unit here as "appeared" and then NoticeYield counted it again, leaving
-                // TrackedCustody one above the pack - so the census after that reported a live,
-                // perfectly honest miner as having lost a unit (F5's alarm, three times in the
-                // first ten-minute window after gatherers started working in earnest, 22 September
-                // 2026). Letting the gatherer notice now means the appeared branch below is left
-                // for what it says it is for: mining nothing else saw.
-                var gatherer = bot.Behavior as GathererBehavior;
-
-                if (gatherer != null)
+                // A named bot between its death and its corpse run has its pack on the corpse for
+                // a second. Its books are left as they were and counted as held; the run settles
+                // them (NamedBots.CorpseRun). INTERIM, with the death rule.
+                if (bot.CorpseRunPending)
                 {
-                    gatherer.NoticeYieldNow(bot);
+                    held += bot.TrackedCustody;
+                    continue;
                 }
 
-                int actual = BotHaul.Custody(bot);
-                int tracked = bot.TrackedCustody;
-
-                if (actual > tracked)
+                // An offline bot is counted from the bucket below, never twice. A live registry
+                // entry for one would be a logout that forgot to unregister it.
+                if (_offline.ContainsKey(bot.Serial))
                 {
-                    // Units appeared. The only thing that makes raw goods appear in a bot's pack
-                    // is the harvest timer, so this is mining that NoticeYield's poll missed.
-                    BotWorkSites.NoteMined(actual - tracked);
-                }
-                else if (actual < tracked)
-                {
-                    NoteUnexplained(bot, tracked - actual);
+                    continue;
                 }
 
-                bot.TrackedCustody = actual;
-
-                held += actual;
+                held += ReconcileOne(bot);
                 banked += BotHaul.InContainer(bot.FindBankNoCreate());
             }
 
-            Held = held;
+            int offline = OfflineHeld;
+
+            Held = held + offline;
             Banked = banked;
             Censused = bots;
+            OfflineHeldAtCensus = offline;
+            OfflineBotsAtCensus = _offline.Count;
 
             // AFTER the walk, because the walk itself moves them: an appeared unit is counted as
             // mined and a vanished one as unexplained, both inside the loop above.
@@ -616,6 +719,47 @@ namespace Server.Custom
 
             LastReconcileUtc = DateTime.UtcNow;
             HasReconciled = true;
+        }
+
+        /// <summary>
+        /// One bot's reconcile: what it actually holds against what the ledger was told, the
+        /// difference booked as mined or unexplained, and the actual figure returned.
+        /// </summary>
+        private static int ReconcileOne(PlayerBot bot)
+        {
+            // A WORKING GATHERER LOOKS FIRST. HarvestSystem.Give drops ore into the pack from
+            // its own timer, and GathererBehavior.NoticeYield counts it on the next behaviour
+            // tick, up to two seconds later. A census landing in that gap used to count the
+            // unit here as "appeared" and then NoticeYield counted it again, leaving
+            // TrackedCustody one above the pack - so the census after that reported a live,
+            // perfectly honest miner as having lost a unit (F5's alarm, three times in the
+            // first ten-minute window after gatherers started working in earnest, 22 September
+            // 2026). Letting the gatherer notice now means the appeared branch below is left
+            // for what it says it is for: mining nothing else saw.
+            var gatherer = bot.Behavior as GathererBehavior;
+
+            if (gatherer != null)
+            {
+                gatherer.NoticeYieldNow(bot);
+            }
+
+            int actual = BotHaul.Custody(bot);
+            int tracked = bot.TrackedCustody;
+
+            if (actual > tracked)
+            {
+                // Units appeared. The only thing that makes raw goods appear in a bot's pack
+                // is the harvest timer, so this is mining that NoticeYield's poll missed.
+                BotWorkSites.NoteMined(actual - tracked);
+            }
+            else if (actual < tracked)
+            {
+                NoteUnexplained(bot, tracked - actual);
+            }
+
+            bot.TrackedCustody = actual;
+
+            return actual;
         }
 
         // ---- the file ----
@@ -705,6 +849,11 @@ namespace Server.Custom
                 Held,
                 Censused,
                 Banked);
+
+            text.AppendFormat(
+                " named offline: {0} unit(s) held by {1} named bot(s), counted in held.",
+                OfflineHeldAtCensus,
+                OfflineBotsAtCensus);
 
             text.AppendFormat(
                 " {0} hand-over(s) settled, {1} part-refused, {2} refused outright.",

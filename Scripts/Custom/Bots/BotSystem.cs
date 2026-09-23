@@ -111,15 +111,14 @@ namespace Server.Custom
 
             BotSession.Enabled = Config.Get("Custom.BotSessionsEnabled", true);
 
-            // FILL THE SPAWNERS AT STARTUP, which is the whole of the boot behaviour we owe.
+            // FILL THE SPAWNERS AT STARTUP, which is the throwaway half of the boot behaviour.
             //
             // Upstream's BotStartupManager.Initialize does two things: it sweeps World.Mobiles
             // deleting stale bots, and it forces every spawner to Respawn "rather than waiting up
-            // to 15 minutes" (uo-offline BotStartupManager.cs:43-87). Only the second half is
-            // ported. The first is already done, better, and elsewhere: PlayerBot.Deserialize ends
-            // in Timer.DelayCall(Delete), so every bot deletes itself on load however it got into
-            // the save - which for this engine is the mechanism rather than a mop, because ServUO
-            // writes every mobile in World.Mobiles and ModernUO wrote none of them.
+            // to 15 minutes" (uo-offline BotStartupManager.cs:43-87). Both are ported: the sweep is
+            // BotStartupPurge, at Initialize, and keeps the named cast as theirs keeps a guild-bound
+            // bot; this is the fill. The named cast is not on any spawner and logs itself in at the
+            // same moment (NamedBots.LogInAll).
             //
             // ServerStarted rather than Initialize, for the reason the smoke is deferred just
             // below: spawning during Initialize puts mobiles in the world before the map and the
@@ -192,6 +191,20 @@ namespace Server.Custom
                 return false;
             }
 
+            // The roster reloads with it, and a refusal there is reported on Bots.Named rather than
+            // failing this reload: the roster is its own file with its own failure contract, and a
+            // bad roster edit keeps the previous cast rather than the previous caps.
+            string rosterError;
+
+            if (BotRoster.TryLoad(out rosterError))
+            {
+                NamedBots.Apply();
+            }
+            else
+            {
+                Log.Error("Bot roster NOT reloaded: {0}", rosterError);
+            }
+
             Log.Info(
                 "Bot config reloaded. {0}. Chat corpus: {1} line(s) across {2} categor(ies).",
                 _caps.Describe(),
@@ -248,6 +261,7 @@ namespace Server.Custom
             int travelling = 0;
             int lingering = 0;
             int clockless = 0;
+            int named = 0;
             Map facet = null;
             var byBehaviour = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -263,6 +277,13 @@ namespace Server.Custom
                 }
 
                 count++;
+
+                // A named bot's name is RESERVED, not claimed (NamePool.Reserve), so the name
+                // census below is a throwaway census and a named bot is counted out of it.
+                if (bot.IsNamed)
+                {
+                    named++;
+                }
 
                 if (bot.PhaseClockUnset)
                 {
@@ -432,12 +453,16 @@ namespace Server.Custom
             // circuited.
             // A claimed name with no live bot behind it is a leak in the census the population
             // manager now depends on, so it is worth saying out loud.
-            if (NamePool.InUseCount > count)
+            int throwaway = count - named;
+
+            detail += String.Format(". {0} of them named, whose names are reserved rather than claimed", named);
+
+            if (NamePool.InUseCount > throwaway)
             {
                 return HealthResult.Warn(String.Format(
-                    "{0} claimed name(s) but only {1} live bot(s) - names leaked on delete. {2}",
+                    "{0} claimed name(s) but only {1} live throwaway bot(s) - names leaked on delete. {2}",
                     NamePool.InUseCount,
-                    count,
+                    throwaway,
                     detail));
             }
 
@@ -458,7 +483,7 @@ namespace Server.Custom
             // thing that can drift - and this is that drift, arriving on schedule to prove the
             // point. So this is a reported number that is wrong, not a decision that is wrong.
             // Upstream's AllowSpawn does read its equivalent tally.
-            if (NamePool.InUseCount < count)
+            if (NamePool.InUseCount < throwaway)
             {
                 // Name them. The count alone says a fault exists; the list says which bots are
                 // wearing a name the registry does not hold, which is the whole of what somebody
@@ -469,7 +494,7 @@ namespace Server.Custom
                 {
                     var bot = mobile as PlayerBot;
 
-                    if (bot != null && !NamePool.IsClaimed(bot.Name) && unclaimed.Count < 6)
+                    if (bot != null && !bot.IsNamed && !NamePool.IsClaimed(bot.Name) && unclaimed.Count < 6)
                     {
                         unclaimed.Add(String.Format(
                             "{0} ({1}, {2})",
@@ -480,9 +505,9 @@ namespace Server.Custom
                 }
 
                 return HealthResult.Warn(String.Format(
-                    "{0} live bot(s) but only {1} claimed name(s) - the census reads low. "
+                    "{0} live throwaway bot(s) but only {1} claimed name(s) - the census reads low. "
                     + "Unclaimed: {2}. {3}",
-                    count,
+                    throwaway,
                     NamePool.InUseCount,
                     unclaimed.Count == 0 ? "none found, so a name is claimed twice" : String.Join(", ", unclaimed.ToArray()),
                     detail));

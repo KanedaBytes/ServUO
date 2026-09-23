@@ -261,10 +261,36 @@ namespace Server.Custom
             get { return _inUse.Count; }
         }
 
-        /// <summary>Register a name as live. False if it was already taken.</summary>
+        // ---- Names a throwaway may never wear ----
+        //
+        // The named cast's names (BotRoster). NOT in _inUse and not counted by InUseCount: that is
+        // the throwaway census, and a named bot is offline half its life with its name still its
+        // own. Claim refuses them, so PickUnique rolls past them like any other taken name.
+
+        private static readonly HashSet<string> _reserved =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Withhold these names from every throwaway. Additive; see BotRoster.Reserve.</summary>
+        public static void Reserve(IEnumerable<string> names)
+        {
+            foreach (string name in names)
+            {
+                if (!String.IsNullOrEmpty(name))
+                {
+                    _reserved.Add(name);
+                }
+            }
+        }
+
+        public static bool IsReserved(string name)
+        {
+            return !String.IsNullOrEmpty(name) && _reserved.Contains(name);
+        }
+
+        /// <summary>Register a name as live. False if it was already taken, or belongs to a named bot.</summary>
         public static bool Claim(string name)
         {
-            return !String.IsNullOrEmpty(name) && _inUse.Add(name);
+            return !String.IsNullOrEmpty(name) && !_reserved.Contains(name) && _inUse.Add(name);
         }
 
         /// <summary>

@@ -390,6 +390,17 @@ namespace Server.Custom
                 return;
             }
 
+            // A NAMED BOT LOGS OUT; it is never deleted (Sean, 21 September 2026). A fixture never
+            // reaches this pass today - Role Fixed is skipped above - so this is the guard for the
+            // day a named bot is given a session, and it is the whole of what that day needs.
+            // Upstream's permanent bot is refused at CanLogoutNow instead (BotSessionManager.cs:228),
+            // because its logout IS the delete; ours has a logout to go to.
+            if (bot.IsNamed)
+            {
+                NamedBots.LogOut(bot, "session");
+                return;
+            }
+
             bot.DeletionReason = BotGoodsLedger.ReasonLogout;
             bot.Delete();
         }
