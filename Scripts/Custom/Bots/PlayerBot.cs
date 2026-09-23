@@ -419,6 +419,31 @@ namespace Server.Custom
         /// </summary>
         public int StashRemaining { get; set; }
 
+        // ---- the gold ledger (7f-1, ECONOMY.md). BotGoldLedger's. ----
+
+        /// <summary>
+        /// How much gold this bot is believed to hold - pack, bank box and account. Transient, and
+        /// the gold ledger's twin of TrackedCustody: every deliberate change (the purse at birth, a
+        /// trade, a recorded loss) moves it at the moment it happens, and the census compares it
+        /// with what the bot really holds. Gold has no unrecorded source, so any difference fails
+        /// Bots.Gold.
+        /// </summary>
+        public long TrackedGold { get; set; }
+
+        /// <summary>
+        /// How much of this bot's gold is still the starting purse. Spent first, like the stash, so
+        /// a loss record says how much of the purse was never used. Saved (v4) for the purge's sake,
+        /// exactly as StashRemaining is.
+        /// </summary>
+        public int StartingGoldRemaining { get; set; }
+
+        /// <summary>
+        /// Has this bot been given its starting purse? Saved (v4). Every bot is given it in its
+        /// constructor; the flag exists for the named cast built before the rule, which are given it
+        /// once, late, by NamedBots - and never twice.
+        /// </summary>
+        public bool StartingGoldGranted { get; set; }
+
         /// <summary>
         /// Why this bot is being deleted, for the loss record. Transient, null until somebody
         /// says - and the paths that do are the ones that know: the boot purge, the session
@@ -667,6 +692,11 @@ namespace Server.Custom
 
             AddItem(new Backpack());
             EquipmentTable.RollOutfit(this);
+
+            // The purse (Sean, 23 September 2026): every bot, named or throwaway, is born with
+            // economy.startingGold in its pack, and the gold ledger counts it in as starting gold.
+            // It replaces upstream's tier-scaled purse, which EquipmentTable no longer rolls.
+            BotGoldLedger.GrantStartingGold(this);
 
             // A bot must be attackable for notoriety to mean anything, so unlike the daily-life
             // actors it is NOT IsInvulnerable. Nothing attacks it in this session; the point is
@@ -1051,6 +1081,10 @@ namespace Server.Custom
             // rest of the bot.
             BotGoodsLedger.NoteContainerLoss(this, c, BotGoodsLedger.ReasonDeath);
 
+            // And the purse with it: a throwaway's gold is on the corpse, lootable, and no longer
+            // its own. Written down as `death` for the goods ledger's reason (7f-1).
+            BotGoldLedger.NoteContainerLoss(this, c, BotGoodsLedger.ReasonDeath);
+
             // The backstop. OnBeforeDeath has already released the mount on every ordinary death;
             // this catches one given to the bot between the two, and costs nothing when there is
             // none. See OnBeforeDeath for why the release moved there.
@@ -1320,8 +1354,25 @@ namespace Server.Custom
                 // (REVIEW.md F5, rule 4).
                 BotGoodsLedger.NoteContainerLoss(this, Backpack, BotGoodsLedger.ReasonReclass);
 
+                // THE PURSE IS THE BOT'S, NOT THE OUTFIT'S (7f-1). A re-derive changes what a bot
+                // does, not what it owns - and a named bot's gold is everything it has earned. So
+                // every coin in the pack, including any in a bag the old kit carried, is lifted to
+                // the top of the pack before the rest goes.
+                foreach (Gold gold in Backpack.FindItemsByType<Gold>(true))
+                {
+                    if (gold.Parent != Backpack)
+                    {
+                        Backpack.DropItem(gold);
+                    }
+                }
+
                 foreach (Item item in new List<Item>(Backpack.Items))
                 {
+                    if (item is Gold)
+                    {
+                        continue;
+                    }
+
                     item.Delete();
                 }
             }
@@ -1413,6 +1464,10 @@ namespace Server.Custom
             // them on its way past - counting them here as well would double the number.
             BotGoodsLedger.NoteBotLoss(this, DeletionReason ?? BotGoodsLedger.ReasonDeleted);
 
+            // And its gold, the same way and for the same rule: a throwaway's purse vanishes with
+            // it and is recorded (Sean, 23 September 2026).
+            BotGoldLedger.NoteBotLoss(this, DeletionReason ?? BotGoodsLedger.ReasonDeleted);
+
             // The beast goes with its owner. Its own OnThink reaper would get there within ten
             // seconds anyway, but leaving a llama standing in a field for ten seconds after the
             // miner vanished is exactly the kind of loose end that becomes a stray.
@@ -1431,6 +1486,7 @@ namespace Server.Custom
             // bots, and this one is leaving. Counted as unexplained, which fails
             // Bots.Conservation rather than quietly putting the books out (REVIEW.md F5).
             BotGoodsLedger.NoteDeparture(this);
+            BotGoldLedger.NoteDeparture(this);
 
             NamePool.Release(Name);
             LiveRegistry.Unregister(this);
@@ -1458,7 +1514,7 @@ namespace Server.Custom
         {
             base.Serialize(writer);
 
-            writer.Write(3); // version
+            writer.Write(4); // version
 
             writer.Write((byte)Class);
             writer.Write((byte)SkillTier);
@@ -1484,6 +1540,12 @@ namespace Server.Custom
             // v3. THE NAMED CAST'S IDENTITY, and the reason a named bot comes back at all:
             // BotStartupPurge keeps any bot that carries one. Null for a throwaway.
             writer.Write(RosterName);
+
+            // v4. THE PURSE (7f-1). Granted is what stops a named bot being given the starting gold
+            // twice; Remaining is StashRemaining's reason again - the purge's loss record splits
+            // the unspent purse from gold the bot earned.
+            writer.Write(StartingGoldGranted);
+            writer.Write(StartingGoldRemaining);
         }
 
         public override void Deserialize(GenericReader reader)
@@ -1516,6 +1578,12 @@ namespace Server.Custom
             if (version >= 3)
             {
                 RosterName = reader.ReadString();
+            }
+
+            if (version >= 4)
+            {
+                StartingGoldGranted = reader.ReadBool();
+                StartingGoldRemaining = reader.ReadInt();
             }
 
             _behavior = new IdleBehavior();

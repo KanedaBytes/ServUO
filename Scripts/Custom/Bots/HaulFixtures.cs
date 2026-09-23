@@ -91,15 +91,22 @@ namespace Server.Custom
                 }
 
                 // Fill the bench to five short of its cap, whatever it happened to spawn holding.
-                int room = CrafterStock.StockCap - CrafterStock.Count(smith, profile);
+                int room = CrafterStock.Room(smith, profile);
                 CrafterStock.Add(smith, profile, Math.Max(0, room - 5));
+
+                // Clear the spawn stash, on the books and in the pack: EquipmentTable rolls it at a
+                // random pile graphic, and a large pile refines two ingots a unit, so "five units
+                // fill five slots" is only true of the medium piles Load puts there.
+                BotGoodsLedger.NoteContainerLoss(miner, miner.Backpack, FixtureReason);
+                BotHaul.ConsumeFrom(miner.Backpack, BotHaul.FamilyOf(raw), Int32.MaxValue);
 
                 int before = Load(miner, raw, 60);
                 int deliveredBefore = BotWorkSites.Delivered;
 
-                int offered;
-                int accepted = BotWorkDelivery.Settle(
-                    miner, raw, amount => CrafterStock.Add(smith, profile, amount), "fixture-forge", out offered);
+                // A REAL TRADE since 7f-1: the bench pays for what it takes, through BotTrade.
+                BotTradeQuote quote;
+                int accepted = BotWorkDelivery.SettleTrade(miner, smith, profile, "fixture-forge", out quote);
+                int offered = quote.Offered;
 
                 bool ok = Expect(report,
                     offered == before + 60,
@@ -117,9 +124,14 @@ namespace Server.Custom
                     "the pack holds " + BotHaul.Offered(miner, raw) + " where " + (offered - 5) + " was expected");
 
                 ok &= Expect(report,
-                    CrafterStock.Count(smith, profile) == CrafterStock.StockCap,
+                    CrafterStock.Held(smith, profile) == CrafterStock.StockCap,
                     "the five that moved really arrived, as refined stock at the cap",
-                    "the bench holds " + CrafterStock.Count(smith, profile) + " of " + CrafterStock.StockCap);
+                    "the bench holds " + CrafterStock.Held(smith, profile) + " of " + CrafterStock.StockCap);
+
+                ok &= Expect(report,
+                    quote.Limit == BotTradeLimit.Room,
+                    "and it was the cap that stopped it, not the smith's purse",
+                    "the trade was cut short by " + quote.Limit);
 
                 ok &= Expect(report,
                     BotWorkSites.Delivered - deliveredBefore == 5,

@@ -950,25 +950,29 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// Take material a gatherer has just handed over. Returns how much was accepted.
+        /// This crafter has just bought a gatherer's load through BotTrade: the stock is already in
+        /// its pack and the gold already out of it. What is left is the crafter's own side of the
+        /// scene - it is no longer dry, and the work probe's counters move.
+        ///
+        /// It used to BE the hand-over (Accept, which called CrafterStock.Add and paid nothing).
+        /// 7f-1 moved the goods and the gold into the one transaction path, and this is what stayed.
         /// </summary>
-        public int Accept(PlayerBot bot, int amount)
+        public void NoteBought(int units)
         {
-            if (_profile == null)
+            if (units <= 0)
             {
-                return 0;
+                return;
             }
 
-            int accepted = CrafterStock.Add(bot, _profile, amount);
+            _drySince = null;
+            Received += units;
+            Deliveries++;
+        }
 
-            if (accepted > 0)
-            {
-                _drySince = null;
-                Received += accepted;
-                Deliveries++;
-            }
-
-            return accepted;
+        /// <summary>What this crafter's trade is: its materials, its stock family, what it buys.</summary>
+        public CrafterProfile Profile
+        {
+            get { return _profile; }
         }
 
         /// <summary>Units taken over the counter from gatherers since attaching. The work probe's proof.</summary>

@@ -12,19 +12,20 @@
 // stock. Otherwise it goes to the bank box, which is the "no buyer today"
 // ending rather than a failure.
 //
-// Upstream's DeliverMaterials, with the money taken out.
+// Upstream's DeliverMaterials, with the money put back - through the contract.
 //
 // Theirs paid the gatherer 2-4gp per unit, spent from the CRAFTER'S purse, and
-// refused the sale outright when the crafter was broke. That is the economy, and
-// the economy is 7f. So the load moves and the gold does not, which the brief
-// asked for in those words - "the goods go in the pack and the ledger, nothing
-// changes hands for gold". The scene still plays, because the scene is what
-// makes it visible: the gatherer says its line, the crafter answers, the trade
-// closes. Watching two bots meet in a smithy and hand over a day's ore is the
-// entire point of the session, and none of it needs coin to read correctly.
-//
-// SEAM, restored by the economy session (7f): CrafterStock.SpendGold on the
-// buyer, Gold into the seller's pack, and the refusal when the buyer cannot pay.
+// refused the sale outright when the crafter was broke. Until 7f the load moved
+// and the gold did not. Since 7f-1 (23 September 2026) a hand-over at a bench IS
+// A TRADE, and it goes through BotTrade, the one path ECONOMY.md allows: the
+// crafter pays from its own pack for exactly the units it takes, at the stock NPC
+// price (bots.json economy), the gatherer is paid into its pack, and the trade is
+// journalled. A crafter with no gold takes nothing and says so (haggle_broke),
+// and the hauler keeps its load - rule 1 below, unchanged. What upstream did that
+// we do not: pay the gatherer anyway, from nowhere, when the buyer was broke or
+// absent (BotEconomy.cs:340-344). No buyer still means the bot's own bank box.
+// The scene still plays: the gatherer says its line, the crafter answers, the
+// trade closes.
 //
 // -----------------------------------------------------------------------------
 // CONSERVATION, 22 September 2026 (REVIEW.md F5).
@@ -122,15 +123,38 @@ namespace Server.Custom
 
             CrafterBehavior buyer = FindBuyer(bot, raw);
             PlayerBot crafter = buyer == null ? null : OwnerOf(buyer);
+            bool trade = buyer != null && crafter != null && buyer.Profile != null;
 
-            Func<int, int> receiver = buyer == null
-                ? null
-                : new Func<int, int>(amount => buyer.Accept(crafter, amount));
-
-            // What moves is the whole FAMILY - every colour of ore, every wood of log - while the
-            // trade match above stays the plain class constant (BotHaul.FamilyOf).
             int offered;
-            int accepted = Settle(bot, BotHaul.FamilyOf(raw), receiver, destination.Id, out offered);
+            int accepted;
+
+            if (trade)
+            {
+                // A BENCH IS A TRADE (7f-1). The crafter pays for exactly what it takes, from its
+                // own pack; what it cannot pay for, or has no room for, stays with the hauler.
+                BotTradeQuote quote;
+
+                accepted = SettleTrade(bot, crafter, buyer.Profile, destination.Id, out quote);
+                offered = quote.Offered;
+
+                if (accepted > 0)
+                {
+                    buyer.NoteBought(accepted);
+                }
+                else if (offered > 0 && quote.Limit == BotTradeLimit.Gold)
+                {
+                    // It cannot cover even the smallest part of the load, and says so - with the
+                    // price of the whole of it, which is what it was offered.
+                    Say(crafter, "haggle_broke", quote.FullPrice);
+                }
+            }
+            else
+            {
+                // Nobody working the bench: the bot's own bank box. What moves is the whole FAMILY
+                // - every colour of ore, every wood of log - while the trade match above stays the
+                // plain class constant (BotHaul.FamilyOf).
+                accepted = Settle(bot, BotHaul.FamilyOf(raw), null, destination.Id, out offered);
+            }
 
             if (offered <= 0)
             {
@@ -150,7 +174,7 @@ namespace Server.Custom
                 return false;
             }
 
-            if (buyer == null)
+            if (!trade)
             {
                 Say(bot, "gather_deliver");
 
@@ -168,7 +192,7 @@ namespace Server.Custom
             PlayScene(bot, crafter);
 
             Log.Debug(
-                "{0} delivered {1} of {2} {3} to {4} at '{5}'.",
+                "{0} sold {1} of {2} {3} to {4} at '{5}'.",
                 bot.Name,
                 accepted,
                 offered,
@@ -247,7 +271,12 @@ namespace Server.Custom
         }
 
         /// <summary>
-        /// A working crafter nearby whose trade wants this good.
+        /// A working crafter nearby whose trade wants this good - a NAMED one first.
+        ///
+        /// Sean's first trade is "a gatherer delivers to a named crafter", and the named cast is who
+        /// staffs the benches. A throwaway crafter clocked in at a bench buys too, from its own
+        /// purse, through the same path (decided 23 September 2026): otherwise it would be the one
+        /// crafter still taking goods for nothing.
         ///
         /// A bounded GetMobilesInRange, not a World.Mobiles sweep, and the same shape
         /// FaceNearestPerson already uses (CLAUDE.md section 15). The enumerable is pooled and
@@ -263,6 +292,7 @@ namespace Server.Custom
             }
 
             IPooledEnumerable eable = map.GetMobilesInRange(seller.Location, BuyerRange);
+            CrafterBehavior throwaway = null;
 
             try
             {
@@ -277,9 +307,19 @@ namespace Server.Custom
 
                     var crafter = other.Behavior as CrafterBehavior;
 
-                    if (crafter != null && crafter.RawGood == raw)
+                    if (crafter == null || crafter.RawGood != raw)
+                    {
+                        continue;
+                    }
+
+                    if (other.IsNamed)
                     {
                         return crafter;
+                    }
+
+                    if (throwaway == null)
+                    {
+                        throwaway = crafter;
                     }
                 }
             }
@@ -288,7 +328,7 @@ namespace Server.Custom
                 eable.Free();
             }
 
-            return null;
+            return throwaway;
         }
 
         /// <summary>
@@ -314,8 +354,36 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// A hand-over at a bench: a trade through BotTrade, and then the delivery's own books -
+        /// the hand-over record, the delivery counter, the pack beast. Returns the units the buyer
+        /// took and paid for; the quote says why it was not more. Internal so HaulFixtures and
+        /// EconomyFixtures drive the code the arrival does, without needing a destination.
+        /// </summary>
+        internal static int SettleTrade(
+            PlayerBot seller, PlayerBot buyer, CrafterProfile profile, string destinationId, out BotTradeQuote quote)
+        {
+            quote = BotTrade.Quote(seller, buyer, profile, destinationId);
+
+            BotTradeOutcome outcome = BotTrade.Execute(quote);
+            int accepted = outcome == BotTradeOutcome.Completed ? quote.Accepted : 0;
+
+            BotGoodsLedger.NoteHandover(seller, destinationId, quote.Offered, accepted);
+            BotWorkSites.NoteDelivery(accepted);
+
+            // Rule 2: the beast goes only once the panniers are empty, so a refused or part-paid
+            // hand-over leaves animal and load together.
+            BotHaul.ReleaseIfEmpty(seller);
+
+            return accepted;
+        }
+
+        /// <summary>
         /// The hand-over itself: what is on offer, what the receiver takes, and what stays.
         /// Returns the accepted amount and reports what was offered.
+        ///
+        /// A NULL receiver - the bot's own bank box - is the only one live code passes since 7f-1:
+        /// a bench is a trade and goes through SettleTrade. A non-null receiver takes goods for
+        /// nothing, so only a fixture may pass one, to prove the F5 arithmetic on its own.
         ///
         /// SEPARATE FROM TryDeliver ON PURPOSE. Everything above this in TryDeliver is about
         /// WHERE the bot is standing - the destination's type, its arrivals, the twelve-tile
@@ -450,6 +518,12 @@ namespace Server.Custom
 
         private static void Say(PlayerBot bot, string category)
         {
+            Say(bot, category, 0);
+        }
+
+        /// <summary>A line with a price in play, for {price} - haggle_broke's "i dont have {price}".</summary>
+        private static void Say(PlayerBot bot, string category, int price)
+        {
             if (bot == null || bot.Deleted || bot.Map == null || bot.Map == Map.Internal)
             {
                 return;
@@ -462,7 +536,7 @@ namespace Server.Custom
                 return;
             }
 
-            var context = new ChatTokenContext { Bot = bot };
+            var context = new ChatTokenContext { Bot = bot, Price = price };
             string resolved;
 
             if (ChatTokens.TryResolve(line, context, out resolved))

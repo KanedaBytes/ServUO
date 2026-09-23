@@ -32,8 +32,8 @@
 // A GOOD IS A FAMILY, NOT A TYPE (7f-1, 23 September 2026). The harvest system gives a miner the
 // ore of the vein it is standing on once its skill reaches that vein's (HarvestSystem.cs:142-143,
 // :368; Mining.GetResourceType returns the vein resource's Types[0], Mining.cs:229), and a lumber
-// bank's wood the same way: dull copper and oak come home in the same pack as iron and plain logs. Every count
-// here used to be `item.GetType() == raw` against IronOre or Log, so a coloured pile was invisible
+// bank's wood the same way: dull copper and oak come home in the same pack as iron and plain
+// logs. Every count here used to be `item.GetType() == raw` against IronOre or Log, so a coloured pile was invisible
 // - not offered, not banked, not in the books, and not in the pack-full check, which let a miner
 // swing on into HarvestSystem's silent delete. Sean: the whole ore family and the whole log family
 // are carried, capacity-checked, ledgered and priced by colour. So every count and every move

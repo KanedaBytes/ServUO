@@ -120,6 +120,7 @@ namespace Server.Custom
             // appending them one at a time would be a few hundred opens at the worst moment of
             // the boot.
             BotGoodsLedger.Flush();
+            BotGoldLedger.Flush();
 
             Log.Info(
                 "Purged {0} stale bot(s) from the world save; kept {1} named bot(s). Throwaway bots do not survive a restart.",
@@ -164,6 +165,10 @@ namespace Server.Custom
                 if (!IsStale(bot))
                 {
                     BotGoodsLedger.NoteNamedCarried(bot);
+
+                    // And its gold, which it keeps too (Sean, 23 September 2026): counted in as
+                    // opening, then held offline - re-read from the bot at every census.
+                    BotGoldLedger.NoteNamedCarried(bot);
                     kept++;
                     continue;
                 }
@@ -196,6 +201,10 @@ namespace Server.Custom
             }
 
             BotGoodsLedger.NoteOpening(bot);
+
+            // A throwaway's purse is inherited and destroyed exactly as its goods are: counted in
+            // as opening here, written down as a boot-purge loss by its OnDelete.
+            BotGoldLedger.NoteOpening(bot);
 
             bot.DeletionReason = BotGoodsLedger.ReasonBootPurge;
         }

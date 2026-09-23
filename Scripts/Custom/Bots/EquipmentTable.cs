@@ -48,33 +48,22 @@ namespace Server.Custom
         }
 
         // -------------------------------------------------------------------
-        // Backpack loot — gold and class-appropriate carry items, so a bot
-        // is worth snooping/stealing from and drops a real corpse on death.
+        // Backpack loot — class-appropriate carry items, so a bot is worth
+        // snooping/stealing from and drops a real corpse on death. Class
+        // items are the consumables/tools that class would plausibly carry:
+        // bandages for fighters, potions and a spare reagent stash for
+        // mages, lockpicks for thieves, etc.
         //
-        // Gold scales with skill tier (a Grandmaster carries a fatter
-        // purse than a Novice). Class items are the consumables/tools that
-        // class would plausibly carry: bandages for fighters, potions and
-        // a spare reagent stash for mages, lockpicks for thieves, etc.
+        // NO GOLD, since 7f-1. Upstream rolled a tier-scaled purse here
+        // (40-1400, ±35%) plus coin in four other places below. Sean's rule
+        // (23 September 2026) is one purse, economy.startingGold, for every
+        // bot, given once in the PlayerBot constructor and counted in by the
+        // gold ledger - so none of those may mint coin any more, and a
+        // re-derive that re-rolls this outfit cannot mint it either.
         // -------------------------------------------------------------------
         private static void RollBackpackLoot(PlayerBot bot, BotClass cls, BotSkillTier tier)
         {
             if (bot.Backpack == null) return;
-
-            // --- Gold, scaled by tier ---
-            int goldBase = tier switch
-            {
-                BotSkillTier.Novice      => 40,
-                BotSkillTier.Apprentice  => 90,
-                BotSkillTier.Journeyman  => 170,
-                BotSkillTier.Adept       => 300,
-                BotSkillTier.Expert      => 500,
-                BotSkillTier.Master      => 850,
-                BotSkillTier.Grandmaster => 1400,
-                _                        => 100,
-            };
-            // ±35% spread so bots aren't all carrying identical purses.
-            int gold = (int)(goldBase * Utility.RandomMinMax(65, 135) / 100.0);
-            if (gold > 0) AddToPack(bot, "Server.Items.Gold", gold);
 
             // --- Class-appropriate carry items ---
             switch (cls)
@@ -187,10 +176,9 @@ namespace Server.Custom
                     break;
 
                 case BotClass.Merchant:
-                    // The richest characters in T2A — a heavier purse and
-                    // the appraiser's scales.
-                    AddToPack(bot, "Server.Items.Gold",
-                              Utility.RandomMinMax(100, 150 + 150 * BotSkillTierHelper.Rank(tier)));
+                    // The richest characters in T2A — upstream gave them a
+                    // heavier purse, which the one starting purse replaces
+                    // (7f-1). The appraiser's scales stay.
                     MaybeAddToPack(bot, "Server.Items.Scales", 0.5, 1);
                     if (Utility.RandomDouble() < 0.5)
                     {
@@ -453,9 +441,7 @@ namespace Server.Custom
                                   Utility.RandomMinMax(5, 15));
                         break;
 
-                    default: // loose coin outside the main purse
-                        AddToPack(bot, "Server.Items.Gold",
-                                  Utility.RandomMinMax(20, 80));
+                    default: // loose coin, once - the one purse replaces it (7f-1)
                         break;
                 }
             }
@@ -532,9 +518,7 @@ namespace Server.Custom
 
                 switch (theme)
                 {
-                    case 0: // rainy-day purse
-                        AddToBag(bag, "Server.Items.Gold",
-                                 Utility.RandomMinMax(40, 60 + 60 * rank));
+                    case 0: // keepsake bag - the rainy-day coin went with 7f-1's one purse
                         if (Utility.RandomDouble() < 0.5)
                         {
                             AddToBag(bag, GemTypes[Utility.Random(GemTypes.Length)], 1);
@@ -594,9 +578,9 @@ namespace Server.Custom
             // The thief's second pouch is not, strictly speaking, theirs.
             if (cls == BotClass.Thief)
             {
+                // The coin in it is gone (7f-1: nothing mints gold but the one purse);
+                // the trinkets stay.
                 var pinched = NewCarryBag();
-                AddToBag(pinched, "Server.Items.Gold",
-                         Utility.RandomMinMax(60, 250));
                 if (Utility.RandomDouble() < 0.6)
                 {
                     AddToBag(pinched, JewelryTypes[Utility.Random(JewelryTypes.Length)], 1);
@@ -953,9 +937,9 @@ namespace Server.Custom
         // standing at a bench with empty hands on the day it appears.
         //
         // Upstream's StarterProps also carried GOLD - 120 to 400 by trade - which is deliberately
-        // NOT ported here: nothing in this session spends or earns coin, and seeding a purse for
-        // a purse system that does not exist would be inventing an economy one item at a time.
-        // That part returns with 7f.
+        // NOT ported: since 7f-1 every bot, artisan or not, has the one starting purse
+        // (economy.startingGold, BotGoldLedger.GrantStartingGold), and a trade extra on top would be
+        // a second source of coin the contract does not have.
         private static void SeedCrafterStarterProps(PlayerBot bot)
         {
             CrafterProfile profile = CrafterProfiles.For(bot.Class);

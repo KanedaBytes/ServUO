@@ -50,6 +50,34 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// How much of this trade's stock is in the pack in EVERY colour - the number StockCap is
+        /// about (7f-1). Count, above, stays the plain material, because that is what the craft
+        /// actually spends: a smith holding dull copper ingots and no iron is still dry.
+        /// </summary>
+        public static int Held(PlayerBot bot, CrafterProfile profile)
+        {
+            Container pack = bot == null ? null : bot.Backpack;
+
+            if (pack == null || profile == null)
+            {
+                return 0;
+            }
+
+            if (profile.StockFamily == null)
+            {
+                return Count(bot, profile);
+            }
+
+            return pack.GetAmount(profile.StockFamily, false);
+        }
+
+        /// <summary>How many more products this bench will take before StockCap, in any colour.</summary>
+        public static int Room(PlayerBot bot, CrafterProfile profile)
+        {
+            return Math.Max(0, StockCap - Held(bot, profile));
+        }
+
+        /// <summary>
         /// Take material out of the pack. All or nothing.
         ///
         /// Upstream's shape kept deliberately: a partial consume would leave the pack short and
@@ -96,9 +124,10 @@ namespace Server.Custom
         /// <summary>
         /// Put material into the pack, up to StockCap. Returns how much was actually accepted.
         ///
-        /// The return value is not decoration: the delivery hook reports it, and a gatherer that
-        /// hauled sixty ore to a smith already holding two hundred and forty ingots needs to know
-        /// only ten of them landed.
+        /// NOT THE DELIVERY PATH ANY MORE (7f-1). A delivery is a trade, and a trade goes through
+        /// BotTrade, which pays for what it takes and refines each colour into its own product.
+        /// This is what is left: a fixture filling a bench to a known level. It mints stock from
+        /// nothing, which is exactly why nothing live may call it.
         /// </summary>
         public static int Add(PlayerBot bot, CrafterProfile profile, int amount)
         {

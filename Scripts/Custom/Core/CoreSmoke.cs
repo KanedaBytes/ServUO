@@ -253,6 +253,14 @@ namespace Server.Custom
             // finally.
             passed &= NamedBotFixtures.RunFixtures(report);
 
+            // The transaction contract (Scripts/Custom/Bots/ECONOMY.md): goods and gold move
+            // together or not at all, a failure after any step rolls every step back, a buyer takes
+            // only what it can pay for, a throwaway's purse is written down at the purge, a named
+            // bot's survives a logout, every colour of ore and log is counted and priced, and every
+            // newborn holds the purse (Scripts/Custom/Bots/EconomyFixtures.cs). Map.Internal, books
+            // kept, deleted in a finally.
+            passed &= EconomyFixtures.RunFixtures(report);
+
             int failing, warning;
             RunHealthChecks(report, out failing, out warning);
 

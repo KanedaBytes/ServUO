@@ -88,6 +88,12 @@ namespace Server.Custom
 
         /// <summary>The other party, when a line is addressed at somebody. May be null.</summary>
         public Mobile Other { get; set; }
+
+        /// <summary>
+        /// A price in gold, when the line is about one - the trade a buyer could not cover, say.
+        /// Zero means there is no price in play, and {price} then refuses the line.
+        /// </summary>
+        public int Price { get; set; }
     }
 
     public sealed class ChatToken
@@ -153,11 +159,16 @@ namespace Server.Custom
             // materials to be short of.
             Register("mat", ChatTokenOwner.Crafting, ResolveMaterial);
 
+            // Economy, 7f-1: the one trade there is (BotTrade) knows its price, and a crafter that
+            // cannot cover a load says so with haggle_broke - "crap i dont have {price}". A line
+            // spoken with no price in its context resolves to nothing and is refused, like {mat}
+            // for a bot with no trade.
+            Register("price", ChatTokenOwner.Economy, ResolvePrice);
+
             // ---- reserved: the token is real, the session that fills it is not here ----
 
             // Economy. {short} is COIN, not a short name: trade_short.txt reads "need {short}
             // more", the gap between an offer and a price, and it always travels with {price}.
-            Register("price", ChatTokenOwner.Economy, null);
             Register("item", ChatTokenOwner.Economy, null);
             Register("short", ChatTokenOwner.Economy, null);
 
@@ -170,6 +181,12 @@ namespace Server.Custom
             Register("actor", ChatTokenOwner.Journal, null);
             Register("other", ChatTokenOwner.Journal, null);
             Register("when", ChatTokenOwner.Journal, null);
+        }
+
+        /// <summary>The price in play, as a player would type it ("450gp"), or null when there is none.</summary>
+        private static string ResolvePrice(ChatTokenContext context)
+        {
+            return context == null || context.Price <= 0 ? null : context.Price + "gp";
         }
 
         /// <summary>The bot's trade materials, or null when it has no trade.</summary>

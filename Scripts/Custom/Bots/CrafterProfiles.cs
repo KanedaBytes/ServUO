@@ -68,6 +68,15 @@ namespace Server.Custom
         /// <summary>The gatherer good this trade buys. Null means no gatherer hauls it.</summary>
         public Type RawGood { get; set; }
 
+        /// <summary>
+        /// Every colour of this trade's stock - BaseIngot for a smith, BaseWoodBoard for a carpenter
+        /// - which is what CrafterStock.StockCap is counted against (7f-1). A trade refines each
+        /// colour of ore or log into ITS OWN ingot or board (BotPrice.ProductTypeFor), so a bench
+        /// can hold dull copper beside iron, and the cap is about how much a person hoards, not
+        /// which colour. Null for a trade no gatherer supplies.
+        /// </summary>
+        public Type StockFamily { get; set; }
+
         /// <summary>What the bot calls its materials out loud — the {mat} token.</summary>
         public string MaterialNoun { get; set; }
 
@@ -121,6 +130,7 @@ namespace Server.Custom
                 Materials = new[] { typeof(IronIngot) },
                 MakeMaterial = amount => new IronIngot(amount),
                 RawGood = typeof(IronOre),
+                StockFamily = typeof(BaseIngot),
                 MaterialNoun = "iron ingots",
                 StationType = "forge",
                 StationTag = null,
@@ -180,6 +190,7 @@ namespace Server.Custom
                 Materials = new[] { typeof(Board) },
                 MakeMaterial = amount => new Board(amount),
                 RawGood = typeof(Log),
+                StockFamily = typeof(BaseWoodBoard),
                 MaterialNoun = "boards",
                 StationType = "shop",
                 StationTag = "woodworking",

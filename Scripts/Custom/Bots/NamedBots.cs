@@ -391,8 +391,10 @@ namespace Server.Custom
 
                 bot.Internalize();
 
-                // Its spawn kit is on the books from the first moment, in the offline bucket.
+                // Its spawn kit is on the books from the first moment, in the offline bucket - and
+                // its purse, which the constructor gave it, in the gold ledger's offline set.
                 BotGoodsLedger.NoteOffline(bot);
+                BotGoldLedger.NoteOffline(bot);
 
                 CharactersCreated++;
 
@@ -404,6 +406,16 @@ namespace Server.Custom
             {
                 error = String.Format("account '{0}' has no free character slot", account.Username);
                 return null;
+            }
+
+            // THE PURSE, LATE (Sean, 23 September 2026). The cast built on 22 September came into
+            // the world before every bot was born with economy.startingGold. Each is given it once,
+            // on top of whatever it already holds - that gold is its own and counted as opening -
+            // and the saved flag is what stops a second boot giving it again.
+            if (BotGoldLedger.GrantLate(bot))
+            {
+                Log.Info("Named bot {0} was given its starting purse of {1} gold (built before the rule).",
+                    bot.Name, BotSystem.Store.Economy.StartingGold);
             }
 
             if (!String.Equals(bot.Name, entry.Name, StringComparison.Ordinal))
@@ -514,6 +526,7 @@ namespace Server.Custom
 
             LiveRegistry.Register(bot);
             BotGoodsLedger.NoteOnline(bot);
+            BotGoldLedger.NoteOnline(bot);
 
             Seed(bot, entry);
 
@@ -544,6 +557,7 @@ namespace Server.Custom
 
             BotMovement.ReleaseMount(bot);
             BotGoodsLedger.NoteOffline(bot);
+            BotGoldLedger.NoteOffline(bot);
 
             BotLog.Note(bot, BotLogKind.Session, "logged out ({0})", reason);
 
@@ -687,6 +701,10 @@ namespace Server.Custom
                     }
 
                     BotGoodsLedger.NoteContainerLoss(bot, corpse, BotGoodsLedger.ReasonDeath);
+
+                    // Gold is Movable, so Corpse.Open brings the purse back; anything that still
+                    // did not come is lost to the corpse like a player's, and written down.
+                    BotGoldLedger.NoteContainerLoss(bot, corpse, BotGoodsLedger.ReasonDeath);
                 }
 
                 bot.Hits = bot.HitsMax;
@@ -1103,6 +1121,20 @@ namespace Server.Custom
 
                     json.Append(",\"bankItems\":").Append(box == null ? 0 : box.Items.Count);
 
+                    // Its gold, where it is (7f-1). Pack gold is what the trade path spends;
+                    // bank and account are counted and untouched (ECONOMY.md section 2).
+                    long pack = BotGoldLedger.PackGold(bot);
+                    long bank = BotGoldLedger.BankGold(bot);
+                    long inAccount = BotGoldLedger.AccountGold(bot);
+
+                    json.Append(",\"gold\":{\"pack\":").Append(pack);
+                    json.Append(",\"bank\":").Append(bank);
+                    json.Append(",\"account\":").Append(inAccount);
+                    json.Append(",\"total\":").Append(pack + bank + inAccount);
+                    json.Append(",\"startingGranted\":").Append(bot.StartingGoldGranted ? "true" : "false");
+                    json.Append(",\"startingRemaining\":").Append(bot.StartingGoldRemaining);
+                    json.Append('}');
+
                     if (bankOf != null && box != null && Contains(bankOf, entry))
                     {
                         json.Append(",\"bank\":[");
@@ -1288,9 +1320,10 @@ namespace Server.Custom
                     each.Post,
                     each.Home,
                     refused != null ? "REFUSED " + refused : named == null ? "no character" : where,
-                    named == null ? "" : String.Format(" (0x{0:X}, bank {1})",
+                    named == null ? "" : String.Format(" (0x{0:X}, bank {1}, gold {2:N0})",
                         named.Serial.Value,
-                        named.FindBankNoCreate() == null ? 0 : named.FindBankNoCreate().Items.Count)));
+                        named.FindBankNoCreate() == null ? 0 : named.FindBankNoCreate().Items.Count,
+                        BotGoldLedger.GoldOf(named))));
             }
 
             string error;
