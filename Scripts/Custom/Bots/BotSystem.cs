@@ -75,10 +75,8 @@ namespace Server.Custom
 
         public static void Initialize()
         {
-            // A parked mount reaches the save file where a deleted one never could, so the boot has
-            // to clear the ones whose rider is already gone. See BotMovement.SweepStrayMounts for
-            // why this is a condition rather than a type test.
-            BotMovement.SweepStrayMounts();
+            // The stray mount sweep that stood here is BotMovement.Initialize now, at CallPriority
+            // 915, so its count reaches Data/Live/console.json. See the note there.
 
             // Bind the crafting profiles to ServUO's CraftSystem singletons. It has to happen
             // here and not in a static constructor: CraftContext.Configure is what builds those
@@ -715,7 +713,7 @@ namespace Server.Custom
                 BotWorkSites.Stationless,
                 _store.Life.UnknownCapacityKeys(),
                 blocked,
-                new List<string>(),
+                BotHostileSites.Describe(),
                 ownerless,
                 text.ToString());
         }

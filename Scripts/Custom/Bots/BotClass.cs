@@ -187,6 +187,18 @@ namespace Server.Custom
         }
 
         /// <summary>
+        /// Whether this class can fight. NO CLASS CAN YET: nothing in a bot answers an attack, and
+        /// that is session 7g. Until then BotHostileSites closes every destination with a hostile
+        /// spawn to every class. When 7g gives a class combat, this returns true for it and the
+        /// hostile exclusion comes off that class - the one switch, and the Deviations entry
+        /// "Classes without combat skip hostile destinations" says so too.
+        /// </summary>
+        public static bool HasCombat(BotClass cls)
+        {
+            return false;
+        }
+
+        /// <summary>
         /// Every class the roll can produce. Crafter is excluded: it is a legacy value kept
         /// only so an old serialized byte still resolves.
         /// </summary>

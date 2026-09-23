@@ -797,9 +797,24 @@ namespace Server.Custom
         /// Justified World.Mobiles walk (CLAUDE.md section 15): once, at Initialize, and there is no
         /// registry of mounts to consult - which is precisely what makes one a stray.
         /// </summary>
+        /// <summary>
+        /// The boot sweep's own Initialize, at 915: after BotStartupPurge (-1000), whose deletes are
+        /// what turn a parked mount into a TIED stray, and after ConsoleTap (900). It ran from
+        /// BotSystem's untagged Initialize until the first boot that counted - 1013 mounts swept,
+        /// 855 owned by nobody - and that line never reached Data/Live/console.json, for exactly
+        /// the reason BotWorkSites.Initialize gives: Timestamp.cs replaces Console.Out from an
+        /// untagged Initialize, and until the tap re-wraps it at 900 a line goes to the window alone.
+        /// </summary>
+        [CallPriority(915)]
+        public static void Initialize()
+        {
+            SweepStrayMounts();
+        }
+
         public static void SweepStrayMounts()
         {
             var strays = new List<Mobile>();
+            var kinds = new Dictionary<string, int>(StringComparer.Ordinal);
             int tied = 0;
             int ownerless = 0;
 
@@ -821,6 +836,10 @@ namespace Server.Custom
                 {
                     strays.Add(beast);
                     ownerless++;
+
+                    int kind;
+                    kinds.TryGetValue(beast.GetType().Name, out kind);
+                    kinds[beast.GetType().Name] = kind + 1;
                 }
             }
 
@@ -832,11 +851,21 @@ namespace Server.Custom
             SweptTied = tied;
             SweptOwnerless = ownerless;
 
+            var described = new List<string>();
+
+            foreach (var pair in kinds)
+            {
+                described.Add(pair.Value + " " + pair.Key);
+            }
+
+            described.Sort(StringComparer.Ordinal);
+
             Log.Info(
-                "Swept {0} stray bot mount(s): {1} tied to a purged bot, {2} owned by nobody.",
+                "Swept {0} stray bot mount(s): {1} tied to a purged bot, {2} owned by nobody{3}.",
                 strays.Count,
                 tied,
-                ownerless);
+                ownerless,
+                described.Count == 0 ? "" : " (" + String.Join(", ", described.ToArray()) + ")");
         }
     }
 }

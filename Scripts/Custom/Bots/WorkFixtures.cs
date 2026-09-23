@@ -37,6 +37,8 @@ namespace Server.Custom
                 passed &= FixtureCrowdFloorSkipsSingleMinded(report);
                 passed &= FixtureStayBoostSkipsSingleMinded(report);
                 passed &= FixtureOpenDoorwayIsNotFail(report);
+                passed &= FixtureHostileGraveyard(report);
+                passed &= FixtureHostileIsReported(report);
             }
             catch (Exception ex)
             {
@@ -94,6 +96,80 @@ namespace Server.Custom
                 report,
                 result.Status == HealthStatus.Warn && result.Detail.Contains("1 class(es) have nowhere to work"),
                 "a class with no station is a Warn on its own",
+                String.Format("status {0}: {1}", result.Status, result.Detail));
+        }
+
+        /// <summary>
+        /// The graveyard the bots died at. It is still on the graph - nothing is removed - but no
+        /// class without combat weighs it: not the single-minded Miner, whose `otherwise` gave it
+        /// 0.02, and not a Mage, which upstream sends there at 1.5. A bank is the control: the
+        /// gate closes the hostile place and nothing else.
+        ///
+        /// Reads the live BotHostileSites, filled by the boot's BotWorkSites.Validate from the
+        /// spawners actually in the world, so it also proves Graveyards#0 was found.
+        /// </summary>
+        private static bool FixtureHostileGraveyard(List<string> report)
+        {
+            BotDestinationConfig config = BotSystem.Store.Destinations;
+            NavDestination graveyard = Nav.Destination("britain-graveyard");
+
+            bool ok = Expect(report,
+                graveyard != null,
+                "britain-graveyard is still a destination on the graph",
+                "britain-graveyard is not on the graph");
+
+            if (graveyard == null)
+            {
+                return false;
+            }
+
+            string why;
+            BotHostileSites.Closed.TryGetValue(graveyard.Id, out why);
+
+            ok &= Expect(report,
+                why != null,
+                "a hostile spawn covers it: " + why,
+                "BotHostileSites found no hostile spawn at britain-graveyard");
+
+            double miner = config.WeightFor(graveyard, BotClass.Miner);
+            double mage = config.WeightFor(graveyard, BotClass.Mage);
+            double bank = config.WeightFor(Fake("bank", "service britain"), BotClass.Miner);
+
+            ok &= Expect(report,
+                !BotClassHelper.HasCombat(BotClass.Miner) && miner == 0.0,
+                "a non-combat Miner's weight for the graveyard is 0",
+                "a Miner weighs the graveyard " + miner);
+
+            ok &= Expect(report,
+                mage == 0.0,
+                "and so is a Mage's, until 7g gives it combat",
+                "a Mage weighs the graveyard " + mage);
+
+            ok &= Expect(report,
+                bank > 0.0,
+                "while an ordinary bank still weighs " + bank + " for a Miner",
+                "the hostile gate closed an ordinary bank too");
+
+            return ok;
+        }
+
+        /// <summary>A hostile destination is a finding on Bots.Work, beside the excluded forges.</summary>
+        private static bool FixtureHostileIsReported(List<string> report)
+        {
+            HealthResult result = BotSystem.WorkVerdict(
+                None,
+                None,
+                None,
+                None,
+                new[] { "fixture-graveyard (Graveyards#0: Spectre)" },
+                None,
+                "census text");
+
+            return Expect(
+                report,
+                result.Status == HealthStatus.Warn
+                    && result.Detail.Contains("1 destination(s) closed to classes without combat (hostile spawn): fixture-graveyard"),
+                "a hostile destination is reported on Bots.Work as a Warn",
                 String.Format("status {0}: {1}", result.Status, result.Detail));
         }
 

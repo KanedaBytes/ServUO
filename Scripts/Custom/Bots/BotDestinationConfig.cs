@@ -437,6 +437,14 @@ namespace Server.Custom
                 return 0.0;
             }
 
+            // A hostile spawn covers it and this class cannot fight (BotHostileSites). Here, at
+            // the single entry point, so Pick, StarvedClasses, EligibleCount and the life probe's
+            // window all agree - which BotWorkSites.IsExcluded, checked only in Pick, does not.
+            if (BotHostileSites.ClosedTo(destination.Id, cls))
+            {
+                return 0.0;
+            }
+
             string className = cls.ToString();
 
             Dictionary<string, double> single;

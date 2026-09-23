@@ -77,7 +77,10 @@ namespace Server.Custom
                 // A work site that failed validation at load is not a destination at all. Left
                 // in, a Miner would pick the unreachable face every tick, fail to route, and
                 // stand still - which from the outside is a broken walker, not a bad coordinate.
-                if (BotWorkSites.IsExcluded(candidate.Id))
+                //
+                // A hostile destination is the same case for a class that cannot fight. WeightFor
+                // already says 0, but a hauler's weight never goes through WeightFor.
+                if (BotWorkSites.IsExcluded(candidate.Id) || BotHostileSites.ClosedTo(candidate.Id, bot.Class))
                 {
                     weight = 0.0;
                 }
@@ -592,7 +595,9 @@ namespace Server.Custom
             {
                 NavDestination candidate = among[i];
 
-                if (candidate == null || BotWorkSites.IsExcluded(candidate.Id))
+                if (candidate == null
+                    || BotWorkSites.IsExcluded(candidate.Id)
+                    || BotHostileSites.ClosedTo(candidate.Id, bot.Class))
                 {
                     continue;
                 }

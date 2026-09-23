@@ -577,6 +577,10 @@ namespace Server.Custom
             }
 
             WriteReachSnapshot(map, null, null);
+
+            // The other half of "where can nobody go": destinations a hostile spawn covers, closed
+            // to classes without combat. Same triggers as the forges, and reported beside them.
+            BotHostileSites.Validate(map);
         }
 
         /// <summary>Where the editor reads per-arrival reach from.</summary>

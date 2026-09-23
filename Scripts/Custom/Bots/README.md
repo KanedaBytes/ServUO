@@ -162,7 +162,7 @@ down, so here it is, in their file order.
 | `ApplyNameSuffix` :655 | **Not needed.** It appends a tag from `BotGuilds`, which their own header calls an explicit fake and which was deliberately not ported |
 | `OnAfterSpawn` :683 | **Have our own**, different content and for a named reason: XmlSpawner calls `OnAfterSpawn` *before* it applies the spawn string (`XmlSpawner2.cs:9337` against `:9345`), so the seed is properties on the bot rather than a spawner subclass |
 | `HandlesOnSpeech` / `OnSpeech` :851,854 | **Already had them.** Both re-based by the swap: `HandlesOnSpeech`'s `base` went from `BaseCreature.cs:4621`, which ANDed in `RangePerception`, to `Mobile.cs:7614`, which is a flat false — so the `ListenRange` test is now the whole rule, which is what it was always written to be |
-| `OnBeforeDeath` :860 | **Not adopted, deliberately.** Theirs dismounts there; ours releases in `OnDeath`, because `OnBeforeDeath` returns `bool` and a `false` from it — or from `Region.OnBeforeDeath` one line above — cancels the death outright, which would strip the mount off a bot that then does not die. That note used to carry an escape clause: *if the F2 cast ever had to be lived with, move cleanup there*. F2 is closed, so the clause is spent and the original choice stands on its own |
+| `OnBeforeDeath` :860 | **Adopted 22 September 2026, with the cancel case handled.** This row used to say *not adopted, deliberately* - releasing in `OnDeath` instead, because a `false` from this hook cancels the death - and that choice was wrong in a way nobody had seen: by the time `OnDeath` runs, ServUO has already taken the mount off. `Mobile.Kill` walks the equipped items and `MountItem.OnParentDeath` does `Rider = null`, so `OnDeath`'s release found no `Mount` and no `HeldMount`, and the horse was left riderless and uncontrolled. Bots died at the Britain graveyard, their FrenziedOstards (`FightMode.Closest`, Karma -1500) went wild, and the pack killed every bot that arrived next. Ours now asks `base.OnBeforeDeath()` **first** and releases only on a `true`; `Region.OnBeforeDeath` has already been asked by then (`Mobile.cs:3991`), so nothing later can cancel. `OnDeath` keeps its release as a backstop, and `PlayerBot.OwnedMount` names the animal in any state, so a mount the engine drops for any other reason still goes with its bot. The first boot to count swept **855** former bot mounts owned by nobody out of the world save |
 | `OpenTrade` :874 | **Deferred — economy session (7f).** ServUO's `SecureTrade` is already null-safe for a clientless participant (`SecureTrade.cs:25-29,166,173,196-197`), so unlike ModernUO no engine patch will be needed. There is simply nothing to trade yet — seams 6 and 12 |
 | `OnDeath` :882 | **Have our own.** The half we do not have is the **murder-report adapter** (`BotMurderReport.OnBotDeath`, run before `base.OnDeath`) — deferred to the PK session, and carrying a policy question about whether bot-on-bot kills should award counts at all |
 | `OnAfterDelete` :937 | **Have the equivalent** at `OnDelete`, which already releases mount and pack animal, frees the name and unregisters, and calls `base.OnDelete()`. ServUO puts `BaseHouse.HandleDeletion` in `PlayerMobile.OnAfterDelete` (`:5250`) instead, which is where the crash-guard rule bites |
@@ -378,6 +378,63 @@ looks like a mistake later, read the reason before "fixing" it back.
 > once would restate seventy citations nobody had re-checked. The navigation data itself is
 > identical at both pins (`Data/Custom/reference/README.md` has the record-level comparison), so no
 > row that turns on waypoints or destinations is affected by the move.
+
+### Classes without combat skip hostile destinations — until 7g, added 22 September 2026
+
+**Found in game.** Bots walked to the Britain graveyard, the undead killed them, and (until the
+mount fix above) their FrenziedOstards went wild and killed the next arrivals as well. Nothing in a
+bot can fight yet, so a destination a hostile spawn covers is weighted **0** for every class
+without combat - which today is every class.
+
+| | Upstream (`7f38c7c`) | Here |
+| --- | --- | --- |
+| who is kept out | trader classes only: `Crafter` never weighs Dungeon, DungeonEntrance or Graveyard (`Behaviors/DestinationType.cs:369-378`) | **every class without combat** (`BotClassHelper.HasCombat`, false for all until 7g) |
+| what is dangerous | a list of destination types | **the spawn data**: the spawners actually in the world, at load |
+| a gatherer's graveyard | 0.02 (`otherwise`) | 0 |
+| a Mage's graveyard | 1.5 (`:209-215`) | 0 |
+| on arrival anyway | leave at once (`TravelerBehavior.cs:2228-2244`) | not reached |
+
+**The rule** (`BotHostileSites`). A creature type is hostile when its Karma is negative and its
+FightMode is Closest, Strongest or Weakest - upstream's own filter (`TravelerBehavior.cs:2921-2940`)
+narrowed to leave out Aggressor, which only fights back, so a town rat does not close a forge. A
+spawner is hostile when those types are **at least a quarter** of its summed `MaxCount`. A
+destination is closed when its tile or any arrival lies inside a hostile spawner's area.
+
+**Why wider than upstream's list:** five shrines stand inside spawners that are all orcs, ettins
+and giant spiders, and no type list names a shrine. **Why a quarter:** Sean's call. The `Yew
+animals` spawner is a 200x200 box over the whole town and 10 of its 250 are dire wolves; the literal
+rule would close Yew's only bank and its gate to every class over a 4% wolf. Every graveyard and
+shrine spawner is 67-100% hostile, so the threshold separates them cleanly.
+
+**What it closes today** - identical to the offline sweep of `Spawns/trammel.xml`:
+
+| destination | spawner(s) | hostile share |
+| --- | --- | --- |
+| `britain-graveyard` | Graveyards#0 - Spectre, Wraith, Skeleton, Zombie | 11/11 |
+| `britain-shrine` | Outdoors#30, #73 - gargoyle, gazer, ettin, ghoul, orc, troll, reaper… | 9/9, 121/122 |
+| `britain-shrine-4` | Outdoors#137, #138 - giant spider, scorpion | 4/4 |
+| `brit-shrine-spirituality` | Outdoors#356 - orc, ettin, ratman, giant spider, reaper | 50/50 |
+| `minoc-shrine` | Outdoors#88 - ettin, lizardman, ogre, orc, troll | 25/25 |
+| `trinsic-shrine` | Outdoors#369 - orc, giant spider, giant serpent, corpser | 40/60 |
+
+**It is a weight, not a removal.** Every one of them is still on the graph; the editor shows them,
+`[NavAudit` does not change, and a player can walk there. It is applied in
+`BotDestinationConfig.WeightFor`, the single entry point, so `Pick`, `StarvedClasses`,
+`EligibleCount` and the life probe agree - and beside `BotWorkSites.IsExcluded` in `Pick` (a
+hauler's weight skips `WeightFor`) and `NearestId`. Reported on **Bots.Work** as a Warn, beside the
+excluded forges: it is the same question, where can nobody go.
+
+**Measured 22 September 2026**, with the mount fix, at the shipped population (1000). The first boot
+on the old world swept **1013** stray bot mounts, **855 owned by nobody** (158 tied to purged bots).
+A ten-minute window sampled every minute: 989-1000 bots live, **1 bot death** (a Reaper by
+`brit-moongate` - wandering, not a closed destination), mounts 386-531 ridden and 108-253 waiting
+beside their owners, **0 loose and 0 owned by nobody in all eleven samples**, 388 to 394 released
+with their rider. The next boot, on the save that window ended with, swept 239 tied and **0 owned
+by nobody**.
+
+**When 7g lands, this comes off**: make `BotClassHelper.HasCombat` return true for each class that
+can fight, and the exclusion lifts for that class alone. `WorkFixtures.FixtureHostileGraveyard`
+asserts a Miner and a Mage weigh the graveyard 0; it will need its Mage line changed on the day.
 
 ### Gatherers are single-minded again — a dropped override, restored 22 September 2026
 
@@ -1556,7 +1613,7 @@ reader of an older diff will find their markers and should not go looking for wh
 | 10 | **Fisherman** — `CrafterProfiles` has no entry and `StationFor` answers `dock`. **Corrected 22 September 2026:** the docks exist — the Trammel adopt brought nine, so the class is not stationless and `Bots.Work` does not report it — but a Fisherman arriving at one becomes nothing, because `BuildVisit` has no fishing behaviour to hand it | Its weights are left as they are until then; upstream's single-minded `dock` 8.0 / `Bank` 0.4 / else 0.02 is the target (Deviations, *Gatherers are single-minded again*). Its production is not a craft at all — upstream drove `Fishing.System`, walking to the water's edge and casting only when open water was directly adjacent, which needs their `IsWet` / `HasStandableStatic` scan to tell a pier from the sea | Dock session. Britain's waterfront is **The Oaken Oar** (1424,1747, the dockside tavern) and **Customs** (1480,1746, on the docks) |
 | 11 | The gatherer's **stable round trip** | The beast is deleted on delivery — upstream's own no-stables-in-range path. `AnimalTrainer.EndStable` hard-codes a 30gp fee from pack or bank, `DoClaim` is private, and there is no `stables` destination to walk to | Economy session (7f): add their Britain Stables (1393,1645, just outside our west edge), the fee, and the detour |
 | 12 | The **gold half of the hand-over** | The load moves, the coin does not. Upstream paid 2–4gp a unit from the crafter's purse and refused the sale when it was broke; the crafter's three-minute counter restock went with it | Economy session (7f) |
-| 13 | A gatherer **under attack** | Downs tools and travels. Upstream swapped to a defender `AdventurerBehavior` — "the tool is a real axe" — and there is no Adventurer here yet | Combat session |
+| 13 | A gatherer **under attack** | Downs tools and travels. Upstream swapped to a defender `AdventurerBehavior` — "the tool is a real axe" — and there is no Adventurer here yet. Until then no class walks into a hostile spawn on purpose: Deviations, *Classes without combat skip hostile destinations* | Combat session (7g) |
 
 **Seam 5 was a discipline, and the discipline is what made it cheap to close.** `BotAI.cs` was the
 only file in the tree permitted to name `VendorAI` — no cast, no type test, no call to a `VendorAI`
@@ -1968,6 +2025,19 @@ Selected upstream at `CustomBots/Behaviors/TravelerBehavior.cs:3228-3238`, and h
   blocks bots on the way (`BaseCreature.OnMoveOver` refuses every uncontrolled creature's tile). An
   ethereal goes to the pack instead; nothing gives a bot one today, but upstream's dead branch is
   live here. `BotMovement.ReleaseMount` is the destructive half, for death and deletion.
+
+  **A mount goes with its bot** (22 September 2026). `PlayerBot.OwnedMount`, set by `TryMount`,
+  names the animal whether it is ridden, parked, or dropped by the engine, and `ReleaseMount`
+  deletes all three - at death (from `OnBeforeDeath`, see the overrides table), at every delete
+  (logout, boot purge, spawn refusal, probe teardown), and at a reclass. Anything it carried goes to
+  `goods-lost.jsonl` as `mount-released`; a saddle horse carries nothing, so in practice it is the
+  `released with their rider` count on Bots.Work. A mount a creature knocks a *living* bot off is
+  fetched back on departure if it is within twelve tiles and released if not. Bots.Work reports
+  `ridden / waiting beside their owner / loose / owned by nobody`, and **owned by nobody** is the
+  number that must be zero: anything else is a Warn. The boot sweep (`BotMovement.Initialize`,
+  CallPriority 915) counts two kinds apart - *tied to a purged bot* and *owned by nobody*, the
+  latter recognised by `IsFormerBotMount`: exactly a pool type, no spawner, no Home, no rider, no
+  master, no Owners, not stabled.
 
   **The disposition is `MountDisposition`, rolled once at birth** from `tierFloor + tierSpan *
   BotSkillTierHelper.Fraction(tier)` plus `wealthyBonus` - so a Novice rides 10% of the time and a
