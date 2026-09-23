@@ -363,6 +363,9 @@ namespace Server.Custom
                         NavWalkFailures.PerHundredWalks(NavWalkFailures.Total))
                     : "");
 
+            // Deaths. Near zero until 7g - see BotDeaths for why it exists at all.
+            detail += ". " + BotDeaths.Describe();
+
             // Residents of a town with no station of their kind. Not a fault and not a rule -
             // upstream's home is a multiplier with no fallback, and so is ours - but a number
             // worth seeing, because it is the count of bots whose work is always a road trip.
@@ -676,6 +679,28 @@ namespace Server.Custom
                 BotPackAnimals.Reaped,
                 BotPackAnimals.Released);
 
+            // The riding mounts, beside the pack animals. OWNED BY NOBODY is the number the
+            // graveyard needed: a live mount whose owner is gone. It must be zero.
+            BotMovement.MountCensus mounts = BotMovement.CountMounts();
+
+            text.AppendFormat(
+                " {0} mount(s) ridden, {1} waiting beside their owner, {2} loose, {3} owned by nobody; "
+                + "{4} released with their rider, {5} swept at boot ({6} owned by nobody).",
+                mounts.Ridden,
+                mounts.Waiting,
+                mounts.Loose,
+                mounts.OwnedByNobody,
+                BotMovement.MountsReleased,
+                BotMovement.SweptTied + BotMovement.SweptOwnerless,
+                BotMovement.SweptOwnerless);
+
+            var ownerless = new List<string>();
+
+            if (mounts.OwnedByNobody > 0)
+            {
+                ownerless.Add(mounts.OwnedByNobody + " mount(s) outlived their owner");
+            }
+
             var excluded = new List<string>();
 
             foreach (var entry in BotWorkSites.Excluded)
@@ -690,6 +715,8 @@ namespace Server.Custom
                 BotWorkSites.Stationless,
                 _store.Life.UnknownCapacityKeys(),
                 blocked,
+                new List<string>(),
+                ownerless,
                 text.ToString());
         }
 
@@ -716,7 +743,38 @@ namespace Server.Custom
             IList<string> blocked,
             string text)
         {
+            return WorkVerdict(excluded, stationless, unknownCapacity, blocked, new string[0], new string[0], text);
+        }
+
+        /// <summary>
+        /// The whole verdict. HOSTILE is the destinations closed to classes without combat
+        /// (BotHostileSites), which is the same question as the excluded forges - where can nobody
+        /// go - asked of danger rather than of a missing anvil. LEAKS is anything the census found
+        /// that must be zero and is not: a mount that outlived its owner is the one today.
+        /// </summary>
+        internal static HealthResult WorkVerdict(
+            IList<string> excluded,
+            IList<string> stationless,
+            IList<string> unknownCapacity,
+            IList<string> blocked,
+            IList<string> hostile,
+            IList<string> leaks,
+            string text)
+        {
             var findings = new List<string>();
+
+            if (leaks.Count > 0)
+            {
+                findings.Add(String.Join("; ", ToArray(leaks)));
+            }
+
+            if (hostile.Count > 0)
+            {
+                findings.Add(String.Format(
+                    "{0} destination(s) closed to classes without combat (hostile spawn): {1}",
+                    hostile.Count,
+                    String.Join("; ", ToArray(hostile))));
+            }
 
             if (excluded.Count > 0)
             {

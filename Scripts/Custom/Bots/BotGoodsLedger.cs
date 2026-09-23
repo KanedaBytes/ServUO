@@ -101,6 +101,9 @@ namespace Server.Custom
         public const string ReasonProbe = "probe";
         public const string ReasonPackAnimal = "pack-animal-released";
 
+        /// <summary>A riding mount deleted with its rider. Recorded only if it was carrying anything.</summary>
+        public const string ReasonMount = "mount-released";
+
         // ---- the ledger ----
 
         /// <summary>

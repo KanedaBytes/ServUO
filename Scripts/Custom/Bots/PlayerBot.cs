@@ -427,6 +427,19 @@ namespace Server.Custom
         public BaseMount HeldMount { get; set; }
 
         /// <summary>
+        /// The animal this bot owns, IN ANY STATE - ridden, parked beside it, or dropped by the
+        /// engine. Transient, for `PackAnimal`'s reason. Set once, by `BotMovement.TryMount`.
+        ///
+        /// `Mount` and `HeldMount` are not enough, and a graveyard proved it: when a riding bot
+        /// dies, `Mobile.Kill` runs `MountItem.OnParentDeath`, which does `Rider = null` and drops
+        /// the horse on the corpse tile BEFORE `OnDeath` runs. By then `Mount` is null and the
+        /// horse was never parked, so nothing still named it - and a riderless FrenziedOstard is a
+        /// wild, `FightMode.Closest` creature that killed every bot arriving after. This is the
+        /// reference the pack animal always had, and the mount now has too.
+        /// </summary>
+        public BaseMount OwnedMount { get; set; }
+
+        /// <summary>
         /// True between noticing a party invitation and answering it. Transient, and deliberately
         /// a flag on the bot rather than a static table in BotParty: a deleted bot takes it with
         /// it, so there is nothing to leak or sweep.
@@ -904,6 +917,36 @@ namespace Server.Custom
             get { return false; }
         }
 
+        /// <summary>
+        /// The mount goes before the death does. Upstream's override (uo-offline
+        /// PlayerBot.cs:860-863, DismountAndDelete), adopted with the one case theirs does not
+        /// handle.
+        ///
+        /// WHY HERE AND NOT IN OnDeath, where it used to be: by the time OnDeath runs the engine
+        /// has already taken the horse off. Mobile.Kill walks the equipped items, and
+        /// MountItem.OnParentDeath (BaseMount.cs, the MountItem class) does `Rider = null` and
+        /// drops the animal on the corpse tile. OnDeath's release then found no Mount and no
+        /// HeldMount, and a riderless FrenziedOstard - FightMode.Closest, Karma -1500 - stood in
+        /// the Britain graveyard killing every bot that arrived after.
+        ///
+        /// THE CANCEL CASE, which is why this was once refused: a false from this hook cancels the
+        /// death, and releasing first would strip the mount off a bot that then does not die. So
+        /// base is asked FIRST and the mount goes only on a true. Region.OnBeforeDeath has already
+        /// been asked by then (Mobile.cs:3991, one line above the call to this), so nothing after
+        /// this return can still cancel.
+        /// </summary>
+        public override bool OnBeforeDeath()
+        {
+            bool dies = base.OnBeforeDeath();
+
+            if (dies)
+            {
+                BotMovement.ReleaseMount(this);
+            }
+
+            return dies;
+        }
+
         public override void OnDeath(Container c)
         {
             base.OnDeath(c);
@@ -921,25 +964,12 @@ namespace Server.Custom
             // rest of the bot.
             BotGoodsLedger.NoteContainerLoss(this, c, BotGoodsLedger.ReasonDeath);
 
-            // The mount does not survive its rider. Upstream dismounts in OnBeforeDeath
-            // (PlayerBot.cs:779) and so could we: ServUO HAS that hook, public virtual on Mobile
-            // at Mobile.cs:4186, called from Kill at Mobile.cs:3995. The comment here said it did
-            // not, which was wrong, and the real reason to release the mount in OnDeath instead is
-            // the hook's signature: it returns bool, and a false from it - or from
-            // Region.OnBeforeDeath one line above it - CANCELS the death outright. Releasing there
-            // would strip the mount off a bot that then does not die.
-            //
-            // The cost of that choice is real and is REVIEW.md F2, not a hypothetical: the murder
-            // report throws inside base.OnDeath above, so a reportable death never reaches this
-            // line at all and the mount is left parked (BotDeathProbe cleans up after it on
-            // purpose). OnBeforeDeath runs BEFORE that throw. So if the cast is ever the thing
-            // that has to be lived with rather than fixed, moving cleanup there is the move - and
-            // it needs the cancellation case handled, which is why it is written down rather than
-            // done quietly.
-            //
-            // ReleaseMount, not Dismount: Dismount now PARKS the animal, and a horse standing
-            // patiently beside its rider's corpse waiting for an order is not the picture.
+            // The backstop. OnBeforeDeath has already released the mount on every ordinary death;
+            // this catches one given to the bot between the two, and costs nothing when there is
+            // none. See OnBeforeDeath for why the release moved there.
             BotMovement.ReleaseMount(this);
+
+            BotDeaths.Note(this);
 
             // Player=true mobiles ghost rather than vanish (Mobile.cs:4229), and there is no
             // death layer yet to haunt, walk to a healer and run back for the corpse. Delete on a
@@ -1148,6 +1178,11 @@ namespace Server.Custom
         public void ReinitializeAsClass(BotClass cls)
         {
             Class = cls;
+
+            // The horse goes with the old class. The strip below deletes a ridden one anyway (the
+            // MountItem is gear, and MountItem.OnAfterDelete takes the animal with it); a parked
+            // one would otherwise be left standing, owned by a bot whose new class may not ride.
+            BotMovement.ReleaseMount(this);
 
             StripGearAndPack();
 

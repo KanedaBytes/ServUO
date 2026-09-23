@@ -230,6 +230,11 @@ namespace Server.Custom
             // between containers. They live on Map.Internal and are deleted in a finally.
             passed &= HaulFixtures.RunFixtures(report);
 
+            // A mount goes with its bot: deleting a bot takes its waiting horse and one the engine
+            // already dropped, and leaves a living bot's waiting horse alone
+            // (Scripts/Custom/Bots/MountFixtures.cs). Map.Internal, deleted in a finally.
+            passed &= MountFixtures.RunFixtures(report);
+
             // Work reporting: a class with nowhere to work is reported whether or not a site is also
             // excluded, and the single-minded gatherer weights are what bots.json says they are
             // (Scripts/Custom/Bots/WorkFixtures.cs). Pure functions; no mobiles.

@@ -221,6 +221,10 @@ namespace Server.Custom
                     mount.MoveToWorld(bot.Location, bot.Map);
                     mount.Rider = bot;
 
+                    // Owned from here until ReleaseMount, whatever the engine does with the rider.
+                    // See PlayerBot.OwnedMount for the graveyard this was learned at.
+                    Issue(bot, mount);
+
                     // The pace changes with the mount: the same "run" is 200ms on foot and 100ms
                     // in the saddle, and forgetting this leaves a mounted bot running at a walk.
                     SetPace(bot, CurrentPace(bot));
@@ -384,7 +388,7 @@ namespace Server.Custom
                 return false;
             }
 
-            BaseMount held = bot.HeldMount;
+            BaseMount held = bot.HeldMount ?? Loose(bot);
 
             if (held == null || held.Deleted || held.Map != bot.Map)
             {
@@ -560,8 +564,15 @@ namespace Server.Custom
         /// The horse goes with its rider. For death and deletion, where nothing is coming back.
         ///
         /// The destructive half, kept separate now that Dismount is not: a bot that has died or been
-        /// deleted leaves an orphan nothing owns and nothing reaps, whether it was in the saddle or
-        /// standing beside it.
+        /// deleted leaves an orphan nothing owns and nothing reaps, whether it was in the saddle,
+        /// standing beside it, or - the case this used to miss - already dropped by the engine.
+        /// `Mount` and `HeldMount` only name the first two; `OwnedMount` names all three. See
+        /// PlayerBot.OwnedMount for why the third is the one that mattered.
+        ///
+        /// Anything the animal carried is written down first, exactly as `BotPackAnimals.Release`
+        /// writes the panniers. A saddle horse carries nothing today, and `NoteContainerLoss` writes
+        /// a record only for tracked goods, so an empty one is a count on Bots.Work and nothing in
+        /// goods-lost.jsonl.
         /// </summary>
         public static void ReleaseMount(PlayerBot bot)
         {
@@ -571,8 +582,11 @@ namespace Server.Custom
             }
 
             BaseMount held = bot.HeldMount;
+            BaseMount owned = bot.OwnedMount;
+            BaseMount ridden = null;
 
             bot.HeldMount = null;
+            bot.OwnedMount = null;
 
             try
             {
@@ -582,12 +596,7 @@ namespace Server.Custom
                 {
                     mount.Rider = null;
 
-                    var beast = mount as BaseMount;
-
-                    if (beast != null && !beast.Deleted)
-                    {
-                        beast.Delete();
-                    }
+                    ridden = mount as BaseMount;
                 }
             }
             catch (Exception ex)
@@ -595,22 +604,195 @@ namespace Server.Custom
                 Log.Error(ex, "{0}'s mount could not be released.", bot.Name);
             }
 
-            if (held != null && !held.Deleted)
+            Destroy(bot, ridden);
+
+            if (held != ridden)
             {
-                held.Delete();
+                Destroy(bot, held);
             }
+
+            if (owned != ridden && owned != held)
+            {
+                Destroy(bot, owned);
+            }
+        }
+
+        private static void Destroy(PlayerBot bot, BaseMount beast)
+        {
+            if (beast == null || beast.Deleted)
+            {
+                return;
+            }
+
+            try
+            {
+                BotGoodsLedger.NoteContainerLoss(bot, beast.Backpack, BotGoodsLedger.ReasonMount);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "{0}'s mount load could not be written down.", bot.Name);
+            }
+
+            _issued.Remove(beast);
+
+            MountsReleased++;
+            beast.Delete();
+        }
+
+        // ---- who owns which horse ----
+
+        /// <summary>
+        /// Every mount a bot was given, and the bot it went to. Transient, like the animals.
+        ///
+        /// Not how a mount is found for release - that is `PlayerBot.OwnedMount`, one field read -
+        /// but how the health line can say how many horses are standing about with NO living owner,
+        /// which is the number the graveyard needed and nothing could produce.
+        /// </summary>
+        private static readonly Dictionary<BaseMount, PlayerBot> _issued = new Dictionary<BaseMount, PlayerBot>();
+
+        /// <summary>Mounts deleted with their rider, since boot. Reported by Bots.Work.</summary>
+        public static int MountsReleased { get; private set; }
+
+        /// <summary>The last boot sweep: mounts still tied to a purged bot.</summary>
+        public static int SweptTied { get; private set; }
+
+        /// <summary>The last boot sweep: former bot mounts nothing owned any more.</summary>
+        public static int SweptOwnerless { get; private set; }
+
+        /// <summary>Record that this bot owns this mount. Internal so MountFixtures can harness one.</summary>
+        internal static void Issue(PlayerBot bot, BaseMount mount)
+        {
+            if (bot == null || mount == null)
+            {
+                return;
+            }
+
+            bot.OwnedMount = mount;
+            _issued[mount] = bot;
+        }
+
+        /// <summary>How far a loose mount may be and still be fetched back into the saddle.</summary>
+        private const int LooseRange = 12;
+
+        /// <summary>
+        /// The bot's own mount, riderless and not parked - put down by the engine rather than by
+        /// Dismount (a creature's dismount ability, BaseMount.Dismount). Near enough, it is handed to
+        /// Remount like a parked one, which restores the existing rule: it waits, and is ridden
+        /// again on departure. Too far to fetch, it goes, rather than running wild in a field.
+        /// </summary>
+        private static BaseMount Loose(PlayerBot bot)
+        {
+            BaseMount owned = bot.OwnedMount;
+
+            if (owned == null || owned.Deleted || owned.Rider != null)
+            {
+                return null;
+            }
+
+            if (owned.Map == bot.Map && bot.InRange(owned.Location, LooseRange))
+            {
+                return owned;
+            }
+
+            Destroy(bot, owned);
+            bot.OwnedMount = null;
+
+            return null;
+        }
+
+        /// <summary>What every mount a bot was given is doing now. For Bots.Work.</summary>
+        public struct MountCensus
+        {
+            public int Ridden;
+            public int Waiting;
+            public int Loose;
+
+            /// <summary>Alive, and its owner is not. Must be zero; anything else is a leak.</summary>
+            public int OwnedByNobody;
+        }
+
+        public static MountCensus CountMounts()
+        {
+            var census = new MountCensus();
+            var gone = new List<BaseMount>();
+
+            foreach (var pair in _issued)
+            {
+                BaseMount mount = pair.Key;
+                PlayerBot owner = pair.Value;
+
+                if (mount.Deleted)
+                {
+                    gone.Add(mount);
+                }
+                else if (owner == null || owner.Deleted)
+                {
+                    census.OwnedByNobody++;
+                }
+                else if (mount.Rider == owner)
+                {
+                    census.Ridden++;
+                }
+                else if (owner.HeldMount == mount)
+                {
+                    census.Waiting++;
+                }
+                else
+                {
+                    census.Loose++;
+                }
+            }
+
+            for (int i = 0; i < gone.Count; i++)
+            {
+                _issued.Remove(gone[i]);
+            }
+
+            return census;
+        }
+
+        /// <summary>
+        /// A mount that can only have been a bot's, now owned by nobody - the legacy of the death
+        /// leak, left standing in saves taken before OwnedMount existed.
+        ///
+        /// Every test is one a bot's horse passes and something else fails:
+        ///   - exactly a type from upstream's pool, not a subclass;
+        ///   - no spawner, and no home: every spawner sets Home (XmlSpawner2.cs:2343, :9330-9332;
+        ///     Spawner.cs:512), and TryMount never does;
+        ///   - no rider, no master, and no Owners: anything a real player ever tamed carries its
+        ///     tamer in Owners (AnimalTaming.cs:454), and that list outlives a release;
+        ///   - not stabled, and in the world.
+        /// The one thing that also matches is a GM's `[add horse` that nobody has tamed. On this
+        /// shard that is an acceptable casualty, and it is why the count is printed rather than
+        /// swept silently.
+        /// </summary>
+        internal static bool IsFormerBotMount(BaseMount beast)
+        {
+            if (beast == null || beast.Deleted || Array.IndexOf(MountTypes, beast.GetType()) < 0)
+            {
+                return false;
+            }
+
+            return beast.Spawner == null
+                && beast.Home == Point3D.Zero
+                && beast.Rider == null
+                && beast.ControlMaster == null
+                && beast.Owners.Count == 0
+                && !beast.IsStabled
+                && beast.Map != null
+                && beast.Map != Map.Internal;
         }
 
         /// <summary>
         /// Delete every bot mount left over from a previous run, at Initialize.
         ///
-        /// A parked mount is now A MOBILE IN THE SAVE - controlled, told to stay, and outliving the
-        /// boot - where before it was deleted the instant its rider got off. `BotPackAnimal` solved
-        /// the same problem by subclassing so `SweepStrays` had a type to look for; a mount is a
-        /// stock Horse, Llama or Ostard out of upstream's own pool, and subclassing five of them to
-        /// win a type test would be a great deal of boilerplate for one sweep. The condition is just
-        /// as specific: a BaseMount whose rider or master is a PlayerBot can only have come from
-        /// here, because nothing else on this shard mounts one.
+        /// Two kinds, counted apart. TIED: a parked or ridden mount whose rider or master is a
+        /// PlayerBot the boot purge has just deleted - a mount is a stock Horse, Llama or Ostard out
+        /// of upstream's own pool, and nothing else on this shard mounts one, so that condition is
+        /// specific. OWNED BY NOBODY: `IsFormerBotMount`, the horses the death leak left behind
+        /// with both references already null by the time the save was taken.
+        ///
+        /// One console line either way, zeros included: the count is the evidence.
         ///
         /// Justified World.Mobiles walk (CLAUDE.md section 15): once, at Initialize, and there is no
         /// registry of mounts to consult - which is precisely what makes one a stray.
@@ -618,6 +800,8 @@ namespace Server.Custom
         public static void SweepStrayMounts()
         {
             var strays = new List<Mobile>();
+            int tied = 0;
+            int ownerless = 0;
 
             foreach (Mobile mobile in World.Mobiles.Values)
             {
@@ -631,12 +815,13 @@ namespace Server.Custom
                 if (beast.Rider is PlayerBot || beast.ControlMaster is PlayerBot)
                 {
                     strays.Add(beast);
+                    tied++;
                 }
-            }
-
-            if (strays.Count == 0)
-            {
-                return;
+                else if (IsFormerBotMount(beast))
+                {
+                    strays.Add(beast);
+                    ownerless++;
+                }
             }
 
             foreach (Mobile stray in strays)
@@ -644,7 +829,14 @@ namespace Server.Custom
                 stray.Delete();
             }
 
-            Log.Info("Swept {0} stray bot mount(s) left over from a previous run.", strays.Count);
+            SweptTied = tied;
+            SweptOwnerless = ownerless;
+
+            Log.Info(
+                "Swept {0} stray bot mount(s): {1} tied to a purged bot, {2} owned by nobody.",
+                strays.Count,
+                tied,
+                ownerless);
         }
     }
 }
