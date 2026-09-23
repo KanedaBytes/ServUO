@@ -515,10 +515,22 @@ namespace Server.Custom
             return before;
         }
 
-        /// <summary>A stack of its own in the pack, told to nobody. The caller counts it in.</summary>
+        /// <summary>
+        /// A stack of its own in the pack, told to nobody. The caller counts it in.
+        ///
+        /// Ore is pinned to the MEDIUM pile graphic. BaseOre picks a random graphic (Ore.cs:100-112)
+        /// and a trade refines at the stock smelt ratio for that graphic (BotPrice.HalfIngotsFor),
+        /// so a random pile would make "five units in, five ingots out" true only half the time.
+        /// Medium is one ingot a unit, which is the arithmetic these fixtures were written in.
+        /// </summary>
         private static void Put(PlayerBot bot, Type raw, int amount)
         {
             var stack = (Item)Activator.CreateInstance(raw);
+
+            if (stack is BaseOre)
+            {
+                stack.ItemID = 0x19B8;
+            }
 
             stack.Amount = amount;
 

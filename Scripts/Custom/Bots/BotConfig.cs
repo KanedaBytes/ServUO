@@ -38,6 +38,10 @@ namespace Server.Custom
         [JsonProperty("mounts")]
         public BotMountConfig Mounts { get; set; }
 
+        /// <summary>The starting purse and the price of a haul. See BotEconomyConfig and ECONOMY.md.</summary>
+        [JsonProperty("economy")]
+        public BotEconomyConfig Economy { get; set; }
+
         [JsonConstructor]
         public BotStore()
         {
@@ -47,6 +51,7 @@ namespace Server.Custom
             Life = new BotLifeConfig();
             Population = new BotPopulationConfig();
             Mounts = new BotMountConfig();
+            Economy = new BotEconomyConfig();
         }
 
         public void Validate(ConfigErrors errors)
@@ -95,6 +100,13 @@ namespace Server.Custom
             }
 
             Mounts.Validate(errors);
+
+            if (Economy == null)
+            {
+                Economy = new BotEconomyConfig();
+            }
+
+            Economy.Validate(errors);
         }
     }
 

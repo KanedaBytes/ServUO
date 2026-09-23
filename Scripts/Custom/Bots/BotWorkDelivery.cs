@@ -127,8 +127,10 @@ namespace Server.Custom
                 ? null
                 : new Func<int, int>(amount => buyer.Accept(crafter, amount));
 
+            // What moves is the whole FAMILY - every colour of ore, every wood of log - while the
+            // trade match above stays the plain class constant (BotHaul.FamilyOf).
             int offered;
-            int accepted = Settle(bot, raw, receiver, destination.Id, out offered);
+            int accepted = Settle(bot, BotHaul.FamilyOf(raw), receiver, destination.Id, out offered);
 
             if (offered <= 0)
             {

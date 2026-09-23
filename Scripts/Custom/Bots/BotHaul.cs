@@ -28,6 +28,18 @@
 // stock cap "goes to the shop", which is a sentence rather than a code path. What upstream DOES
 // answer is the pack beast - its caller disposes of the animal after the hand-over returns
 // (TravelerBehavior.cs:2484-2508), not before it - and ReleaseIfEmpty is that rule.
+//
+// A GOOD IS A FAMILY, NOT A TYPE (7f-1, 23 September 2026). The harvest system gives a miner the
+// ore of the vein it is standing on once its skill reaches that vein's (HarvestSystem.cs:142-143,
+// :368; Mining.GetResourceType returns the vein resource's Types[0], Mining.cs:229), and a lumber
+// bank's wood the same way: dull copper and oak come home in the same pack as iron and plain logs. Every count
+// here used to be `item.GetType() == raw` against IronOre or Log, so a coloured pile was invisible
+// - not offered, not banked, not in the books, and not in the pack-full check, which let a miner
+// swing on into HarvestSystem's silent delete. Sean: the whole ore family and the whole log family
+// are carried, capacity-checked, ledgered and priced by colour. So every count and every move
+// below takes a family - BaseOre or BaseLog - and matches by IsAssignableFrom; the class-level
+// constants (BotHarvest.YieldFor, CrafterProfile.RawGood) stay the plain types, because they name
+// a TRADE, and the family is derived from them (FamilyOf).
 
 using System;
 using System.Collections.Generic;
@@ -39,12 +51,13 @@ namespace Server.Custom
     public static class BotHaul
     {
         /// <summary>
-        /// Every raw good a bot can be holding, which is every distinct BotHarvest yield.
+        /// Every raw good a bot can be holding: the family of every distinct BotHarvest yield,
+        /// which is BaseOre and BaseLog.
         ///
         /// Derived rather than listed so a new gathering class cannot be added without the ledger
         /// learning about it. Refined stock - a smith's ingots, a carpenter's boards - is
-        /// deliberately NOT here: it is a different good in a different custody, and it belongs
-        /// with 7f's transaction contract rather than with the raw haul this file conserves.
+        /// deliberately NOT here: it is a different good in a different custody, and it leaves the
+        /// raw ledger at the moment a trade turns it into product (BotTrade).
         /// </summary>
         public static IList<Type> TrackedTypes
         {
@@ -56,7 +69,7 @@ namespace Server.Custom
 
                     foreach (BotClass cls in Enum.GetValues(typeof(BotClass)))
                     {
-                        Type yield = BotHarvest.YieldFor(cls);
+                        Type yield = FamilyOf(BotHarvest.YieldFor(cls));
 
                         if (yield != null && !types.Contains(yield))
                         {
@@ -73,6 +86,100 @@ namespace Server.Custom
 
         private static IList<Type> _tracked;
 
+        /// <summary>
+        /// The family a raw good belongs to: BaseOre for any ore, BaseLog for any log, and the
+        /// type itself for anything else. Null in, null out.
+        /// </summary>
+        public static Type FamilyOf(Type raw)
+        {
+            if (raw == null)
+            {
+                return null;
+            }
+
+            if (typeof(BaseOre).IsAssignableFrom(raw))
+            {
+                return typeof(BaseOre);
+            }
+
+            if (typeof(BaseLog).IsAssignableFrom(raw))
+            {
+                return typeof(BaseLog);
+            }
+
+            return raw;
+        }
+
+        /// <summary>Is this item a unit of this good - of the type, or of any type in the family?</summary>
+        public static bool IsOf(Item item, Type good)
+        {
+            return item != null && !item.Deleted && good != null && good.IsAssignableFrom(item.GetType());
+        }
+
+        /// <summary>
+        /// How many units of each concrete type of this good are in this container, so a record
+        /// can name what it was - "ValoriteOre", not "BaseOre". Removes nothing.
+        /// </summary>
+        public static Dictionary<Type, int> ByType(Container container, Type good)
+        {
+            var counts = new Dictionary<Type, int>();
+
+            if (container == null || good == null)
+            {
+                return counts;
+            }
+
+            foreach (Item item in container.Items)
+            {
+                if (!IsOf(item, good))
+                {
+                    continue;
+                }
+
+                int amount;
+
+                counts.TryGetValue(item.GetType(), out amount);
+                counts[item.GetType()] = amount + item.Amount;
+            }
+
+            return counts;
+        }
+
+        /// <summary>
+        /// The stacks of this good the bot could hand over, pack first and then the panniers, in
+        /// container order - the order a trade quotes and takes them in. Removes nothing.
+        /// </summary>
+        public static List<Item> StacksOf(PlayerBot bot, Type good)
+        {
+            var stacks = new List<Item>();
+
+            if (bot == null || bot.Deleted)
+            {
+                return stacks;
+            }
+
+            AddStacks(stacks, bot.Backpack, good);
+            AddStacks(stacks, BotPackAnimals.PanniersOf(bot), good);
+
+            return stacks;
+        }
+
+        private static void AddStacks(List<Item> stacks, Container container, Type good)
+        {
+            if (container == null)
+            {
+                return;
+            }
+
+            foreach (Item item in container.Items)
+            {
+                if (IsOf(item, good) && item.Amount > 0)
+                {
+                    stacks.Add(item);
+                }
+            }
+        }
+
         /// <summary>How many units of a good are in this container. Removes nothing.</summary>
         public static int InContainer(Container container, Type raw)
         {
@@ -85,7 +192,7 @@ namespace Server.Custom
 
             foreach (Item item in container.Items)
             {
-                if (item != null && !item.Deleted && item.GetType() == raw)
+                if (IsOf(item, raw))
                 {
                     amount += item.Amount;
                 }
@@ -198,7 +305,7 @@ namespace Server.Custom
                     break;
                 }
 
-                if (item == null || item.Deleted || item.GetType() != raw)
+                if (!IsOf(item, raw))
                 {
                     continue;
                 }
@@ -270,7 +377,7 @@ namespace Server.Custom
                     break;
                 }
 
-                if (item == null || item.Deleted || item.GetType() != raw)
+                if (!IsOf(item, raw))
                 {
                     continue;
                 }

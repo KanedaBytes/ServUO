@@ -9,7 +9,8 @@
 // REVIEW.md F5, the second half. BotHaul stops delivery destroying a load; this is what makes
 // the claim CHECKABLE, and what writes down the losses that happen anyway.
 //
-// THE EQUATION, over raw haul goods only (BotHaul.TrackedTypes - ore and logs):
+// THE EQUATION, over raw haul goods only (BotHaul.TrackedTypes - the ore and log families, every
+// colour, since 7f-1):
 //
 //     in    = opening + mined + seeded   opening is what the boot inherited from the world save
 //                                        before BotStartupPurge destroyed it
@@ -474,7 +475,11 @@ namespace Server.Custom
             NoteContainerLoss(bot, bot.FindBankNoCreate(), why);
         }
 
-        /// <summary>Everything tracked in this container is about to stop existing.</summary>
+        /// <summary>
+        /// Everything tracked in this container is about to stop existing. One record per CONCRETE
+        /// type, so a lost pile of valorite says "ValoriteOre" rather than the family it was
+        /// counted under.
+        /// </summary>
         public static void NoteContainerLoss(PlayerBot bot, Container container, string why)
         {
             if (bot == null || container == null)
@@ -486,11 +491,12 @@ namespace Server.Custom
 
             for (int i = 0; i < tracked.Count; i++)
             {
-                int amount = BotHaul.InContainer(container, tracked[i]);
-
-                if (amount > 0)
+                foreach (KeyValuePair<Type, int> entry in BotHaul.ByType(container, tracked[i]))
                 {
-                    NoteLoss(bot, tracked[i], amount, why);
+                    if (entry.Value > 0)
+                    {
+                        NoteLoss(bot, entry.Key, entry.Value, why);
+                    }
                 }
             }
         }

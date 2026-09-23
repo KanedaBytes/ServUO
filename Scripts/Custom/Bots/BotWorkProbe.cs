@@ -335,7 +335,8 @@ namespace Server.Custom
         /// <summary>Empty a gatherer of the good it gathers, so only real work can produce any.</summary>
         private static void StripYield(PlayerBot bot)
         {
-            Type yield = BotHarvest.YieldFor(bot.Class);
+            // The family: a stash or a pile of any colour is still yield (BotHaul.FamilyOf).
+            Type yield = BotHaul.FamilyOf(BotHarvest.YieldFor(bot.Class));
 
             if (bot.Backpack == null || yield == null)
             {
@@ -346,7 +347,7 @@ namespace Server.Custom
 
             foreach (Item item in bot.Backpack.Items)
             {
-                if (item.GetType() == yield)
+                if (BotHaul.IsOf(item, yield))
                 {
                     doomed.Add(item);
                 }

@@ -173,6 +173,37 @@
     },
     "dismountOnArrivalChance": 0.15
   },
+  "economy": {
+    "comment": "THE STARTING PURSE AND THE PRICE OF A HAUL (7f-1, Sean 23 September 2026; ECONOMY.md is the contract). Nothing here is upstream's: uo-offline prices a haul with hauled x RandomMinMax(2,4) (BotEconomy.cs:314) and starts a bot with a tier-scaled 40-1400 gold (EquipmentTable.cs:54-67), and no file under playerbots/data sets a price. Sean's rule is that gold's source and sink are the stock NPC shopkeepers at player prices, so every number is read off a stock file. startingGold is what every bot, named or throwaway, is born holding, in its pack; one stack, so at most 60000. ore.ingotPrice: NO NPC BUYS ORE, so the base is the ingot it smelts into - the blacksmith lists IronIngot at 4 (SBBlacksmith.cs:139) but with the vendor economy on (BaseVendor.cs:33) GenericSellInfo.GetSellPriceFor pays max(1, (int)(buy x .75)) against the buy entry of 5 (SBBlacksmith.cs:34, GenericSell.cs:40-56), which is 3. The smelt ratio is code, not data, because it is what BaseOre does (Ore.cs:385-398): a large pile 0x19B9 smelts to 2 ingots a unit, a medium one to 1, a small 0x19B7 to half (in pairs). wood.logPrice is what the carpenter pays for a plain Log (SBCarpenter.cs:101); one log cuts to one board. THE LADDERS: no stock NPC buys or sells any coloured ore, ingot, log or board, and the only per-colour numbers anywhere in stock are the community collection's - Bonnie's ingots (Bonnie.cs:70-78) and Zorda's boards (Zorda.cs:69-75) - so a colour is the plain NPC price times its rung (Sean). marginPercent is what the buyer pays over that worth, rounded up ONCE per trade rather than per unit, so a small ore's half-ingot is not doubled by rounding: 125 is at or a little above the NPC price, so the walk is worth it. 60 large iron ore is worth 360 and costs 450; 60 plain logs cost 75; 60 large valorite ore costs 17,550, more than a fresh crafter holds, so it buys what 10,000 covers and the rest stays with the miner.",
+    "startingGold": 10000,
+    "marginPercent": 125,
+    "ore": {
+      "ingotPrice": 3,
+      "ladder": {
+        "Iron": 1,
+        "DullCopper": 2,
+        "ShadowIron": 4,
+        "Copper": 8,
+        "Bronze": 12,
+        "Gold": 18,
+        "Agapite": 24,
+        "Verite": 31,
+        "Valorite": 39
+      }
+    },
+    "wood": {
+      "logPrice": 1,
+      "ladder": {
+        "RegularWood": 1,
+        "OakWood": 3,
+        "AshWood": 6,
+        "YewWood": 9,
+        "Heartwood": 12,
+        "Bloodwood": 24,
+        "Frostwood": 48
+      }
+    }
+  },
   "population": {
     "comment": "How many bots the world holds, and how the day moves that number. target is the count at the curve peak; the shipped 60 is a starting point chosen against this graph rather than inherited - uo-offline ships 1600, and Bots.Recipe reports the tick cost beside the live count so the next value is arithmetic. perTown is DELIBERATELY EMPTY: with no entry a town gets its share of the graph destinations, which is the same rule BotHomeTowns uses to decide where a bot is born, so a bot is born where the population is and one number cannot drift from the other. curve is absent for the same kind of reason - with no value it is uo-offline HourCurve, dead at 05:00 and packed at 19:00, and a shard that wants a different day writes 24 fractions here. roles names the behaviour each recipe slot seeds; a value naming no behaviour fails the load rather than falling back to Idle, because a population that stands still looks exactly like a broken walker. FIXED-ROLE bots - the bank crowds and the staffed benches - are outside all of this: they never roll, never log out, and never count toward the target, so a forge has its smith at 05:00 exactly as it does at 19:00. plansPerBotPerTick and plansPerTickFloor are the route-plan admission budget, which used to be a flat Custom.BotPlansPerTick of 8 - four plans a second over a 2-second tick whatever the population, and measured in SCALE.md as the fleet's ceiling: travellers stall at about 140 from 400 bots upward and 95% of a 2000-bot fleet stands still. The budget is now max(floor, ceil(rate x live)); 0.02 is the rate that holds the travelling share at the 36% the fleet actually reached at 400, and the floor still binds at every count at or below that knee, so a shard of ordinary size is unchanged. A zero floor defers to Custom.BotPlansPerTick the way caps defers to PlayerCaps.cfg.",
     "target": 1000,

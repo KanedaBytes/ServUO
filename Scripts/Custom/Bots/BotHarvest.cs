@@ -27,11 +27,14 @@
 //
 // THREE CONSEQUENCES OF USING THE REAL SYSTEM, all of which matter:
 //
-//   1. A bot only ever gets PLAIN ORE. Mining.GetResourceType (Mining.cs:187)
-//      falls through to resource.Types[0] for anything that is not a
-//      PlayerMobile, and sand mining is PlayerMobile-gated outright
-//      (Mining.cs:283). That happens to match upstream's IronOre yield exactly,
-//      so nothing is lost — but a Miner will never bring home granite or gems.
+//   1. A bot gets the ORE OF THE VEIN, coloured once its skill reaches it.
+//      HarvestSystem picks the vein's resource by skill (HarvestSystem.cs:142,
+//      :368) and Mining.GetResourceType returns its Types[0] (Mining.cs:229);
+//      only gems, granite and sand are PlayerMobile-and-flag gated (:216, :221,
+//      :286), and a bot sets none of those flags. This used to say "plain ore
+//      only"; the code never did - the vein choice does not ask what class the
+//      miner is. So since 7f-1 every count of a haul takes the whole ore or log
+//      FAMILY (BotHaul.FamilyOf), and a trade prices each colour (BotPrice).
 //   2. A FULL PACK SILENTLY DESTROYS THE ORE. Neither Mining nor Lumberjacking
 //      sets PlaceAtFeetIfFull, so HarvestSystem.cs:207-210 sends the pack-full
 //      message and calls item.Delete(). The caller must check capacity before

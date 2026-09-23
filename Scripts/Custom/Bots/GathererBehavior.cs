@@ -917,25 +917,26 @@ namespace Server.Custom
             return zone != null && zone.Contains(point.X, point.Y);
         }
 
-        /// <summary>How much of its yield the bot is carrying, pack and panniers together.</summary>
+        /// <summary>
+        /// How much of its yield the bot is carrying, pack and panniers together - the whole
+        /// FAMILY, every colour of ore or every wood of log (BotHaul.FamilyOf).
+        ///
+        /// This count is the pack-full check (Swing), the shift's yield (NoticeYield) and the
+        /// HaulPending test (EndShift), so a colour it missed was a colour the miner swung on top
+        /// of - and HarvestSystem deletes whatever a full pack will not take. Counting IronOre alone
+        /// also meant a dull copper pile appeared in the goods census as "mined" with no shift to
+        /// credit it to (7f-1).
+        /// </summary>
         public static int Carried(PlayerBot bot)
         {
-            Type yield = BotHarvest.YieldFor(bot.Class);
+            Type yield = BotHaul.FamilyOf(BotHarvest.YieldFor(bot.Class));
 
             if (yield == null)
             {
                 return 0;
             }
 
-            int carried = bot.Backpack == null ? 0 : bot.Backpack.GetAmount(yield, false);
-            Container panniers = BotPackAnimals.PanniersOf(bot);
-
-            if (panniers != null)
-            {
-                carried += panniers.GetAmount(yield, false);
-            }
-
-            return carried;
+            return BotHaul.Offered(bot, yield);
         }
 
         /// <summary>Upstream's limit: sixty on your back, one hundred and twenty with a beast.</summary>
